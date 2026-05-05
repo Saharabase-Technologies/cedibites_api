@@ -16,15 +16,25 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            set -e
             cd /var/www/production/laravel/cedibites_api
             git fetch origin master
             git reset --hard origin/master
             composer install --no-dev --optimize-autoloader
             php artisan config:clear
-            php artisan migrate --force
-            php artisan db:seed --class=PermissionSeeder --force
-            php artisan db:seed --class=RoleSeeder --force
+
+            # Run migrations; only seed if new migrations were applied
+            MIGRATE_OUTPUT=$(php artisan migrate --force 2>&1)
+            echo "$MIGRATE_OUTPUT"
+            if ! echo "$MIGRATE_OUTPUT" | grep -qi "nothing to migrate"; then
+              php artisan db:seed --class=PermissionSeeder --force
+              php artisan db:seed --class=RoleSeeder --force
+            fi
+
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
             sudo systemctl reload php8.4-fpm
+
+            # Health check — confirms Laravel can bootstrap
+            php artisan about --only=application

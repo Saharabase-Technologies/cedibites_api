@@ -104,40 +104,89 @@ Items still needing attention.
 
 ---
 
+## [2026-05-05] Session: IMS Architecture Lock + Scribe Agent
+
+### Intent
+
+1. Lock all architectural decisions for the Inventory Management System (IMS) before any code is written.
+2. Create a workspace-wide atomic decision ledger (the **Scribe** agent) that persists every locked decision, rejection, deferral, and open question so agents read it at activation.
+
+### Changes Made
+
+| File                                                      | Change                                                                                                               | Reason                                                                 |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `.github/instructions/ims-considerations.instructions.md` | Created — always-on IMS guardrails, all 19 locked decisions                                                          | Prevents any agent from violating IMS constraints accidentally         |
+| `.github/instructions/code-quality.instructions.md`       | Created — backend code-quality and modularity rules (file caps, engine pattern, anti-patterns, pre-commit checklist) | Enforces SRP, no god-services, explicit return types across entire API |
+| `.github/agents/inventory-auditor.agent.md`               | Created — Inventory Auditor specialist agent for IMS domain                                                          | Dedicated agent for all IMS backend work                               |
+| `.github/agents/scribe.agent.md`                          | Created — Scribe agent full spec (hard rules, entry format, git/PR workflow, deduplication)                          | Atomic decision ledger agent                                           |
+| `docs/agents/inventory-auditor-kb.md`                     | Created — Inventory Auditor persistent knowledge base (§1–§9)                                                        | Carries IMS domain knowledge across sessions                           |
+| `docs/inventory/architecture.md`                          | Created — formal IMS architecture document (ERD, workflow specs, phase roadmap)                                      | Source of truth for all IMS implementation work                        |
+| `docs/JOURNAL.md`                                         | Created — workspace-wide decision journal, backfilled with all IMS decisions                                         | Living ledger read by all agents at activation                         |
+
+### Decisions
+
+- **Decision**: Scribe agent is separate from Project Chronicle.
+    - **Rationale**: Chronicle handles session narratives; Scribe handles atomic ≤6-line decision entries. Different cadences and edit scopes — merging them would dilute both.
+- **Decision**: Single `docs/JOURNAL.md` in `cedibites_api/` covers both repos.
+    - **Rationale**: Multi-root workspace; one file avoids synchronisation issues between two journal files.
+- **Decision**: Scribe uses `Claude Sonnet 4.5`.
+    - **Rationale**: Task requires precision and strict rule-following, not deep reasoning. Sonnet is faster and cheaper for this workload.
+- **IMS decisions**: 19 architectural decisions locked. Full list in `docs/JOURNAL.md` §Decisions and `docs/inventory/architecture.md`.
+
+### Current State
+
+- IMS: architecture locked and documented. Zero IMS code written.
+- Scribe: agent live, journal backfilled with all prior session decisions.
+- `feature/ims` branches **not yet cut** — blocked on DevOps audit (beta↔main auto-merge question unresolved).
+
+### Pending / Follow-up
+
+- DevOps audit: confirm whether beta auto-merges to master; gates all IMS PRs to master.
+- `PROJECT_CHRONICLE.md` updates in `cedibites/` (frontend) — same session, done simultaneously.
+- Phase 0 kickoff: scaffold, feature flag, route group, permissions, locations table, items/categories/units/suppliers CRUD, warehouse-portal shell.
+
+---
+
 ## [2026-05-01] Session: Order Period Summary Endpoint + Audit Log Causers Endpoint
 
 ### Intent
+
 Two small additive endpoints to power new admin/staff observability features:
+
 1. A lightweight per-scope order quality summary (valid / cancelled / failed / refunded / no-charge counts and amounts) that mirrors the orders index filter pipeline so the numbers always match the visible table.
 2. A distinct-causers list for the admin audit log "filter by user" dropdown, narrowed by date range.
 
 ### Changes Made
-| File | Change | Reason |
-|------|--------|--------|
-| `app/Services/OrderManagementService.php` | Added `getBranchPeriodSummary(User, array)` method | Reuses the existing `getBranchOrders()` filter pipeline (role/branch scoping + all filters) then runs five aggregate clones to produce per-status counts + amounts |
-| `app/Http/Controllers/Api/EmployeeOrderController.php` | Added `summary(Request)` action | Thin orchestration — pulls allowed filter keys from request, delegates to service |
-| `routes/employee.php` | Added `GET v1/employee/orders/summary` (gated by `permission:view_orders`) | Same auth gate as `index` |
-| `app/Http/Controllers/Api/ActivityLogController.php` | Added `causers(Request)` action | Returns distinct `causer_id` values from `activity_log` (User class only) within optional date range, joined with users for `{id, name, email}` |
-| `routes/admin.php` | Added `GET v1/admin/activity-logs/causers` (gated by `permission:view_activity_log`) | Same gate as the audit log itself |
+
+| File                                                   | Change                                                                               | Reason                                                                                                                                                             |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app/Services/OrderManagementService.php`              | Added `getBranchPeriodSummary(User, array)` method                                   | Reuses the existing `getBranchOrders()` filter pipeline (role/branch scoping + all filters) then runs five aggregate clones to produce per-status counts + amounts |
+| `app/Http/Controllers/Api/EmployeeOrderController.php` | Added `summary(Request)` action                                                      | Thin orchestration — pulls allowed filter keys from request, delegates to service                                                                                  |
+| `routes/employee.php`                                  | Added `GET v1/employee/orders/summary` (gated by `permission:view_orders`)           | Same auth gate as `index`                                                                                                                                          |
+| `app/Http/Controllers/Api/ActivityLogController.php`   | Added `causers(Request)` action                                                      | Returns distinct `causer_id` values from `activity_log` (User class only) within optional date range, joined with users for `{id, name, email}`                    |
+| `routes/admin.php`                                     | Added `GET v1/admin/activity-logs/causers` (gated by `permission:view_activity_log`) | Same gate as the audit log itself                                                                                                                                  |
 
 ### Decisions
+
 - **Decision**: Use five separate `whereHas` aggregate clones instead of one `LEFT JOIN payments` with `CASE` sums.
-  - **Rationale**: An order can have multiple `payments` rows (retries, partial refunds). A flat join would double-count `total_amount`. Per-status `whereHas` clones keep counts/sums one-per-order accurate.
+    - **Rationale**: An order can have multiple `payments` rows (retries, partial refunds). A flat join would double-count `total_amount`. Per-status `whereHas` clones keep counts/sums one-per-order accurate.
 - **Decision**: Mirror `AnalyticsQueryBuilder` definitions exactly — "valid" = `status != cancelled` AND `whereHas('payments', payment_status = completed)`.
-  - **Rationale**: Numbers shown alongside an orders table must match the dashboards or trust collapses. Same source of truth.
+    - **Rationale**: Numbers shown alongside an orders table must match the dashboards or trust collapses. Same source of truth.
 - **Decision**: Strip the eager loads + ordering off the cloned base before aggregating.
-  - **Rationale**: Eager loads + `ORDER BY` are expensive and irrelevant for `COUNT`/`SUM`.
+    - **Rationale**: Eager loads + `ORDER BY` are expensive and irrelevant for `COUNT`/`SUM`.
 - **Decision**: Do NOT extend the existing `stats` endpoint — added a new `summary` endpoint instead.
-  - **Rationale**: `stats` is "today snapshot" semantics used by the staff home dashboard. Conflating it with filter-scoped summary would have changed behaviour for existing callers. Additive, no breakage.
+    - **Rationale**: `stats` is "today snapshot" semantics used by the staff home dashboard. Conflating it with filter-scoped summary would have changed behaviour for existing callers. Additive, no breakage.
 - **Decision**: Audit log causers narrowed by date range (optional).
-  - **Rationale**: Keeps the dropdown short and contextually relevant — only users who actually acted in the visible window appear.
+    - **Rationale**: Keeps the dropdown short and contextually relevant — only users who actually acted in the visible window appear.
 
 ### Current State
+
 - Two new GET endpoints, both gated by existing permissions, both additive (no existing endpoints modified).
 - `vendor/bin/pint --dirty` passes.
 - `php artisan route:list --path=employee/orders` confirms `summary` route is registered.
 
 ### Pending / Follow-up
+
 - Optional: cache the summary briefly per-scope hash to reduce load if dashboards become refresh-heavy.
 
 ---

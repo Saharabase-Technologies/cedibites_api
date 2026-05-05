@@ -4,18 +4,16 @@ on:
   push:
     branches:
       - beta
-  workflow_run:
-    workflows: ["Deploy Cedibites API"]
-    types:
-      - completed
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy to beta (e.g. feature/ims)'
+        required: true
+        default: 'beta'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # When triggered by production deploy, only run if it succeeded
-    if: >
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.0
@@ -24,19 +22,28 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            set -e
             cd /var/www/beta/laravel/cedibites_api
-            # If triggered by production deploy, pull master; otherwise pull beta branch
-            if [ "${{ github.event_name }}" = "workflow_run" ]; then
-              git fetch origin master
-              git reset --hard origin/master
-            else
-              git fetch origin beta
-              git reset --hard origin/beta
-            fi
+
+            DEPLOY_BRANCH="${{ github.event.inputs.branch || 'beta' }}"
+            git fetch origin "$DEPLOY_BRANCH"
+            git reset --hard "origin/$DEPLOY_BRANCH"
+
             composer install --no-dev --optimize-autoloader
             php artisan config:clear
-            php artisan migrate --force
+
+            # Run migrations; only seed if new migrations were applied
+            MIGRATE_OUTPUT=$(php artisan migrate --force 2>&1)
+            echo "$MIGRATE_OUTPUT"
+            if ! echo "$MIGRATE_OUTPUT" | grep -qi "nothing to migrate"; then
+              php artisan db:seed --class=PermissionSeeder --force
+              php artisan db:seed --class=RoleSeeder --force
+            fi
+
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
             sudo systemctl reload php8.4-fpm
+
+            # Health check — confirms Laravel can bootstrap
+            php artisan about --only=application
