@@ -98,6 +98,19 @@ class RoleSeeder extends Seeder
             Permission::ManageShifts->value,
             Permission::ManageSettings->value,
             Permission::ViewMyShifts->value,
+            // IMS — Branch Manager scope (own branch / satellite kitchen)
+            Permission::AccessInventoryPortal->value,
+            Permission::ViewInventoryCatalog->value,
+            Permission::InventoryRequisitionCreate->value,
+            Permission::InventoryRequisitionApprove->value,
+            Permission::InventoryTransferCreate->value,
+            Permission::InventoryTransferSend->value,
+            Permission::InventoryTransferReceive->value,
+            Permission::InventoryTransferDispute->value,
+            Permission::InventoryWastageRecord->value,
+            Permission::InventoryDailyClosingEnter->value,
+            Permission::InventoryRecipeView->value,
+            Permission::InventoryReportView->value,
         ]);
 
         // Create Call Center role (order placement)
@@ -162,6 +175,50 @@ class RoleSeeder extends Seeder
             Permission::ViewMySales->value,
             Permission::ViewMyShifts->value,
             Permission::ManageShifts->value,
+        ]);
+
+        // Create Warehouse Manager role (mother kitchen — full IMS warehouse-level control)
+        $warehouseManager = Role::updateOrCreate(
+            ['name' => RoleEnum::WarehouseManager->value, 'guard_name' => 'api'],
+            ['name' => RoleEnum::WarehouseManager->value, 'guard_name' => 'api']
+        );
+        $this->addPermissions($warehouseManager, [
+            Permission::AccessInventoryPortal->value,
+            Permission::ViewInventoryCatalog->value,
+            Permission::ManageInventoryCatalog->value,
+            Permission::InventoryPurchaseCreate->value,
+            Permission::InventoryPurchaseView->value,
+            Permission::InventoryRequisitionCreate->value,
+            Permission::InventoryRequisitionApprove->value,
+            Permission::InventoryTransferCreate->value,
+            Permission::InventoryTransferSend->value,
+            Permission::InventoryTransferReceive->value,
+            Permission::InventoryTransferDispute->value,
+            Permission::InventoryTransferResolveDispute->value,
+            Permission::InventoryWastageRecord->value,
+            Permission::InventoryWastageApprove->value,
+            Permission::InventoryDailyClosingEnter->value,
+            Permission::InventoryRecipeView->value,
+            Permission::InventoryReconciliationOpenCycle->value,
+            Permission::InventoryReconciliationAdjust->value,
+            Permission::InventoryReportView->value,
+            Permission::InventorySettingsManage->value,
+            // Cross-portal visibility for warehouse manager
+            Permission::ViewBranches->value,
+            Permission::ViewMenu->value,
+        ]);
+
+        // Create Purchasing Clerk role (records supplier purchases into the warehouse)
+        $purchasingClerk = Role::updateOrCreate(
+            ['name' => RoleEnum::PurchasingClerk->value, 'guard_name' => 'api'],
+            ['name' => RoleEnum::PurchasingClerk->value, 'guard_name' => 'api']
+        );
+        $this->addPermissions($purchasingClerk, [
+            Permission::AccessInventoryPortal->value,
+            Permission::ViewInventoryCatalog->value,
+            Permission::InventoryPurchaseCreate->value,
+            Permission::InventoryPurchaseView->value,
+            Permission::InventoryReportView->value,
         ]);
 
     }

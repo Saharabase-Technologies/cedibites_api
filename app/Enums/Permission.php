@@ -60,4 +60,48 @@ enum Permission: string
     case ManagePlatform = 'manage_platform';
     case ManageCache = 'manage_cache';
     case ToggleMaintenance = 'toggle_maintenance';
+
+    // Inventory (IMS) — portal access
+    case AccessInventoryPortal = 'access_inventory_portal';
+
+    // Inventory — catalog (Phase 0 CRUD)
+    case ManageInventoryCatalog = 'manage_inventory_catalog';
+    case ViewInventoryCatalog = 'view_inventory_catalog';
+
+    // Inventory — purchases
+    case InventoryPurchaseCreate = 'inventory.purchase.create';
+    case InventoryPurchaseView = 'inventory.purchase.view';
+
+    // Inventory — requisitions
+    case InventoryRequisitionCreate = 'inventory.requisition.create';
+    case InventoryRequisitionApprove = 'inventory.requisition.approve';
+
+    // Inventory — transfers
+    case InventoryTransferCreate = 'inventory.transfer.create';
+    case InventoryTransferSend = 'inventory.transfer.send';
+    case InventoryTransferReceive = 'inventory.transfer.receive';
+    case InventoryTransferDispute = 'inventory.transfer.dispute';
+    case InventoryTransferResolveDispute = 'inventory.transfer.resolve_dispute';
+    case InventoryTransferOverrideSourceCheck = 'inventory.transfer.override_source_check';
+
+    // Inventory — wastage
+    case InventoryWastageRecord = 'inventory.wastage.record';
+    case InventoryWastageApprove = 'inventory.wastage.approve';
+
+    // Inventory — daily closing
+    case InventoryDailyClosingEnter = 'inventory.daily_closing.enter';
+
+    // Inventory — recipes
+    case InventoryRecipeView = 'inventory.recipe.view';
+    case InventoryRecipeEditGlobal = 'inventory.recipe.edit_global';
+    case InventoryRecipeOverridePerBranch = 'inventory.recipe.override_per_branch';
+    case InventoryRecipeLock = 'inventory.recipe.lock';
+
+    // Inventory — reconciliation
+    case InventoryReconciliationOpenCycle = 'inventory.reconciliation.open_cycle';
+    case InventoryReconciliationAdjust = 'inventory.reconciliation.adjust';
+
+    // Inventory — reports & settings
+    case InventoryReportView = 'inventory.report.view';
+    case InventorySettingsManage = 'inventory.settings.manage';
 }

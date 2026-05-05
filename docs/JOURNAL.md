@@ -84,6 +84,34 @@ Source: IMS architecture session.
 Why: agreed column set from design session; must be consistent across all agents and UI implementations.  
 Source: IMS architecture session.
 
+**2026-05-05** · IMS: Purchase Orders In Scope · PO module added to MVP. Tables: `inventory_purchase_orders` + `inventory_purchase_order_items` + `inventory_purchases` (receipts) + `inventory_purchase_items`. Status machine: `draft → sent → partially_received → received → closed` (+ `cancelled` from any pre-receipt state with reason).  
+Why: closes the loop between "what was ordered" and "what arrived"; provides supplier performance + variance visibility; required for Reorder Suggestion engine.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: PO Discipline · Strict mode — every purchase MUST tie to a PO. Single override flag `urgent_buy=true` (with required reason) lets Purchasing Clerk record an ad-hoc purchase without a PO. Urgent buys flagged in reports.  
+Why: discipline first, escape hatch for emergencies; reportable so abuse is visible.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: PO Authorship · Only `WarehouseManager` may create POs. `PurchasingClerk` only executes (records purchases against existing POs, or urgent-buy override).  
+Why: separation of duties — clerk who buys is not the clerk who authorises.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: PO Approval Threshold · POs above a configurable amount (default TBD, suggest ₵10,000) require Admin approval before status can move from `draft → sent`. Below threshold auto-approves on submit.  
+Why: financial control on large commitments without slowing routine purchases.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: Build Order · Frontend Warehouse Manager portal first (mock-backed). All backend work (PO migrations, controllers, engines) deferred until WM portal UX is locked.  
+Why: design-led — get the operator experience right before committing to schema/API contracts.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: Test Credentials Seeded · `EmployeeSeeder` now creates `warehouse@cedibites.test` (WarehouseManager) and `purchasing@cedibites.test` (PurchasingClerk), both password `password`. Branches: all.  
+Why: unblocks IMS portal access testing without ad-hoc DB edits.  
+Source: Developer decision, 2026-05-05.
+
+**2026-05-05** · IMS: feature/ims Branch Cut · Both repos now on `feature/ims`. Frontend has IMS UI work uncommitted; backend has migrations + IMS skeleton + new roles uncommitted.  
+Why: long-lived branch per locked decision; supersedes prior "not yet cut" entry.  
+Source: Workspace state inspection, 2026-05-05.
+
 **2026-05-05** · Scribe Agent · Created workspace-wide `docs/JOURNAL.md` (this file, in `cedibites_api/`). Single file covers both repos. Agent files at `.github/agents/scribe.agent.md` in both repos.  
 Why: Project Chronicle handles session narratives; Scribe handles atomic decision ledger; separate roles — different cadences, different edit scopes.  
 Source: Developer request, 2026-05-05.
@@ -181,8 +209,11 @@ Action needed: Order Auditor to inspect `app/Events/` before Phase 3 begins.
 
 ## Cross-Repo Impact
 
-**2026-05-05** · IMS: New Roles · `Purchasing Clerk` and `Warehouse Manager` defined in backend. Frontend `cedibites/app/inventory/` must gate IMS pages by these roles via `/api/me/features` + permission checks.  
-Status: documented; not yet implemented in either repo.
+**2026-05-05** · IMS: New Roles · `Purchasing Clerk` and `Warehouse Manager` seeded in backend (`RoleSeeder` + `EmployeeSeeder`). Frontend `cedibites/app/inventory/` must gate IMS pages by these roles via `/api/me/features` + permission checks.  
+Status: backend seeded with test users; frontend gating not yet implemented.
+
+**2026-05-05** · IMS: PO Permissions · New permissions needed when backend work begins: `inventory.purchase_order.create`, `inventory.purchase_order.approve`, `inventory.purchase_order.cancel`, `inventory.purchase.urgent_buy`. To be added to `WarehouseManager` (all 4) and `PurchasingClerk` (urgent_buy only). Existing `inventory.purchase.create` / `inventory.purchase.view` already on both roles.  
+Status: deferred — backend work paused until WM portal UX is locked.
 
 **2026-05-05** · IMS: `OrderCompleted` Event Coupling · Backend must emit `OrderCompleted` with `branch_id` + order lines for ingredient deduction. Frontend Order Manager portal must remain compatible. No frontend changes needed until Phase 3 confirmed.  
 Status: architecture decision locked; event payload unverified (see Open Questions).

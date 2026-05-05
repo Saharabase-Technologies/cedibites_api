@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'password.reset' => \App\Http\Middleware\EnsurePasswordReset::class,
             'branch.access' => \App\Http\Middleware\EnsureBranchAccess::class,
             'customer.active' => \App\Http\Middleware\EnsureCustomerActive::class,
+            'inventory.enabled' => \App\Http\Middleware\EnsureInventoryEnabled::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

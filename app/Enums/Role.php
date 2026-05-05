@@ -16,6 +16,8 @@ enum Role: string
     case CallCenter = 'call_center';
     case Kitchen = 'kitchen';
     case Rider = 'rider';
+    case WarehouseManager = 'warehouse_manager';
+    case PurchasingClerk = 'purchasing_clerk';
 
     /** Friendly, human-readable role name (used in emails & notifications). */
     public function label(): string
@@ -29,6 +31,8 @@ enum Role: string
             self::CallCenter => 'Call Center Agent',
             self::Kitchen => 'Kitchen Staff',
             self::Rider => 'Rider',
+            self::WarehouseManager => 'Warehouse Manager',
+            self::PurchasingClerk => 'Purchasing Clerk',
         };
     }
 
