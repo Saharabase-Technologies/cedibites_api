@@ -104,6 +104,52 @@ Items still needing attention.
 
 ---
 
+## [2026-05-05] Session: IMS Test Users Seeded + PO Decisions Journaled
+
+### Intent
+
+Provide working test credentials for the new Warehouse Manager portal build, and journal all PO-related architectural decisions made during the planning phase. No production code touched — backend PO work explicitly deferred until the frontend flows are validated against mock data.
+
+### Changes Made
+
+| File | Change | Reason |
+|------|--------|--------|
+| `database/seeders/EmployeeSeeder.php` | Added `createWarehouseManager()` and `createPurchasingClerk()` methods; both users synced to all branches | Provides login credentials for the two new IMS personas being designed against |
+| `docs/JOURNAL.md` | Added 7 new decision entries under 2026-05-05 covering PO scope, strict+urgent_buy mode, WM-only authorship, ₵10K approval threshold, frontend-first build order, seeded creds, branch cut | Atomic decision ledger for cross-agent and cross-session continuity |
+
+### Decisions
+
+- **Decision**: Add Purchase Order workflow to IMS scope (was originally deferred). **Rationale**: Without a formal PO, the PurchasingClerk has no authoritative document to receive against; closes the loop between WM and clerk roles.
+- **Decision**: Strict mode by default — purchases must reference an open PO. `urgent_buy` boolean overrides for emergency buys. **Rationale**: Discipline for the normal flow with a documented escape hatch for reality.
+- **Decision**: Only `WarehouseManager` role can author POs. `PurchasingClerk` only records purchases against existing POs. **Rationale**: Separation of duties — clerk executes, manager authorises.
+- **Decision**: PO approval threshold = ₵10,000 (`PO_APPROVAL_THRESHOLD` constant). Above → requires Admin approval before `submit → sent`. **Rationale**: Mirrors wastage threshold pattern; financial gate without micromanaging small POs.
+- **Decision**: Build frontend WM portal first against mocks; defer ALL PO backend work (migration, model, service, controller, permissions, routes). **Rationale**: Lets UX iterate with real users on mock data; backend ships only after flows are validated, avoiding throwaway work.
+- **Decision**: Test creds — `warehouse@cedibites.test` / `password` (employee_no `WHM0001`) and `purchasing@cedibites.test` / `password` (employee_no `PCK0001`). **Rationale**: Stable, memorable identifiers for the two personas the frontend is being built for.
+- **Decision**: All work continues on long-lived branch `feature/ims` in both repos. **Rationale**: Already established in earlier session; no reason to deviate.
+
+### Current State
+
+- Branch: `feature/ims` (commit `d2562b7`)
+- Two new test users live in local DB:
+  - `warehouse@cedibites.test` — `warehouse_manager` role, all branches synced, employee_no `WHM0001`
+  - `purchasing@cedibites.test` — `purchasing_clerk` role, all branches synced, employee_no `PCK0001`
+- Both roles already exist via `RoleSeeder`/`PermissionSeeder` (no permission changes needed)
+- Zero changes to controllers, services, models, migrations, routes, or PO-domain code
+
+### Pending / Follow-up
+
+- **Backend PO domain (deferred until frontend validated)**:
+    - `inventory_purchase_orders` migration (status enum: draft / pending_approval / sent / partially_received / received / closed / cancelled)
+    - `inventory_purchase_order_items` line table
+    - `inventory_purchases` + `inventory_purchase_items` for receipts (with `urgent_buy` flag + nullable `purchase_order_id` FK)
+    - `app/Domain/Inventory/Purchases/` engines: `PurchaseOrderEngine`, `PurchaseReceiptEngine` (writes movements + updates PO `received_qty`)
+    - Permissions: `purchase-orders.create`, `purchase-orders.approve`, `purchase-orders.cancel`, `purchase-orders.close`, `purchases.record`, `purchases.urgent-buy`
+    - Routes under `routes/inventory.php` gated by `EnsureInventoryEnabled`
+    - Pest tests for both engines including the ₵10K threshold logic
+- Pre-existing seeder ordering gotcha: `EmployeeSeeder` requires `PermissionSeeder` + `RoleSeeder` to run first or roles fail to attach (worked around manually)
+
+---
+
 ## [2026-05-05] Session: IMS Architecture Lock + Scribe Agent
 
 ### Intent
