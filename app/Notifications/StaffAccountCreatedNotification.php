@@ -19,7 +19,9 @@ class StaffAccountCreatedNotification extends Notification implements ShouldQueu
     public $timeout = 30;
 
     public function __construct(
-        public string $temporaryPassword
+        public string $temporaryPassword,
+        /** Friendly role label (e.g. "Branch Partner") — tailors the welcome copy. */
+        public ?string $roleLabel = null,
     ) {}
 
     /**
@@ -43,11 +45,16 @@ class StaffAccountCreatedNotification extends Notification implements ShouldQueu
      */
     public function toMail(object $notifiable): MailMessage
     {
+        $subject = $this->roleLabel
+            ? "Welcome to CediBites — You've been added as a {$this->roleLabel}"
+            : 'Your CediBites Staff Account Has Been Created';
+
         return (new MailMessage)
-            ->subject('Your CediBites Staff Account Has Been Created')
+            ->subject($subject)
             ->view('emails.staff.account-created', [
                 'user' => $notifiable,
                 'temporaryPassword' => $this->temporaryPassword,
+                'roleLabel' => $this->roleLabel,
             ]);
     }
 
@@ -56,7 +63,11 @@ class StaffAccountCreatedNotification extends Notification implements ShouldQueu
      */
     public function toSms(object $notifiable): string
     {
-        return "CediBites: Your staff account has been created. Use this temporary password to log in: {$this->temporaryPassword}. You can change it after logging in.";
+        $intro = $this->roleLabel
+            ? "You've been added as a {$this->roleLabel} on CediBites."
+            : 'Your CediBites staff account has been created.';
+
+        return "CediBites: {$intro} Use this temporary password to log in: {$this->temporaryPassword}. You can change it after logging in.";
     }
 
     /**

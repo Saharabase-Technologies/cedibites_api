@@ -1,12 +1,16 @@
 @extends('emails.layout')
 
-@section('title', 'Your Staff Account Has Been Created - CediBites')
+@section('title', (! empty($roleLabel ?? null)) ? 'Welcome to CediBites' : 'Your Staff Account Has Been Created - CediBites')
 
 @section('content')
     <h2 class="greeting">Hello {{ $user->name }}</h2>
 
     <p class="message">
-        Your CediBites staff account has been created. You can now log in to the staff portal using your email or phone number and the temporary password below.
+        @if (! empty($roleLabel ?? null))
+            You&rsquo;ve been added as a <strong>{{ $roleLabel }}</strong> on CediBites. You can now log in to the portal using your email or phone number and the temporary password below.
+        @else
+            Your CediBites staff account has been created. You can now log in to the staff portal using your email or phone number and the temporary password below.
+        @endif
     </p>
 
     <div class="order-box">
