@@ -4,6 +4,7 @@ namespace App\Services\Analytics;
 
 use App\Models\CheckoutSession;
 use App\Models\Customer;
+use App\Models\MenuItem;
 use App\Models\Order;
 use App\Models\OrderStatusHistory;
 use App\Models\Payment;
@@ -1140,6 +1141,201 @@ class AnalyticsService
                 'orders' => (int) $r->orders,
             ])->values()->toArray(),
         ];
+    }
+
+    /**
+     * Menu catalog for the comparison picker — items with their options.
+     */
+    public function getMenuCatalog(): array
+    {
+        return MenuItem::query()
+            ->with(['options:id,menu_item_id,option_label,display_name'])
+            ->orderBy('name')
+            ->get(['id', 'name'])
+            ->map(fn (MenuItem $it) => [
+                'id' => $it->id,
+                'name' => $it->name,
+                'options' => $it->options->map(fn ($o) => [
+                    'id' => $o->id,
+                    'label' => $o->display_name ?: $o->option_label,
+                ])->values()->all(),
+            ])->all();
+    }
+
+    /**
+     * Menu comparison — aggregate historical sales for a set of "subjects",
+     * each a pick-and-mix of whole menu items (all their options) and/or
+     * specific options. Returns totals + a dense daily series per subject.
+     *
+     * @param  array<int, array{label?: string, item_ids?: array, option_ids?: array}>  $subjects
+     */
+    public function getMenuComparison(array $filters, array $subjects): array
+    {
+        $start = ! empty($filters['date_from']) ? Carbon::parse($filters['date_from']) : Carbon::today()->subDays(29);
+        $end = ! empty($filters['date_to']) ? Carbon::parse($filters['date_to']) : Carbon::today();
+        if ($end->lt($start)) {
+            [$start, $end] = [$end, $start];
+        }
+
+        $days = [];
+        for ($d = $start->copy(); $d->lte($end); $d->addDay()) {
+            $days[] = $d->format('Y-m-d');
+        }
+        if (count($days) > 400) {
+            $days = array_slice($days, -400);
+        }
+        $dayCount = max(count($days), 1);
+
+        $subjectsOut = [];
+
+        foreach ($subjects as $subject) {
+            $label = (string) ($subject['label'] ?? 'Subject');
+            $itemIds = array_values(array_filter(array_map('intval', $subject['item_ids'] ?? [])));
+            $optionIds = array_values(array_filter(array_map('intval', $subject['option_ids'] ?? [])));
+
+            $emptySeries = array_map(fn ($d) => ['date' => $d, 'revenue' => 0.0], $days);
+
+            if (empty($itemIds) && empty($optionIds)) {
+                $subjectsOut[] = [
+                    'label' => $label, 'revenue' => 0.0, 'units' => 0, 'orders' => 0,
+                    'aov' => 0.0, 'avg_per_day' => 0.0, 'max_day' => null, 'min_day' => null, 'series' => $emptySeries,
+                ];
+
+                continue;
+            }
+
+            // Order-item rows matching this subject: whole items OR specific options.
+            $matcher = function ($q) use ($itemIds, $optionIds) {
+                if ($itemIds) {
+                    $q->whereIn('order_items.menu_item_id', $itemIds);
+                }
+                if ($optionIds) {
+                    $q->orWhereIn('order_items.menu_item_option_id', $optionIds);
+                }
+            };
+
+            $totals = $this->queryBuilder->orderItems($filters)->where($matcher)
+                ->selectRaw('SUM(order_items.subtotal) as revenue, SUM(order_items.quantity) as units, COUNT(DISTINCT order_items.order_id) as orders')
+                ->first();
+
+            $revenue = round((float) ($totals->revenue ?? 0), 2);
+            $units = (int) ($totals->units ?? 0);
+            $orders = (int) ($totals->orders ?? 0);
+
+            $byDay = $this->queryBuilder->orderItems($filters)->where($matcher)
+                ->selectRaw('DATE(orders.created_at) as d, SUM(order_items.subtotal) as revenue')
+                ->groupBy('d')
+                ->pluck('revenue', 'd');
+
+            $series = array_map(fn ($d) => ['date' => $d, 'revenue' => round((float) ($byDay[$d] ?? 0), 2)], $days);
+            $sold = array_values(array_filter($series, fn ($s) => $s['revenue'] > 0));
+
+            $maxDay = $sold ? array_reduce($sold, fn ($c, $s) => ($c === null || $s['revenue'] > $c['revenue']) ? $s : $c) : null;
+            $minDay = $sold ? array_reduce($sold, fn ($c, $s) => ($c === null || $s['revenue'] < $c['revenue']) ? $s : $c) : null;
+
+            $subjectsOut[] = [
+                'label' => $label,
+                'revenue' => $revenue,
+                'units' => $units,
+                'orders' => $orders,
+                'aov' => $orders > 0 ? round($revenue / $orders, 2) : 0.0,
+                'avg_per_day' => round($revenue / $dayCount, 2),
+                'max_day' => $maxDay,
+                'min_day' => $minDay,
+                'series' => $series,
+            ];
+        }
+
+        return [
+            'range' => ['date_from' => $start->format('Y-m-d'), 'date_to' => $end->format('Y-m-d'), 'days' => $dayCount],
+            'subjects' => $subjectsOut,
+        ];
+    }
+
+    /**
+     * Repeat-customer health: new vs returning split, repeat rate, and average
+     * days between orders for customers with 2+ orders, over the period.
+     */
+    public function getRepeatCustomerMetrics(array $filters = []): array
+    {
+        // Customers who ordered in the period, with their order counts in period.
+        $rows = $this->queryBuilder->placedOrders($filters)
+            ->whereNotNull('customer_id')
+            ->selectRaw('customer_id, COUNT(*) as order_count')
+            ->groupBy('customer_id')
+            ->get();
+
+        $activeCustomers = $rows->count();
+        $repeatCustomers = $rows->where('order_count', '>', 1)->count();
+        $repeatRate = $activeCustomers > 0 ? round(($repeatCustomers / $activeCustomers) * 100, 1) : 0.0;
+
+        // Average days between consecutive orders (all-time, for customers who
+        // ordered in this period) — a loyalty cadence signal.
+        $customerIds = $rows->pluck('customer_id')->all();
+        $avgDaysBetween = null;
+        if (! empty($customerIds)) {
+            $history = Order::query()
+                ->whereIn('customer_id', $customerIds)
+                ->orderBy('customer_id')
+                ->orderBy('created_at')
+                ->get(['customer_id', 'created_at'])
+                ->groupBy('customer_id');
+
+            $gaps = [];
+            foreach ($history as $orders) {
+                $dates = $orders->pluck('created_at')->values();
+                for ($i = 1; $i < $dates->count(); $i++) {
+                    $gaps[] = $dates[$i - 1]->diffInDays($dates[$i]);
+                }
+            }
+            if (! empty($gaps)) {
+                $avgDaysBetween = round(array_sum($gaps) / count($gaps), 1);
+            }
+        }
+
+        return [
+            'active_customers' => $activeCustomers,
+            'repeat_customers' => $repeatCustomers,
+            'new_customers' => $activeCustomers - $repeatCustomers,
+            'repeat_rate' => $repeatRate,
+            'avg_days_between_orders' => $avgDaysBetween,
+        ];
+    }
+
+    /**
+     * Orders bucketed by weekday (0=Mon … 6=Sun) and hour — a 2-D demand map.
+     */
+    public function getWeekdayHourMetrics(array $filters = []): array
+    {
+        $driver = DB::connection()->getDriverName();
+        // ISO weekday 1=Mon..7=Sun across drivers; normalise to 0=Mon..6=Sun in PHP.
+        $dowExpr = match ($driver) {
+            'mysql', 'mariadb' => 'WEEKDAY(orders.created_at)',          // 0=Mon..6=Sun
+            'pgsql' => 'EXTRACT(ISODOW FROM orders.created_at) - 1',     // 1..7 → 0..6
+            default => "CAST(strftime('%w', orders.created_at) AS INTEGER)", // 0=Sun..6=Sat
+        };
+        $hourExpr = match ($driver) {
+            'mysql', 'mariadb' => 'HOUR(orders.created_at)',
+            'pgsql' => 'EXTRACT(HOUR FROM orders.created_at)',
+            default => "CAST(strftime('%H', orders.created_at) AS INTEGER)",
+        };
+
+        $rows = $this->queryBuilder->placedOrders($filters)
+            ->selectRaw("{$dowExpr} as dow, {$hourExpr} as hour, COUNT(*) as count")
+            ->groupByRaw("{$dowExpr}, {$hourExpr}")
+            ->get();
+
+        $cells = $rows->map(function ($r) use ($driver) {
+            $dow = (int) $r->dow;
+            if ($driver !== 'mysql' && $driver !== 'mariadb' && $driver !== 'pgsql') {
+                // sqlite: 0=Sun..6=Sat → convert to 0=Mon..6=Sun
+                $dow = ($dow + 6) % 7;
+            }
+
+            return ['dow' => $dow, 'hour' => (int) $r->hour, 'count' => (int) $r->count];
+        })->values()->all();
+
+        return ['cells' => $cells];
     }
 
     // ─── PRIVATE HELPERS ────────────────────────────────────────────

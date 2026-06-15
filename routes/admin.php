@@ -149,6 +149,10 @@ Route::prefix('admin')->group(function () {
             Route::get('cancellation-reasons', [AdminAnalyticsController::class, 'cancellationReasons']);
             Route::get('checkout-funnel', [AdminAnalyticsController::class, 'checkoutFunnel']);
             Route::get('staff-sales', [AdminAnalyticsController::class, 'staffSales']);
+            Route::get('repeat-customers', [AdminAnalyticsController::class, 'repeatCustomers']);
+            Route::get('weekday-hour', [AdminAnalyticsController::class, 'weekdayHour']);
+            Route::get('menu-catalog', [AdminAnalyticsController::class, 'menuCatalog']);
+            Route::post('menu-comparison', [AdminAnalyticsController::class, 'menuComparison']);
         });
 
         Route::prefix('reports')->group(function () {

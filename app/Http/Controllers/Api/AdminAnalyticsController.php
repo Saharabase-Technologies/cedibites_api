@@ -249,4 +249,59 @@ class AdminAnalyticsController extends Controller
             'Staff sales analytics retrieved successfully.'
         );
     }
+
+    /**
+     * Menu catalog (items + options) for the comparison picker.
+     */
+    public function menuCatalog(): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getMenuCatalog(),
+            'Menu catalog retrieved successfully.'
+        );
+    }
+
+    /**
+     * Menu comparison — aggregate historical sales for assembled subjects.
+     */
+    public function menuComparison(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'subjects' => ['required', 'array', 'min:1', 'max:4'],
+            'subjects.*.label' => ['nullable', 'string', 'max:80'],
+            'subjects.*.item_ids' => ['nullable', 'array'],
+            'subjects.*.item_ids.*' => ['integer'],
+            'subjects.*.option_ids' => ['nullable', 'array'],
+            'subjects.*.option_ids.*' => ['integer'],
+        ]);
+
+        $filters = $this->filters($request);
+
+        return response()->success(
+            $this->analyticsService->getMenuComparison($filters, $validated['subjects']),
+            'Menu comparison retrieved successfully.'
+        );
+    }
+
+    /**
+     * Repeat-customer health (new vs returning, repeat rate, cadence).
+     */
+    public function repeatCustomers(Request $request): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getRepeatCustomerMetrics($this->filters($request)),
+            'Repeat customer analytics retrieved successfully.'
+        );
+    }
+
+    /**
+     * Orders by weekday × hour (2-D demand heatmap).
+     */
+    public function weekdayHour(Request $request): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getWeekdayHourMetrics($this->filters($request)),
+            'Weekday-hour analytics retrieved successfully.'
+        );
+    }
 }
