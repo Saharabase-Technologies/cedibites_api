@@ -1457,7 +1457,7 @@ class AnalyticsService
      */
     protected function resolveBucket(array $filters, ?string $bucket): string
     {
-        if (in_array($bucket, ['day', 'week', 'month'], true)) {
+        if (in_array($bucket, ['hour', 'day', 'week', 'month'], true)) {
             return $bucket;
         }
 
@@ -1483,6 +1483,7 @@ class AnalyticsService
         $isPg = $driver === 'pgsql';
 
         return match ($bucket) {
+            'hour' => $isPg ? "TO_CHAR(created_at, 'YYYY-MM-DD\"T\"HH24')" : "DATE_FORMAT(created_at, '%Y-%m-%dT%H')",
             'month' => $isPg ? "TO_CHAR(created_at, 'YYYY-MM')" : "DATE_FORMAT(created_at, '%Y-%m')",
             'week' => $isPg ? "TO_CHAR(created_at, 'IYYY-\"W\"IW')" : "DATE_FORMAT(created_at, '%x-W%v')",
             default => $isPg ? "TO_CHAR(created_at, 'YYYY-MM-DD')" : "DATE_FORMAT(created_at, '%Y-%m-%d')",
