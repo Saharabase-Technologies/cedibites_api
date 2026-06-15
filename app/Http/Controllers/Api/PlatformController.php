@@ -270,15 +270,22 @@ class PlatformController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'phone' => ['required', 'string', 'max:20'],
-            'email' => ['nullable', 'email', 'max:255'],
+            // Email or phone — at least one is required (partners may have email only).
+            'phone' => ['nullable', 'string', 'max:20', 'required_without:email'],
+            'email' => ['nullable', 'email', 'max:255', 'required_without:phone'],
             'role' => ['required', 'string', Rule::in(Role::values())],
             'branch_ids' => ['nullable', 'array'],
             'branch_ids.*' => ['integer', 'exists:branches,id'],
             'password_mode' => ['nullable', 'in:auto,custom,prompt'],
             'password' => ['nullable', 'string', 'min:8', 'required_if:password_mode,custom'],
             'new_passcode' => ['required_if:role,'.Role::TechAdmin->value, 'nullable', 'string', 'digits:6'],
+        ], [
+            'phone.required_without' => 'Provide an email or a phone number.',
+            'email.required_without' => 'Provide an email or a phone number.',
         ]);
+
+        // Canonicalise the phone so it matches at login regardless of input format.
+        $phone = User::normalizePhone($validated['phone'] ?? null);
 
         // A branch is required for every role except platform/tech admins.
         if ($validated['role'] !== Role::TechAdmin->value && empty($validated['branch_ids'])) {
@@ -305,8 +312,15 @@ class PlatformController extends Controller
                 $storeRecoverable = true;
             }
 
-            // Reuse an existing user (e.g. previously a customer) by phone, else create.
-            $existingUser = User::where('phone', $validated['phone'])->first();
+            // Reuse an existing user (e.g. previously a customer) matched by phone
+            // or email, else create a fresh one.
+            $existingUser = null;
+            if ($phone) {
+                $existingUser = User::where('phone', $phone)->first();
+            }
+            if (! $existingUser && ! empty($validated['email'])) {
+                $existingUser = User::where('email', $validated['email'])->first();
+            }
 
             if ($existingUser) {
                 $existingUser->update([
@@ -318,12 +332,15 @@ class PlatformController extends Controller
                 if (! empty($validated['email']) && ! $existingUser->email) {
                     $existingUser->update(['email' => $validated['email']]);
                 }
+                if ($phone && ! $existingUser->phone) {
+                    $existingUser->update(['phone' => $phone]);
+                }
                 $user = $existingUser;
             } else {
                 $user = User::create([
                     'name' => $validated['name'],
                     'email' => $validated['email'] ?? null,
-                    'phone' => $validated['phone'],
+                    'phone' => $phone,
                     'password' => Hash::make($password),
                     'recoverable_password' => $storeRecoverable ? $password : null,
                     'must_reset_password' => $mustReset,

@@ -88,6 +88,27 @@ class User extends Authenticatable
         ];
     }
 
+    /**
+     * Normalise a Ghana phone number to canonical "+233XXXXXXXXX" form,
+     * regardless of how it was entered (+233…, 233…, 0…, with spaces/dashes).
+     * The single source of truth for phone matching & storage.
+     */
+    public static function normalizePhone(?string $phone): ?string
+    {
+        if ($phone === null) {
+            return null;
+        }
+
+        $digits = preg_replace('/\D/', '', $phone) ?? '';
+        if ($digits === '') {
+            return null;
+        }
+
+        $national = str_starts_with($digits, '233') ? $digits : '233'.ltrim($digits, '0');
+
+        return '+'.$national;
+    }
+
     public function customer(): HasOne
     {
         return $this->hasOne(Customer::class);

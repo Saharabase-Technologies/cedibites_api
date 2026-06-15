@@ -31,7 +31,11 @@ class StaffAccountCreatedNotification extends Notification implements ShouldQueu
      */
     public function via(object $notifiable): array
     {
-        $channels = ['database', SmsChannel::class];
+        $channels = ['database'];
+
+        if ($notifiable->phone) {
+            $channels[] = SmsChannel::class;
+        }
 
         if ($notifiable->email) {
             $channels[] = 'mail';

@@ -35,9 +35,7 @@ class EmployeeAuthController extends Controller
         $value = $identifier;
 
         if ($field === 'phone') {
-            $digits = preg_replace('/\D/', '', $identifier);
-            $normalized = str_starts_with($digits, '233') ? $digits : '233'.ltrim($digits, '0');
-            $value = '+'.ltrim($normalized, '+');
+            $value = User::normalizePhone($identifier) ?? $identifier;
         }
 
         if (! Auth::attempt([$field => $value, 'password' => $password])) {
@@ -291,10 +289,11 @@ class EmployeeAuthController extends Controller
             return User::where('email', $identifier)->first();
         }
 
-        $digits = preg_replace('/\D/', '', $identifier);
-        $phone = str_starts_with($digits, '233') ? $digits : '233'.ltrim($digits, '0');
+        $phone = User::normalizePhone($identifier);
 
-        return User::where('phone', $phone)->orWhere('phone', $identifier)->first();
+        return User::where('phone', $phone)
+            ->orWhere('phone', $identifier)
+            ->first();
     }
 
     /**
