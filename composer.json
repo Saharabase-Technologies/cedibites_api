@@ -19,7 +19,9 @@
         "maatwebsite/excel": "^3.1",
         "spatie/laravel-activitylog": "^4.12",
         "spatie/laravel-medialibrary": "^11.20",
-        "spatie/laravel-permission": "^7.2"
+        "spatie/laravel-permission": "^7.2",
+        "symfony/brevo-mailer": "^8.1",
+        "symfony/http-client": "^8.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

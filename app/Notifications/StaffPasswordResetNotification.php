@@ -21,6 +21,7 @@ class StaffPasswordResetNotification extends Notification implements ShouldQueue
 
     public function __construct(
         public string $resetLink,
+        public ?string $otp = null,
     ) {}
 
     /**
@@ -39,10 +40,19 @@ class StaffPasswordResetNotification extends Notification implements ShouldQueue
 
     public function toMail(object $notifiable): MailMessage
     {
-        return (new MailMessage)
+        $mail = (new MailMessage)
             ->subject('Reset your CediBites password')
             ->greeting('Hello '.$notifiable->name.',')
-            ->line('We received a request to reset your CediBites staff portal password.')
+            ->line('We received a request to reset your CediBites staff portal password.');
+
+        if ($this->otp) {
+            $mail->line('Your verification code is:')
+                ->line('**'.$this->otp.'**')
+                ->line('This code expires in 15 minutes.')
+                ->line('Or use the button below to reset your password directly:');
+        }
+
+        return $mail
             ->action('Reset Password', $this->resetLink)
             ->line('This link expires in 60 minutes.')
             ->line('If you did not request a password reset, you can ignore this email.')
@@ -51,6 +61,10 @@ class StaffPasswordResetNotification extends Notification implements ShouldQueue
 
     public function toSms(object $notifiable): string
     {
+        if ($this->otp) {
+            return "CediBites: Your password reset code is {$this->otp} (valid 15 min). Or reset here: {$this->resetLink}. Ignore if you didn't request this.";
+        }
+
         return "CediBites: Reset your password here: {$this->resetLink}. Link expires in 60 minutes. Ignore if you didn't request this.";
     }
 

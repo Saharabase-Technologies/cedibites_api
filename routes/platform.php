@@ -33,6 +33,9 @@ Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
     Route::post('admins', [PlatformController::class, 'createAdmin'])->middleware('permission:manage_platform');
     Route::delete('admins/{user}', [PlatformController::class, 'revokeAdmin'])->middleware('permission:manage_platform');
 
+    // Create a brand-new user (any role) from the vault — passcode-gated
+    Route::post('create-user', [PlatformController::class, 'createUser'])->middleware('permission:manage_platform');
+
     // Passcode management (self-service)
     Route::put('passcode', [PlatformController::class, 'updatePasscode']);
 

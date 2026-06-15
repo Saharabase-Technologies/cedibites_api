@@ -369,6 +369,7 @@ class AnalyticsService
                 : 0;
 
             return [
+                'id' => (int) $b->branch_id,
                 'name' => $branchNames[$b->branch_id] ?? 'Unknown',
                 'rev' => round($b->revenue ?? 0, 2),
                 'orders' => $b->completed_orders,
@@ -1061,6 +1062,86 @@ class AnalyticsService
         ];
     }
 
+    // ─── T. SALES COMPARISON (period-over-period) ───────────────────
+
+    /**
+     * Headline sales metrics for the current range plus the equivalent
+     * preceding range, with percentage deltas. Powers the "▲12% vs last
+     * period" chips on dashboards. Delta is null when there is no baseline
+     * (previous value 0) or the range is open-ended.
+     *
+     * @return array{current: array{revenue: float, orders: int, aov: float}, previous: array{revenue: float, orders: int, aov: float}|null, delta: array{revenue: float|null, orders: float|null, aov: float|null}|null, previous_range: array{date_from: string, date_to: string}|null}
+     */
+    public function getSalesComparison(array $filters): array
+    {
+        $revenue = $this->queryBuilder->computeRevenue($filters);
+        $orders = $this->queryBuilder->computePlacedOrderCount($filters);
+        $revenueOrderCount = $this->queryBuilder->computeRevenueOrderCount($filters);
+        $aov = $revenueOrderCount > 0 ? round($revenue / $revenueOrderCount, 2) : 0.0;
+
+        $current = ['revenue' => $revenue, 'orders' => $orders, 'aov' => $aov];
+
+        $previousFilters = $this->previousRangeFilters($filters);
+        if ($previousFilters === null) {
+            return ['current' => $current, 'previous' => null, 'delta' => null, 'previous_range' => null];
+        }
+
+        $prevRevenue = $this->queryBuilder->computeRevenue($previousFilters);
+        $prevOrders = $this->queryBuilder->computePlacedOrderCount($previousFilters);
+        $prevRevenueOrderCount = $this->queryBuilder->computeRevenueOrderCount($previousFilters);
+        $prevAov = $prevRevenueOrderCount > 0 ? round($prevRevenue / $prevRevenueOrderCount, 2) : 0.0;
+
+        return [
+            'current' => $current,
+            'previous' => ['revenue' => $prevRevenue, 'orders' => $prevOrders, 'aov' => $prevAov],
+            'delta' => [
+                'revenue' => $this->pctChange($revenue, $prevRevenue),
+                'orders' => $this->pctChange((float) $orders, (float) $prevOrders),
+                'aov' => $this->pctChange($aov, $prevAov),
+            ],
+            'previous_range' => [
+                'date_from' => $previousFilters['date_from'],
+                'date_to' => $previousFilters['date_to'],
+            ],
+        ];
+    }
+
+    // ─── U. REVENUE TREND (bucketed time series) ────────────────────
+
+    /**
+     * Revenue + order count grouped into time buckets (day / week / month).
+     * Bucket is auto-selected from the range length when not specified, so a
+     * 7-day range returns daily points while a 1-year range returns months —
+     * the basis for the "trend over time" chart and growth-since-inception.
+     *
+     * @return array{bucket: string, series: array<int, array{period: string, revenue: float, orders: int}>}
+     */
+    public function getRevenueTrend(array $filters, ?string $bucket = null): array
+    {
+        $bucket = $this->resolveBucket($filters, $bucket);
+        $driver = DB::connection()->getDriverName();
+        $keyExpr = $this->bucketKeyExpression($driver, $bucket);
+
+        $rows = (clone $this->queryBuilder->revenueOrders($filters))
+            ->select(
+                DB::raw("{$keyExpr} as period"),
+                DB::raw('SUM(total_amount) as revenue'),
+                DB::raw('COUNT(*) as orders')
+            )
+            ->groupBy(DB::raw($keyExpr))
+            ->orderBy(DB::raw($keyExpr))
+            ->get();
+
+        return [
+            'bucket' => $bucket,
+            'series' => $rows->map(fn ($r) => [
+                'period' => (string) $r->period,
+                'revenue' => round((float) $r->revenue, 2),
+                'orders' => (int) $r->orders,
+            ])->values()->toArray(),
+        ];
+    }
+
     // ─── PRIVATE HELPERS ────────────────────────────────────────────
 
     protected function computeAveragePrepTime(array $filters): ?float
@@ -1111,21 +1192,10 @@ class AnalyticsService
 
     protected function getPreviousPeriodItems(array $filters, int $limit): array
     {
-        if (! isset($filters['date_from']) || ! isset($filters['date_to'])) {
+        $previousFilters = $this->previousRangeFilters($filters);
+        if ($previousFilters === null) {
             return [];
         }
-
-        $dateFrom = new \DateTime($filters['date_from']);
-        $dateTo = new \DateTime($filters['date_to']);
-        $daysDiff = $dateFrom->diff($dateTo)->days;
-
-        $previousDateTo = (clone $dateFrom)->modify('-1 day');
-        $previousDateFrom = (clone $previousDateTo)->modify("-{$daysDiff} days");
-
-        $previousFilters = array_merge($filters, [
-            'date_from' => $previousDateFrom->format('Y-m-d'),
-            'date_to' => $previousDateTo->format('Y-m-d'),
-        ]);
 
         $query = $this->queryBuilder->orderItems($previousFilters);
 
@@ -1147,5 +1217,79 @@ class AnalyticsService
                 return [$key => $item->revenue];
             })
             ->toArray();
+    }
+
+    /**
+     * Shift a filter set back by one equivalent period (same length, ending
+     * the day before date_from). Returns null when the range is open-ended.
+     */
+    protected function previousRangeFilters(array $filters): ?array
+    {
+        if (empty($filters['date_from']) || empty($filters['date_to'])) {
+            return null;
+        }
+
+        $from = new \DateTime($filters['date_from']);
+        $to = new \DateTime($filters['date_to']);
+        $days = (int) $from->diff($to)->days;
+
+        $previousTo = (clone $from)->modify('-1 day');
+        $previousFrom = (clone $previousTo)->modify("-{$days} days");
+
+        return array_merge($filters, [
+            'date_from' => $previousFrom->format('Y-m-d'),
+            'date_to' => $previousTo->format('Y-m-d'),
+        ]);
+    }
+
+    /**
+     * Percentage change from previous to current. Null when there is no
+     * baseline (previous is 0) to avoid divide-by-zero / infinite growth.
+     */
+    protected function pctChange(float $current, float $previous): ?float
+    {
+        if ($previous == 0.0) {
+            return null;
+        }
+
+        return round((($current - $previous) / $previous) * 100, 1);
+    }
+
+    /**
+     * Resolve the trend bucket: honour an explicit value, otherwise pick by
+     * range length (≤31d → day, ≤120d → week, else month).
+     */
+    protected function resolveBucket(array $filters, ?string $bucket): string
+    {
+        if (in_array($bucket, ['day', 'week', 'month'], true)) {
+            return $bucket;
+        }
+
+        if (empty($filters['date_from']) || empty($filters['date_to'])) {
+            return 'day';
+        }
+
+        $days = (int) (new \DateTime($filters['date_from']))->diff(new \DateTime($filters['date_to']))->days;
+
+        return match (true) {
+            $days <= 31 => 'day',
+            $days <= 120 => 'week',
+            default => 'month',
+        };
+    }
+
+    /**
+     * Driver-aware SQL expression producing a lexically-sortable bucket key
+     * (e.g. 2026-06-12 / 2026-W24 / 2026-06). Supports pgsql and mysql.
+     */
+    protected function bucketKeyExpression(string $driver, string $bucket): string
+    {
+        $isPg = $driver === 'pgsql';
+
+        return match ($bucket) {
+            'month' => $isPg ? "TO_CHAR(created_at, 'YYYY-MM')" : "DATE_FORMAT(created_at, '%Y-%m')",
+            'week' => $isPg ? "TO_CHAR(created_at, 'IYYY-\"W\"IW')" : "DATE_FORMAT(created_at, '%x-W%v')",
+            default => $isPg ? "TO_CHAR(created_at, 'YYYY-MM-DD')" : "DATE_FORMAT(created_at, '%Y-%m-%d')",
+        };
     }
 }

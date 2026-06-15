@@ -132,6 +132,8 @@ Route::prefix('admin')->group(function () {
     Route::middleware('permission:view_orders')->group(function () {
         Route::prefix('analytics')->group(function () {
             Route::get('sales', [AdminAnalyticsController::class, 'sales']);
+            Route::get('sales-comparison', [AdminAnalyticsController::class, 'salesComparison']);
+            Route::get('revenue-trend', [AdminAnalyticsController::class, 'revenueTrend']);
             Route::get('orders', [AdminAnalyticsController::class, 'orders']);
             Route::get('customers', [AdminAnalyticsController::class, 'customers']);
             Route::get('order-sources', [AdminAnalyticsController::class, 'orderSources']);

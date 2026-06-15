@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\EmployeeStatus;
 use App\Enums\Role;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Models\User;
+use App\Notifications\StaffAccountCreatedNotification;
 use App\Services\SmartErrorService;
 use App\Services\SystemHealthService;
 use Illuminate\Http\JsonResponse;
@@ -13,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 
 class PlatformController extends Controller
@@ -251,6 +254,129 @@ class PlatformController extends Controller
             ->log("Promoted {$user->name} to platform admin");
 
         return response()->json(['message' => "{$user->name} is now a platform admin"]);
+    }
+
+    /**
+     * Create a brand-new staff/admin user from the password vault (passcode-gated).
+     *
+     * Mirrors EmployeeController::store but lives in the tech-admin scope and is
+     * verified by the platform passcode. Stores the recoverable password so the
+     * created user is immediately viewable/manageable in the vault. When the role
+     * is tech_admin, a 6-digit passcode for the new admin is also required.
+     */
+    public function createUser(Request $request): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'phone' => ['required', 'string', 'max:20'],
+            'email' => ['nullable', 'email', 'max:255'],
+            'role' => ['required', 'string', Rule::in(Role::values())],
+            'branch_ids' => ['nullable', 'array'],
+            'branch_ids.*' => ['integer', 'exists:branches,id'],
+            'password_mode' => ['nullable', 'in:auto,custom,prompt'],
+            'password' => ['nullable', 'string', 'min:8', 'required_if:password_mode,custom'],
+            'new_passcode' => ['required_if:role,'.Role::TechAdmin->value, 'nullable', 'string', 'digits:6'],
+        ]);
+
+        // A branch is required for every role except platform/tech admins.
+        if ($validated['role'] !== Role::TechAdmin->value && empty($validated['branch_ids'])) {
+            return response()->json(['message' => 'At least one branch is required for this role.'], 422);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $passwordMode = $validated['password_mode'] ?? 'auto';
+
+            // Determine password based on mode (mirrors EmployeeController::store).
+            if ($passwordMode === 'prompt') {
+                $password = $this->generateSimplePassword();
+                $mustReset = true;
+                $storeRecoverable = false;
+            } elseif ($passwordMode === 'custom' && ! empty($validated['password'])) {
+                $password = $validated['password'];
+                $mustReset = false;
+                $storeRecoverable = true;
+            } else {
+                $password = $this->generateSimplePassword();
+                $mustReset = false;
+                $storeRecoverable = true;
+            }
+
+            // Reuse an existing user (e.g. previously a customer) by phone, else create.
+            $existingUser = User::where('phone', $validated['phone'])->first();
+
+            if ($existingUser) {
+                $existingUser->update([
+                    'name' => $validated['name'],
+                    'password' => Hash::make($password),
+                    'recoverable_password' => $storeRecoverable ? $password : null,
+                    'must_reset_password' => $mustReset,
+                ]);
+                if (! empty($validated['email']) && ! $existingUser->email) {
+                    $existingUser->update(['email' => $validated['email']]);
+                }
+                $user = $existingUser;
+            } else {
+                $user = User::create([
+                    'name' => $validated['name'],
+                    'email' => $validated['email'] ?? null,
+                    'phone' => $validated['phone'],
+                    'password' => Hash::make($password),
+                    'recoverable_password' => $storeRecoverable ? $password : null,
+                    'must_reset_password' => $mustReset,
+                ]);
+            }
+
+            $user->assignRole($validated['role']);
+
+            // Tech admins additionally get their own platform passcode.
+            if ($validated['role'] === Role::TechAdmin->value) {
+                $user->update(['platform_passcode' => $validated['new_passcode']]);
+            }
+
+            // Derive the next employee number inside the transaction (race-safe).
+            $maxNo = Employee::lockForUpdate()
+                ->where('employee_no', 'like', 'EMP%')
+                ->pluck('employee_no')
+                ->map(fn (string $no) => (int) substr($no, 3))
+                ->max() ?? 0;
+            $nextNo = 'EMP'.str_pad((int) $maxNo + 1, 5, '0', STR_PAD_LEFT);
+
+            $employee = Employee::create([
+                'user_id' => $user->id,
+                'employee_no' => $nextNo,
+                'hire_date' => now(),
+                'status' => EmployeeStatus::Active->value,
+            ]);
+            $employee->branches()->sync($validated['branch_ids'] ?? []);
+
+            DB::commit();
+
+            $user->notify(new StaffAccountCreatedNotification($password));
+
+            activity('platform')
+                ->causedBy($request->user())
+                ->performedOn($user)
+                ->event('user_created')
+                ->withProperties(['employee_id' => $employee->id, 'employee_no' => $nextNo, 'role' => $validated['role']])
+                ->log("Created {$validated['role']} user {$user->name} ({$nextNo})");
+
+            return response()->json([
+                'message' => "{$user->name} created successfully",
+                'name' => $user->name,
+                'employee_no' => $nextNo,
+                'role' => $validated['role'],
+                // Surfaced once so the tech admin can share it confidentially.
+                'generated_password' => $passwordMode === 'custom' ? null : $password,
+            ], 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return response()->json(['message' => 'Failed to create user: '.$e->getMessage()], 500);
+        }
     }
 
     /**

@@ -27,6 +27,18 @@ class EmployeeController extends Controller
     {
         $query = Employee::with(['user.roles.permissions', 'user.permissions', 'branches']);
 
+        // Branch partners may only list employees from their assigned branches,
+        // regardless of any branch_id passed in the request.
+        $user = $request->user();
+        if ($user && $user->hasRole('branch_partner')) {
+            $assigned = $user->employee
+                ? $user->employee->branches()->pluck('branches.id')->all()
+                : [];
+            $query->whereHas('branches', function ($q) use ($assigned) {
+                $q->whereIn('branches.id', $assigned ?: [-1]);
+            });
+        }
+
         if ($request->has('branch_id')) {
             $query->whereHas('branches', function ($q) use ($request) {
                 $q->where('branches.id', $request->branch_id);
@@ -174,9 +186,12 @@ class EmployeeController extends Controller
 
             $user->notify(new StaffAccountCreatedNotification($password));
 
-            return response()->created(
-                new EmployeeResource($employee->load(['user.roles.permissions', 'user.permissions', 'branches']))
-            );
+            return response()->created([
+                'employee' => (new EmployeeResource($employee->load(['user.roles.permissions', 'user.permissions', 'branches'])))->resolve(),
+                // Surface auto-generated passwords once so the admin can share them
+                // confidentially. Null when the admin set the password themselves.
+                'generated_password' => $passwordMode === 'custom' ? null : $password,
+            ]);
         } catch (\Exception $e) {
             DB::rollBack();
 

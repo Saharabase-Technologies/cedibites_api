@@ -3,7 +3,10 @@
 namespace App\Providers;
 
 use Illuminate\Support\Facades\Broadcast;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\ServiceProvider;
+use Symfony\Component\Mailer\Bridge\Brevo\Transport\BrevoTransportFactory;
+use Symfony\Component\Mailer\Transport\Dsn;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -20,6 +23,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Register the Brevo (Sendinblue) mail transport using the HTTP API key.
+        Mail::extend('brevo', function () {
+            return (new BrevoTransportFactory)->create(
+                new Dsn('brevo+api', 'default', config('services.brevo.key'))
+            );
+        });
+
         // Register custom SMS notification channel
         \Illuminate\Support\Facades\Notification::resolved(function ($service) {
             $service->extend('sms', function ($app) {

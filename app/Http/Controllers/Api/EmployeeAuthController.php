@@ -88,6 +88,49 @@ class EmployeeAuthController extends Controller
     }
 
     /**
+     * Check whether an active staff account exists for the given identifier.
+     *
+     * Used by the staff login screen's first step to confirm the account
+     * before prompting for a password, and to surface which channels
+     * (email / SMS) a password reset can be delivered through.
+     *
+     * Note: this intentionally reveals account existence to authenticated-looking
+     * clients to power a guided two-step login. It is rate limited (10/min) to
+     * mitigate enumeration.
+     */
+    public function checkIdentifier(Request $request): JsonResponse
+    {
+        $request->validate([
+            'identifier' => ['required', 'string', 'max:255'],
+        ]);
+
+        $identifier = trim($request->string('identifier'));
+        $user = $this->findUserByIdentifier($identifier);
+
+        $exists = $user
+            && $user->employee
+            && $user->employee->status === EmployeeStatus::Active;
+
+        if (! $exists) {
+            return response()->success([
+                'exists' => false,
+                'channels' => ['email' => false, 'phone' => false],
+            ]);
+        }
+
+        return response()->success([
+            'exists' => true,
+            'name' => $user->name,
+            'channels' => [
+                'email' => (bool) $user->email,
+                'phone' => (bool) $user->phone,
+            ],
+            'email_hint' => $user->email ? $this->maskEmail($user->email) : null,
+            'phone_hint' => $user->phone ? $this->maskPhone($user->phone) : null,
+        ]);
+    }
+
+    /**
      * Return the currently authenticated employee's profile.
      */
     public function me(Request $request): JsonResponse
@@ -159,22 +202,25 @@ class EmployeeAuthController extends Controller
         }
 
         $token = Str::random(64);
+        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         DB::table('password_reset_tokens')->upsert(
             [
                 'email' => $identifier,
                 'token' => Hash::make($token),
+                'otp' => Hash::make($otp),
+                'otp_expires_at' => now()->addMinutes(15),
                 'created_at' => now(),
             ],
             uniqueBy: ['email'],
-            update: ['token', 'created_at'],
+            update: ['token', 'otp', 'otp_expires_at', 'created_at'],
         );
 
         $resetLink = config('app.frontend_url').'/staff/reset-password?token='.urlencode($token).'&identifier='.urlencode($identifier);
 
-        $user->notify(new StaffPasswordResetNotification($resetLink));
+        $user->notify(new StaffPasswordResetNotification($resetLink, $otp));
 
-        return response()->success(['message' => 'If an account exists, you will receive a reset link shortly.']);
+        return response()->success(['message' => 'If an account exists, you will receive a reset code and link shortly.']);
     }
 
     /**
@@ -183,17 +229,39 @@ class EmployeeAuthController extends Controller
     public function resetPassword(ResetPasswordRequest $request): JsonResponse
     {
         $identifier = trim($request->string('identifier'));
+        $otp = trim($request->string('otp'));
+        $usingOtp = $otp !== '';
 
         $record = DB::table('password_reset_tokens')->where('email', $identifier)->first();
 
-        if (! $record || ! Hash::check($request->string('token'), $record->token)) {
-            return response()->json(['message' => 'This reset link is invalid or has already been used.'], 422);
+        $invalidMessage = $usingOtp
+            ? 'This code is invalid or has already been used.'
+            : 'This reset link is invalid or has already been used.';
+
+        if (! $record) {
+            return response()->json(['message' => $invalidMessage], 422);
         }
 
-        if (Carbon::parse($record->created_at)->addHour()->isPast()) {
-            DB::table('password_reset_tokens')->where('email', $identifier)->delete();
+        if ($usingOtp) {
+            if (! $record->otp || ! Hash::check($otp, $record->otp)) {
+                return response()->json(['message' => $invalidMessage], 422);
+            }
 
-            return response()->json(['message' => 'This reset link has expired. Please request a new one.'], 422);
+            if (! $record->otp_expires_at || Carbon::parse($record->otp_expires_at)->isPast()) {
+                DB::table('password_reset_tokens')->where('email', $identifier)->delete();
+
+                return response()->json(['message' => 'This code has expired. Please request a new one.'], 422);
+            }
+        } else {
+            if (! Hash::check($request->string('token'), $record->token)) {
+                return response()->json(['message' => $invalidMessage], 422);
+            }
+
+            if (Carbon::parse($record->created_at)->addHour()->isPast()) {
+                DB::table('password_reset_tokens')->where('email', $identifier)->delete();
+
+                return response()->json(['message' => 'This reset link has expired. Please request a new one.'], 422);
+            }
         }
 
         $user = $this->findUserByIdentifier($identifier);
@@ -227,5 +295,32 @@ class EmployeeAuthController extends Controller
         $phone = str_starts_with($digits, '233') ? $digits : '233'.ltrim($digits, '0');
 
         return User::where('phone', $phone)->orWhere('phone', $identifier)->first();
+    }
+
+    /**
+     * Mask an email for display, e.g. "jane.doe@gmail.com" → "ja••••@gmail.com".
+     */
+    private function maskEmail(string $email): string
+    {
+        [$name, $domain] = array_pad(explode('@', $email, 2), 2, '');
+
+        if ($domain === '') {
+            return $email;
+        }
+
+        $visible = mb_substr($name, 0, min(2, mb_strlen($name)));
+
+        return $visible.'••••@'.$domain;
+    }
+
+    /**
+     * Mask a phone number for display, keeping the last 3 digits.
+     */
+    private function maskPhone(string $phone): string
+    {
+        $digits = preg_replace('/\D/', '', $phone);
+        $last = mb_substr($digits, -3);
+
+        return '••• ••• '.$last;
     }
 }
