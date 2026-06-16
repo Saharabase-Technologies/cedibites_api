@@ -307,7 +307,7 @@
                     <!-- Header -->
                     <tr>
                         <td class="email-header">
-                            <img src="{{ asset('images/cblogo.webp') }}" alt="CediBites Logo" class="logo"><h1 class="brand-name">CediBites</h1>
+                            <h1 class="brand-name">CediBites</h1>
                         </td>
                     </tr>
                     

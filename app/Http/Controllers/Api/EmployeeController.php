@@ -184,7 +184,7 @@ class EmployeeController extends Controller
 
             DB::commit();
 
-            $user->notify(new StaffAccountCreatedNotification($password));
+            $user->notify(new StaffAccountCreatedNotification($password, $request->role));
 
             return response()->created([
                 'employee' => (new EmployeeResource($employee->load(['user.roles.permissions', 'user.permissions', 'branches'])))->resolve(),

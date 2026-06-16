@@ -16,4 +16,29 @@ enum Role: string
     case CallCenter = 'call_center';
     case Kitchen = 'kitchen';
     case Rider = 'rider';
+
+    /** Friendly, human-readable role name (used in emails & notifications). */
+    public function label(): string
+    {
+        return match ($this) {
+            self::TechAdmin => 'Platform Admin',
+            self::Admin => 'Administrator',
+            self::Manager => 'Branch Manager',
+            self::SalesStaff => 'Sales Staff',
+            self::BranchPartner => 'Branch Partner',
+            self::CallCenter => 'Call Center Agent',
+            self::Kitchen => 'Kitchen Staff',
+            self::Rider => 'Rider',
+        };
+    }
+
+    /** Which portal this role lands in after logging in (single /staff/login entry). */
+    public function portalLabel(): string
+    {
+        return match ($this) {
+            self::TechAdmin, self::Admin => 'Admin Portal',
+            self::BranchPartner => 'Partner Portal',
+            default => 'Staff Portal',
+        };
+    }
 }

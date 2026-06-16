@@ -372,19 +372,7 @@ class PlatformController extends Controller
 
             DB::commit();
 
-            $roleLabel = match ($validated['role']) {
-                Role::TechAdmin->value => 'Platform Admin',
-                Role::Admin->value => 'Administrator',
-                Role::Manager->value => 'Branch Manager',
-                Role::BranchPartner->value => 'Branch Partner',
-                Role::SalesStaff->value => 'Sales Staff',
-                Role::CallCenter->value => 'Call Center Agent',
-                Role::Kitchen->value => 'Kitchen Staff',
-                Role::Rider->value => 'Rider',
-                default => 'Team Member',
-            };
-
-            $user->notify(new StaffAccountCreatedNotification($password, $roleLabel));
+            $user->notify(new StaffAccountCreatedNotification($password, $validated['role']));
 
             activity('platform')
                 ->causedBy($request->user())
