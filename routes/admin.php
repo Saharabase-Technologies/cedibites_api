@@ -50,6 +50,7 @@ Route::prefix('admin')->group(function () {
 
     Route::middleware('permission:view_customers')->group(function () {
         Route::get('customers', [CustomerController::class, 'index']);
+        Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
         Route::get('customers/{customer}', [CustomerController::class, 'show']);
         Route::get('customers/{customer}/orders', [CustomerController::class, 'orders']);
     });

@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\CustomerStatus;
 use App\Events\CustomerSessionEvent;
+use App\Helpers\PhoneHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreCustomerRequest;
 use App\Http\Requests\UpdateCustomerRequest;
 use App\Http\Resources\CustomerResource;
 use App\Http\Resources\OrderResource;
 use App\Models\Customer;
+use App\Models\Order;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -48,6 +50,74 @@ class CustomerController extends Controller
                 'next' => $customers->nextPageUrl(),
             ],
         ]);
+    }
+
+    /**
+     * Export every customer contact (name + phone) across the whole table,
+     * not just the current page. Phone numbers are normalised to +233XXXXXXXXX,
+     * validated against the Ghana mobile format, and de-duplicated. Malformed,
+     * null and junk numbers are dropped silently.
+     *
+     * Phones are sourced from the linked user (registered customers) and from
+     * the latest order contact (guest customers), mirroring how the customer
+     * list resolves a customer's phone.
+     */
+    public function exportContacts(Request $request): JsonResponse
+    {
+        $seen = [];
+        $rows = [];
+
+        // Strict Ghana mobile: +233 followed by 9 digits starting 2–9.
+        $isValid = fn (string $phone): bool => (bool) preg_match('/^\+233[2-9]\d{8}$/', $phone);
+
+        $add = function (?string $name, ?string $rawPhone) use (&$seen, &$rows, $isValid): void {
+            if ($rawPhone === null || trim($rawPhone) === '') {
+                return;
+            }
+
+            $normalized = PhoneHelper::normalize(trim($rawPhone));
+
+            if (! $isValid($normalized) || isset($seen[$normalized])) {
+                return;
+            }
+
+            $seen[$normalized] = true;
+            $rows[] = [
+                'name' => trim((string) $name) ?: 'Customer',
+                'phone' => $normalized,
+            ];
+        };
+
+        // Registered customers — phone lives on the linked user.
+        Customer::with('user:id,name,phone')
+            ->whereHas('user', fn ($q) => $q->whereNotNull('phone'))
+            ->select('id', 'user_id')
+            ->chunk(500, function ($customers) use ($add): void {
+                foreach ($customers as $customer) {
+                    $add($customer->user?->name, $customer->user?->phone);
+                }
+            });
+
+        // Guest customers — phone lives on the order contact. Newest first so the
+        // most recent name wins before de-duplication drops repeats.
+        Order::whereNotNull('contact_phone')
+            ->where('contact_phone', '!=', '')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->select('id', 'contact_name', 'contact_phone', 'created_at')
+            ->chunk(1000, function ($orders) use ($add): void {
+                foreach ($orders as $order) {
+                    $add($order->contact_name, $order->contact_phone);
+                }
+            });
+
+        activity('admin')
+            ->causedBy($request->user())
+            ->event('customer_contacts_exported')
+            ->withProperties(['count' => count($rows)])
+            ->log('Exported '.count($rows).' customer contacts');
+
+        return response()->json(['data' => array_values($rows)]);
     }
 
     /**
