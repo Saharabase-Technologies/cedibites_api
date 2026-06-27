@@ -345,11 +345,12 @@ class CheckoutSessionController extends Controller
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
             'momo_reference' => ['nullable', 'string', 'max:100'],
-            'fulfillment_type' => ['required', 'string', 'in:dine_in,takeaway'],
+            'fulfillment_type' => ['required', 'string', 'in:dine_in,takeaway,delivery'],
             'contact_name' => ['required', 'string', 'max:255'],
             'contact_phone' => ['required', 'string', 'max:20'],
             'customer_notes' => ['nullable', 'string'],
             'discount' => ['nullable', 'numeric', 'min:0', 'max:99999'],
+            'delivery_fee' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
         ]);
 
@@ -418,9 +419,14 @@ class CheckoutSessionController extends Controller
         // Cap the POS discount to the resolved promo discount (prevent arbitrary amounts)
         $discount = min($discount, $maxAllowedDiscount);
 
+        // Delivery fee only applies to delivery orders (staff-entered, e.g. phone-in deliveries)
+        $deliveryFee = $validated['fulfillment_type'] === 'delivery'
+            ? (float) ($validated['delivery_fee'] ?? 0)
+            : 0;
+
         $subtotalAfterDiscount = $subtotal - $discount;
         // No service charge for POS
-        $totalAmount = $subtotalAfterDiscount;
+        $totalAmount = $subtotalAfterDiscount + $deliveryFee;
 
         $isManualEntry = (bool) ($validated['is_manual_entry'] ?? false);
 
@@ -463,7 +469,7 @@ class CheckoutSessionController extends Controller
             'items' => $itemSnapshots,
             'subtotal' => $subtotal,
             'service_charge' => 0,
-            'delivery_fee' => 0,
+            'delivery_fee' => $deliveryFee,
             'discount' => $discount,
             'promo_id' => $resolvedPromo?->id,
             'promo_name' => $resolvedPromo?->name,
