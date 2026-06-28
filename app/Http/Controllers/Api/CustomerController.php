@@ -53,42 +53,65 @@ class CustomerController extends Controller
     }
 
     /**
-     * Export every customer contact (name + phone) across the whole table,
-     * not just the current page. Phone numbers are normalised to +233XXXXXXXXX,
-     * validated against the Ghana mobile format, and de-duplicated. Malformed,
-     * null and junk numbers are dropped silently.
+     * Export customer contacts (name + phone) for SMS marketing. Optionally
+     * filtered to a behavioural segment so churned / at-risk / loyal customers
+     * can be targeted differently. Phones are normalised to +233XXXXXXXXX,
+     * validated against the Ghana mobile format, and de-duplicated.
      *
-     * Phones are sourced from the linked user (registered customers) and from
-     * the latest order contact (guest customers), mirroring how the customer
-     * list resolves a customer's phone.
+     * Segments (by ordering behaviour, keyed by phone so guests are included):
+     *   all       — everyone with a valid contact (default)
+     *   active    — last ordered ≤30 days ago
+     *   at_risk   — last ordered 31–60 days ago
+     *   churned   — last ordered >60 days ago
+     *   loyal     — 2+ orders (repeat customers, any recency)
+     *   one_time  — exactly 1 order
      */
     public function exportContacts(Request $request): JsonResponse
     {
-        $seen = [];
-        $rows = [];
+        $segment = (string) $request->query('segment', 'all');
+        $valid = ['all', 'active', 'at_risk', 'churned', 'loyal', 'one_time'];
+        if (! in_array($segment, $valid, true)) {
+            $segment = 'all';
+        }
 
         // Strict Ghana mobile: +233 followed by 9 digits starting 2–9.
         $isValid = fn (string $phone): bool => (bool) preg_match('/^\+233[2-9]\d{8}$/', $phone);
+
+        $rows = $segment === 'all'
+            ? $this->allContacts($isValid)
+            : $this->segmentedContacts($segment, $isValid);
+
+        activity('admin')
+            ->causedBy($request->user())
+            ->event('customer_contacts_exported')
+            ->withProperties(['count' => count($rows), 'segment' => $segment])
+            ->log('Exported '.count($rows).' customer contacts ('.$segment.')');
+
+        return response()->json(['data' => array_values($rows), 'segment' => $segment]);
+    }
+
+    /**
+     * Every valid contact — registered (user phone) + guests (order contact).
+     *
+     * @return array<int, array{name:string, phone:string}>
+     */
+    private function allContacts(callable $isValid): array
+    {
+        $seen = [];
+        $rows = [];
 
         $add = function (?string $name, ?string $rawPhone) use (&$seen, &$rows, $isValid): void {
             if ($rawPhone === null || trim($rawPhone) === '') {
                 return;
             }
-
             $normalized = PhoneHelper::normalize(trim($rawPhone));
-
             if (! $isValid($normalized) || isset($seen[$normalized])) {
                 return;
             }
-
             $seen[$normalized] = true;
-            $rows[] = [
-                'name' => trim((string) $name) ?: 'Customer',
-                'phone' => $normalized,
-            ];
+            $rows[] = ['name' => trim((string) $name) ?: 'Customer', 'phone' => $normalized];
         };
 
-        // Registered customers — phone lives on the linked user.
         Customer::with('user:id,name,phone')
             ->whereHas('user', fn ($q) => $q->whereNotNull('phone'))
             ->select('id', 'user_id')
@@ -98,8 +121,6 @@ class CustomerController extends Controller
                 }
             });
 
-        // Guest customers — phone lives on the order contact. Newest first so the
-        // most recent name wins before de-duplication drops repeats.
         Order::whereNotNull('contact_phone')
             ->where('contact_phone', '!=', '')
             ->orderByDesc('created_at')
@@ -111,13 +132,78 @@ class CustomerController extends Controller
                 }
             });
 
-        activity('admin')
-            ->causedBy($request->user())
-            ->event('customer_contacts_exported')
-            ->withProperties(['count' => count($rows)])
-            ->log('Exported '.count($rows).' customer contacts');
+        return array_values($rows);
+    }
 
-        return response()->json(['data' => array_values($rows)]);
+    /**
+     * Contacts filtered to a behavioural segment, derived from each phone's
+     * order history (recency + frequency).
+     *
+     * @return array<int, array{name:string, phone:string}>
+     */
+    private function segmentedContacts(string $segment, callable $isValid): array
+    {
+        $now = now();
+
+        // Fallback phone/name for registered customers whose orders carry no contact_phone.
+        $customerPhone = [];
+        Customer::with('user:id,name,phone')
+            ->whereHas('user', fn ($q) => $q->whereNotNull('phone'))
+            ->select('id', 'user_id')
+            ->chunk(500, function ($customers) use (&$customerPhone): void {
+                foreach ($customers as $c) {
+                    if ($c->user?->phone) {
+                        $customerPhone[$c->id] = ['name' => $c->user->name, 'phone' => $c->user->phone];
+                    }
+                }
+            });
+
+        // Aggregate per normalised phone: order count + most-recent order date.
+        // Newest-first so the first sighting of a phone fixes its latest date/name.
+        $agg = [];
+        Order::where('status', '!=', 'cancelled')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->select('id', 'customer_id', 'contact_name', 'contact_phone', 'created_at')
+            ->chunk(1000, function ($orders) use (&$agg, $customerPhone, $isValid): void {
+                foreach ($orders as $o) {
+                    $rawPhone = $o->contact_phone;
+                    $name = $o->contact_name;
+                    if (($rawPhone === null || trim((string) $rawPhone) === '') && $o->customer_id && isset($customerPhone[$o->customer_id])) {
+                        $rawPhone = $customerPhone[$o->customer_id]['phone'];
+                        $name = $name ?: $customerPhone[$o->customer_id]['name'];
+                    }
+                    if ($rawPhone === null || trim((string) $rawPhone) === '') {
+                        continue;
+                    }
+                    $norm = PhoneHelper::normalize(trim((string) $rawPhone));
+                    if (! $isValid($norm)) {
+                        continue;
+                    }
+                    if (! isset($agg[$norm])) {
+                        $agg[$norm] = ['name' => trim((string) $name) ?: 'Customer', 'count' => 0, 'last' => $o->created_at];
+                    }
+                    $agg[$norm]['count']++;
+                }
+            });
+
+        $rows = [];
+        foreach ($agg as $phone => $a) {
+            $days = $a['last'] ? \Carbon\Carbon::parse($a['last'])->diffInDays($now) : 99999;
+            $match = match ($segment) {
+                'active' => $days <= 30,
+                'at_risk' => $days > 30 && $days <= 60,
+                'churned' => $days > 60,
+                'loyal' => $a['count'] >= 2,
+                'one_time' => $a['count'] === 1,
+                default => true,
+            };
+            if ($match) {
+                $rows[] = ['name' => $a['name'], 'phone' => $phone];
+            }
+        }
+
+        return array_values($rows);
     }
 
     /**

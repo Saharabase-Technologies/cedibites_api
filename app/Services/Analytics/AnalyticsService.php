@@ -7,6 +7,7 @@ use App\Models\BranchRevenueTarget;
 use App\Models\CheckoutSession;
 use App\Models\Customer;
 use App\Models\MenuItem;
+use App\Models\MenuItemOption;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
@@ -1412,7 +1413,7 @@ class AnalyticsService
         $items = OrderItem::whereIn('order_id', $orderIds)
             ->get(['order_id', 'menu_item_id', 'menu_item_option_id', 'menu_item_snapshot', 'menu_item_option_snapshot']);
 
-        $names = [];          // option/item key => display label
+        $names = $this->buildReceiptLabelMap($items);  // key => receipt label (live menu config)
         $byOrder = [];        // order_id => [key => true]
         foreach ($items as $it) {
             // Identity is the specific option when present, else the menu item.
@@ -1421,9 +1422,6 @@ class AnalyticsService
                 : ($it->menu_item_id ? 'm'.$it->menu_item_id : null);
             if ($key === null) {
                 continue;
-            }
-            if (! isset($names[$key])) {
-                $names[$key] = $this->basketItemLabel($it);
             }
             $byOrder[$it->order_id][$key] = true;
         }
@@ -1515,7 +1513,7 @@ class AnalyticsService
         $items = OrderItem::whereIn('order_id', $orders->pluck('id'))
             ->get(['order_id', 'menu_item_id', 'menu_item_option_id', 'quantity', 'menu_item_snapshot', 'menu_item_option_snapshot']);
 
-        $labels = [];          // key => label
+        $labels = $this->buildReceiptLabelMap($items);  // key => receipt label (live menu config)
         $unitsByKeyDay = [];   // key => [date => units]
         foreach ($items as $it) {
             $key = $it->menu_item_option_id
@@ -1527,9 +1525,6 @@ class AnalyticsService
             $date = $orderDate[$it->order_id] ?? null;
             if ($date === null) {
                 continue;
-            }
-            if (! isset($labels[$key])) {
-                $labels[$key] = $this->basketItemLabel($it);
             }
             $unitsByKeyDay[$key][$date] = ($unitsByKeyDay[$key][$date] ?? 0) + (int) $it->quantity;
         }
@@ -1604,24 +1599,66 @@ class AnalyticsService
     }
 
     /**
-     * Item label exactly as it prints on a receipt — mirrors the frontend
-     * getItemName(): display_name → "name (option_label)" → name.
+     * Build a key → receipt-name label map for a set of order items, resolved
+     * from the LIVE menu config (the "Receipt name" / display_name set in the
+     * menu editor) rather than the historical order snapshot. Falls back to the
+     * snapshot only when the option/item no longer exists.
+     *
+     * Key format: "o{option_id}" for option-level rows, "m{item_id}" otherwise.
+     * Label precedence mirrors a printed receipt: display_name → "name (option_label)" → name.
+     *
+     * @param  \Illuminate\Support\Collection<int, OrderItem>  $items
+     * @return array<string, string>
      */
-    protected function basketItemLabel(OrderItem $it): string
+    protected function buildReceiptLabelMap($items): array
     {
-        $optSnap = $it->menu_item_option_snapshot ?? [];
-        $displayName = $optSnap['display_name'] ?? null;
-        if ($displayName !== null && trim($displayName) !== '') {
-            return $displayName;
+        $optionIds = $items->pluck('menu_item_option_id')->filter()->unique()->values()->all();
+        $itemIds = $items->pluck('menu_item_id')->filter()->unique()->values()->all();
+
+        $options = MenuItemOption::whereIn('id', $optionIds)
+            ->get(['id', 'menu_item_id', 'option_label', 'display_name'])
+            ->keyBy('id');
+
+        $allItemIds = array_values(array_unique(array_merge($itemIds, $options->pluck('menu_item_id')->all())));
+        $names = MenuItem::whereIn('id', $allItemIds)->pluck('name', 'id');
+
+        $map = [];
+        foreach ($items as $it) {
+            if ($it->menu_item_option_id) {
+                $key = 'o'.$it->menu_item_option_id;
+                if (isset($map[$key])) {
+                    continue;
+                }
+                $opt = $options->get($it->menu_item_option_id);
+                $optSnap = $it->menu_item_option_snapshot ?? [];
+
+                // Live receipt name first, then snapshot.
+                $displayName = $opt->display_name ?? ($optSnap['display_name'] ?? null);
+                if ($displayName !== null && trim($displayName) !== '') {
+                    $map[$key] = $displayName;
+
+                    continue;
+                }
+
+                $name = ($opt ? ($names[$opt->menu_item_id] ?? null) : null)
+                    ?? (($it->menu_item_snapshot ?? [])['name'] ?? null)
+                    ?? ($names[$it->menu_item_id] ?? null)
+                    ?? ('Item #'.($it->menu_item_id ?? '?'));
+                $optLabel = $opt->option_label ?? ($optSnap['option_label'] ?? null);
+                $map[$key] = ($optLabel !== null && strtolower(trim($optLabel)) !== 'standard' && trim($optLabel) !== '')
+                    ? "{$name} ({$optLabel})"
+                    : $name;
+            } elseif ($it->menu_item_id) {
+                $key = 'm'.$it->menu_item_id;
+                if (isset($map[$key])) {
+                    continue;
+                }
+                $map[$key] = $names[$it->menu_item_id]
+                    ?? (($it->menu_item_snapshot ?? [])['name'] ?? ('Item #'.$it->menu_item_id));
+            }
         }
 
-        $name = ($it->menu_item_snapshot ?? [])['name'] ?? ('Item #'.($it->menu_item_id ?? '?'));
-        $optLabel = $optSnap['option_label'] ?? null;
-        if ($optLabel !== null && strtolower(trim($optLabel)) !== 'standard' && trim($optLabel) !== '') {
-            return "{$name} ({$optLabel})";
-        }
-
-        return $name;
+        return $map;
     }
 
     /**
