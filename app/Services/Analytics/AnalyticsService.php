@@ -1604,20 +1604,24 @@ class AnalyticsService
     }
 
     /**
-     * Option-level display label for an order item, mirroring the product summary:
-     * prefer the option display name / label, fall back to the menu item name.
+     * Item label exactly as it prints on a receipt — mirrors the frontend
+     * getItemName(): display_name → "name (option_label)" → name.
      */
     protected function basketItemLabel(OrderItem $it): string
     {
         $optSnap = $it->menu_item_option_snapshot ?? [];
-        $optLabel = $optSnap['display_name'] ?? $optSnap['option_label'] ?? null;
-        $name = ($it->menu_item_snapshot ?? [])['name'] ?? null;
-
-        if ($optLabel !== null && strtolower(trim($optLabel)) !== 'standard') {
-            return $optLabel;
+        $displayName = $optSnap['display_name'] ?? null;
+        if ($displayName !== null && trim($displayName) !== '') {
+            return $displayName;
         }
 
-        return $name ?? $optLabel ?? ('Item #'.($it->menu_item_id ?? '?'));
+        $name = ($it->menu_item_snapshot ?? [])['name'] ?? ('Item #'.($it->menu_item_id ?? '?'));
+        $optLabel = $optSnap['option_label'] ?? null;
+        if ($optLabel !== null && strtolower(trim($optLabel)) !== 'standard' && trim($optLabel) !== '') {
+            return "{$name} ({$optLabel})";
+        }
+
+        return $name;
     }
 
     /**

@@ -268,7 +268,7 @@ class AdminAnalyticsController extends Controller
     {
         $validated = $request->validate([
             'subjects' => ['required', 'array', 'min:1', 'max:4'],
-            'subjects.*.label' => ['nullable', 'string', 'max:80'],
+            'subjects.*.label' => ['nullable', 'string', 'max:255'],
             'subjects.*.item_ids' => ['nullable', 'array'],
             'subjects.*.item_ids.*' => ['integer'],
             'subjects.*.option_ids' => ['nullable', 'array'],
