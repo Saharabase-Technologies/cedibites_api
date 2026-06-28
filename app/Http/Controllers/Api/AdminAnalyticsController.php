@@ -295,6 +295,107 @@ class AdminAnalyticsController extends Controller
     }
 
     /**
+     * Customer lifecycle: lifetime value, churn buckets, retention cohorts.
+     */
+    public function customerLifecycle(Request $request): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getCustomerLifecycleMetrics($this->filters($request)),
+            'Customer lifecycle analytics retrieved successfully.'
+        );
+    }
+
+    /**
+     * Basket affinity — items frequently bought together.
+     */
+    public function basketAffinity(Request $request): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getBasketAffinityMetrics($this->filters($request)),
+            'Basket affinity analytics retrieved successfully.'
+        );
+    }
+
+    /**
+     * List per-branch revenue targets for a given year/month.
+     */
+    public function getRevenueTargets(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'year' => ['required', 'integer', 'min:2024', 'max:2100'],
+            'month' => ['required', 'integer', 'min:1', 'max:12'],
+        ]);
+
+        $rows = \App\Models\BranchRevenueTarget::with('branch:id,name')
+            ->where('year', $validated['year'])
+            ->where('month', $validated['month'])
+            ->get()
+            ->map(fn ($t) => [
+                'branch_id' => (int) $t->branch_id,
+                'branch_name' => $t->branch->name ?? 'Unknown',
+                'year' => (int) $t->year,
+                'month' => (int) $t->month,
+                'target_amount' => round((float) $t->target_amount, 2),
+            ]);
+
+        return response()->success($rows, 'Revenue targets retrieved successfully.');
+    }
+
+    /**
+     * Create or update a single branch's monthly revenue target. Admin only.
+     */
+    public function setRevenueTarget(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user || ! $user->hasAnyRole(['admin', 'tech_admin'])) {
+            return response()->json(['message' => 'Only administrators can set revenue targets.'], 403);
+        }
+
+        $validated = $request->validate([
+            'branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'year' => ['required', 'integer', 'min:2024', 'max:2100'],
+            'month' => ['required', 'integer', 'min:1', 'max:12'],
+            'target_amount' => ['required', 'numeric', 'min:0', 'max:99999999'],
+        ]);
+
+        $target = \App\Models\BranchRevenueTarget::updateOrCreate(
+            [
+                'branch_id' => $validated['branch_id'],
+                'year' => $validated['year'],
+                'month' => $validated['month'],
+            ],
+            ['target_amount' => $validated['target_amount']],
+        );
+        $target->load('branch:id,name');
+
+        return response()->success([
+            'branch_id' => (int) $target->branch_id,
+            'branch_name' => $target->branch->name ?? 'Unknown',
+            'year' => (int) $target->year,
+            'month' => (int) $target->month,
+            'target_amount' => round((float) $target->target_amount, 2),
+        ], 'Revenue target saved successfully.');
+    }
+
+    /**
+     * Per-branch monthly revenue target vs actual (defaults to current month).
+     */
+    public function targetsVsActual(Request $request): JsonResponse
+    {
+        $year = (int) $request->input('year', now()->year);
+        $month = (int) $request->input('month', now()->month);
+
+        $filters = $this->filters($request);
+        $branchIds = $filters['branch_ids']
+            ?? (isset($filters['branch_id']) ? [(int) $filters['branch_id']] : null);
+
+        return response()->success(
+            $this->analyticsService->getTargetsVsActualMetrics($year, $month, $branchIds),
+            'Targets vs actual retrieved successfully.'
+        );
+    }
+
+    /**
      * Orders by weekday × hour (2-D demand heatmap).
      */
     public function weekdayHour(Request $request): JsonResponse

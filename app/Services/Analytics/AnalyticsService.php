@@ -2,10 +2,13 @@
 
 namespace App\Services\Analytics;
 
+use App\Models\Branch;
+use App\Models\BranchRevenueTarget;
 use App\Models\CheckoutSession;
 use App\Models\Customer;
 use App\Models\MenuItem;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
 use App\Models\Payment;
 use Carbon\Carbon;
@@ -123,10 +126,11 @@ class AnalyticsService
             : 'HOUR(created_at)';
 
         $ordersByHour = (clone $placedQuery)
-            ->select(DB::raw("{$hourExpression} as hour"), DB::raw('COUNT(*) as count'))
+            ->select(DB::raw("{$hourExpression} as hour"), DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
             ->groupBy('hour')
             ->orderBy('hour')
-            ->get();
+            ->get()
+            ->map(fn ($r) => ['hour' => (int) $r->hour, 'count' => (int) $r->count, 'revenue' => round((float) $r->revenue, 2)]);
 
         $activeOrders = $this->queryBuilder->activeOrders($filters)->count();
         $totalOrders = $this->queryBuilder->computePlacedOrderCount($filters);
@@ -1299,6 +1303,239 @@ class AnalyticsService
             'new_customers' => $activeCustomers - $repeatCustomers,
             'repeat_rate' => $repeatRate,
             'avg_days_between_orders' => $avgDaysBetween,
+        ];
+    }
+
+    /**
+     * Customer lifecycle: lifetime value, churn buckets, and monthly retention cohorts.
+     *
+     * CLV / churn are inherently all-time metrics, so the date range is ignored;
+     * only the branch scope is honoured. Churn windows are measured relative to
+     * date_to (the "as of" date), defaulting to now.
+     *
+     * @return array{total_customers:int, avg_lifetime_value:float, avg_orders_per_customer:float, one_time_customers:int, repeat_customers:int, active_customers:int, at_risk_customers:int, churned_customers:int, cohorts:array}
+     */
+    public function getCustomerLifecycleMetrics(array $filters = []): array
+    {
+        $refDate = isset($filters['date_to'])
+            ? \Carbon\Carbon::parse($filters['date_to'])->endOfDay()
+            : now();
+
+        // Lifetime, branch-scoped (drop the date range).
+        $branchFilters = array_intersect_key($filters, array_flip(['branch_id', 'branch_ids']));
+
+        $rows = $this->queryBuilder->revenueOrders($branchFilters)
+            ->whereNotNull('customer_id')
+            ->selectRaw('customer_id, COUNT(*) as order_count, SUM(total_amount) as total_spend, MIN(created_at) as first_order, MAX(created_at) as last_order')
+            ->groupBy('customer_id')
+            ->get();
+
+        $totalCustomers = $rows->count();
+
+        if ($totalCustomers === 0) {
+            return [
+                'total_customers' => 0,
+                'avg_lifetime_value' => 0.0,
+                'avg_orders_per_customer' => 0.0,
+                'one_time_customers' => 0,
+                'repeat_customers' => 0,
+                'active_customers' => 0,
+                'at_risk_customers' => 0,
+                'churned_customers' => 0,
+                'cohorts' => [],
+            ];
+        }
+
+        $avgLtv = round((float) $rows->avg(fn ($r) => (float) $r->total_spend), 2);
+        $avgOrders = round((float) $rows->avg(fn ($r) => (int) $r->order_count), 1);
+        $oneTime = $rows->where('order_count', 1)->count();
+        $repeat = $totalCustomers - $oneTime;
+
+        $active = 0;
+        $atRisk = 0;
+        $churned = 0;
+        foreach ($rows as $r) {
+            $days = \Carbon\Carbon::parse($r->last_order)->diffInDays($refDate);
+            if ($days <= 30) {
+                $active++;
+            } elseif ($days <= 60) {
+                $atRisk++;
+            } else {
+                $churned++;
+            }
+        }
+
+        // Monthly acquisition cohorts → did they order again in a later month?
+        $cohorts = [];
+        $byMonth = $rows->groupBy(fn ($r) => \Carbon\Carbon::parse($r->first_order)->format('Y-m'));
+        foreach ($byMonth as $month => $custs) {
+            $acquired = $custs->count();
+            $retained = $custs->filter(
+                fn ($r) => \Carbon\Carbon::parse($r->last_order)->format('Y-m') > $month
+            )->count();
+            $cohorts[] = [
+                'month' => $month,
+                'acquired' => $acquired,
+                'retained' => $retained,
+                'retention_rate' => $acquired > 0 ? round(($retained / $acquired) * 100, 1) : 0.0,
+            ];
+        }
+        usort($cohorts, fn ($a, $b) => strcmp($a['month'], $b['month']));
+        $cohorts = array_slice($cohorts, -6);
+
+        return [
+            'total_customers' => $totalCustomers,
+            'avg_lifetime_value' => $avgLtv,
+            'avg_orders_per_customer' => $avgOrders,
+            'one_time_customers' => $oneTime,
+            'repeat_customers' => $repeat,
+            'active_customers' => $active,
+            'at_risk_customers' => $atRisk,
+            'churned_customers' => $churned,
+            'cohorts' => $cohorts,
+        ];
+    }
+
+    /**
+     * Basket affinity — items frequently bought together (market-basket pairs).
+     *
+     * @return array{total_multi_item_orders:int, pairs:array}
+     */
+    public function getBasketAffinityMetrics(array $filters = []): array
+    {
+        $orderIds = $this->queryBuilder->placedOrders($filters)->pluck('id');
+
+        if ($orderIds->isEmpty()) {
+            return ['total_multi_item_orders' => 0, 'pairs' => []];
+        }
+
+        $items = OrderItem::whereIn('order_id', $orderIds)
+            ->get(['order_id', 'menu_item_id', 'menu_item_snapshot']);
+
+        $names = [];          // menu_item_id => display name
+        $byOrder = [];        // order_id => [menu_item_id => true]
+        foreach ($items as $it) {
+            $id = $it->menu_item_id;
+            if ($id === null) {
+                continue;
+            }
+            if (! isset($names[$id])) {
+                $names[$id] = $it->menu_item_snapshot['name'] ?? ('Item #'.$id);
+            }
+            $byOrder[$it->order_id][$id] = true;
+        }
+
+        $itemCounts = [];     // menu_item_id => # orders containing it
+        $pairCounts = [];     // "a|b" => # orders containing both
+        $totalOrders = 0;
+        $multiItemOrders = 0;
+
+        foreach ($byOrder as $set) {
+            $ids = array_keys($set);
+            $totalOrders++;
+            foreach ($ids as $id) {
+                $itemCounts[$id] = ($itemCounts[$id] ?? 0) + 1;
+            }
+            if (count($ids) < 2) {
+                continue;
+            }
+            $multiItemOrders++;
+            sort($ids);
+            $n = count($ids);
+            for ($i = 0; $i < $n; $i++) {
+                for ($j = $i + 1; $j < $n; $j++) {
+                    $key = $ids[$i].'|'.$ids[$j];
+                    $pairCounts[$key] = ($pairCounts[$key] ?? 0) + 1;
+                }
+            }
+        }
+
+        $totalOrders = max($totalOrders, 1);
+        $pairs = [];
+        foreach ($pairCounts as $key => $count) {
+            [$a, $b] = explode('|', $key);
+            $lift = ($itemCounts[$a] ?? 0) > 0 && ($itemCounts[$b] ?? 0) > 0
+                ? round(($count * $totalOrders) / ($itemCounts[$a] * $itemCounts[$b]), 2)
+                : 0.0;
+            $pairs[] = [
+                'item_a' => $names[$a] ?? ('Item #'.$a),
+                'item_b' => $names[$b] ?? ('Item #'.$b),
+                'count' => $count,
+                'lift' => $lift,
+            ];
+        }
+        usort($pairs, fn ($x, $y) => $y['count'] <=> $x['count']);
+
+        return [
+            'total_multi_item_orders' => $multiItemOrders,
+            'pairs' => array_slice($pairs, 0, 10),
+        ];
+    }
+
+    /**
+     * Per-branch monthly revenue targets vs actual, with pace and projection.
+     *
+     * @return array{year:int, month:int, days_in_month:int, days_elapsed:int, rows:array}
+     */
+    public function getTargetsVsActualMetrics(int $year, int $month, ?array $branchIds = null): array
+    {
+        $monthStart = Carbon::create($year, $month, 1)->startOfMonth();
+        $monthEnd = (clone $monthStart)->endOfMonth();
+        $now = now();
+
+        $daysInMonth = $monthStart->daysInMonth;
+        // How much of the month has elapsed (capped to the month, min 1 day).
+        if ($now->lt($monthStart)) {
+            $daysElapsed = 0;
+        } elseif ($now->gt($monthEnd)) {
+            $daysElapsed = $daysInMonth;
+        } else {
+            $daysElapsed = $now->day;
+        }
+
+        $branches = Branch::query()
+            ->when($branchIds, fn ($q) => $q->whereIn('id', $branchIds))
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        $targets = BranchRevenueTarget::where('year', $year)
+            ->where('month', $month)
+            ->get()
+            ->keyBy('branch_id');
+
+        $rows = [];
+        foreach ($branches as $branch) {
+            $actual = (float) $this->queryBuilder->revenueOrders([
+                'branch_id' => $branch->id,
+                'date_from' => $monthStart->toDateString(),
+                'date_to' => $monthEnd->toDateString(),
+            ])->sum('total_amount');
+
+            $target = (float) ($targets->get($branch->id)->target_amount ?? 0);
+            $attainment = $target > 0 ? round(($actual / $target) * 100, 1) : 0.0;
+            $pace = $daysInMonth > 0 ? round(($daysElapsed / $daysInMonth) * 100, 1) : 0.0;
+            $projected = $daysElapsed > 0 ? round(($actual / $daysElapsed) * $daysInMonth, 2) : 0.0;
+            // On track if attainment keeps up with how much of the month has passed.
+            $onTrack = $target > 0 && $attainment >= $pace;
+
+            $rows[] = [
+                'branch_id' => (int) $branch->id,
+                'branch_name' => $branch->name,
+                'target_amount' => round($target, 2),
+                'actual_amount' => round($actual, 2),
+                'attainment_pct' => $attainment,
+                'pace_pct' => $pace,
+                'projected_amount' => $projected,
+                'on_track' => $onTrack,
+            ];
+        }
+
+        return [
+            'year' => $year,
+            'month' => $month,
+            'days_in_month' => $daysInMonth,
+            'days_elapsed' => $daysElapsed,
+            'rows' => $rows,
         ];
     }
 
