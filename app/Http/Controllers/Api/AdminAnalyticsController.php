@@ -378,6 +378,17 @@ class AdminAnalyticsController extends Controller
     }
 
     /**
+     * Per-item demand forecast (projected units for the next N days).
+     */
+    public function demandForecast(Request $request): JsonResponse
+    {
+        return response()->success(
+            $this->analyticsService->getDemandForecastMetrics($this->filters($request)),
+            'Demand forecast retrieved successfully.'
+        );
+    }
+
+    /**
      * Per-branch monthly revenue target vs actual (defaults to current month).
      */
     public function targetsVsActual(Request $request): JsonResponse

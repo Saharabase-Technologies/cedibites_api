@@ -1410,22 +1410,25 @@ class AnalyticsService
         }
 
         $items = OrderItem::whereIn('order_id', $orderIds)
-            ->get(['order_id', 'menu_item_id', 'menu_item_snapshot']);
+            ->get(['order_id', 'menu_item_id', 'menu_item_option_id', 'menu_item_snapshot', 'menu_item_option_snapshot']);
 
-        $names = [];          // menu_item_id => display name
-        $byOrder = [];        // order_id => [menu_item_id => true]
+        $names = [];          // option/item key => display label
+        $byOrder = [];        // order_id => [key => true]
         foreach ($items as $it) {
-            $id = $it->menu_item_id;
-            if ($id === null) {
+            // Identity is the specific option when present, else the menu item.
+            $key = $it->menu_item_option_id
+                ? 'o'.$it->menu_item_option_id
+                : ($it->menu_item_id ? 'm'.$it->menu_item_id : null);
+            if ($key === null) {
                 continue;
             }
-            if (! isset($names[$id])) {
-                $names[$id] = $it->menu_item_snapshot['name'] ?? ('Item #'.$id);
+            if (! isset($names[$key])) {
+                $names[$key] = $this->basketItemLabel($it);
             }
-            $byOrder[$it->order_id][$id] = true;
+            $byOrder[$it->order_id][$key] = true;
         }
 
-        $itemCounts = [];     // menu_item_id => # orders containing it
+        $itemCounts = [];     // key => # orders containing it
         $pairCounts = [];     // "a|b" => # orders containing both
         $totalOrders = 0;
         $multiItemOrders = 0;
@@ -1458,8 +1461,8 @@ class AnalyticsService
                 ? round(($count * $totalOrders) / ($itemCounts[$a] * $itemCounts[$b]), 2)
                 : 0.0;
             $pairs[] = [
-                'item_a' => $names[$a] ?? ('Item #'.$a),
-                'item_b' => $names[$b] ?? ('Item #'.$b),
+                'item_a' => $names[$a] ?? $a,
+                'item_b' => $names[$b] ?? $b,
                 'count' => $count,
                 'lift' => $lift,
             ];
@@ -1470,6 +1473,151 @@ class AnalyticsService
             'total_multi_item_orders' => $multiItemOrders,
             'pairs' => array_slice($pairs, 0, 10),
         ];
+    }
+
+    /**
+     * Demand forecast — per-item projected units for the next `horizon` days,
+     * based on the daily sales trend across the selected period. Drives prep /
+     * inventory planning. Items are option-level, matching the product summary.
+     *
+     * @return array{horizon_days:int, based_on_days:int, items:array}
+     */
+    public function getDemandForecastMetrics(array $filters = [], int $horizon = 7): array
+    {
+        $dateFrom = isset($filters['date_from'])
+            ? Carbon::parse($filters['date_from'])->startOfDay()
+            : now()->subDays(29)->startOfDay();
+        $dateTo = isset($filters['date_to'])
+            ? Carbon::parse($filters['date_to'])->startOfDay()
+            : now()->startOfDay();
+
+        if ($dateTo->lt($dateFrom)) {
+            [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
+        }
+
+        // Ordered list of day keys spanning the range.
+        $days = [];
+        for ($d = $dateFrom->copy(); $d->lte($dateTo); $d->addDay()) {
+            $days[] = $d->format('Y-m-d');
+        }
+        $dayCount = count($days);
+
+        $orders = $this->queryBuilder->placedOrders($filters)->get(['id', 'created_at']);
+        if ($orders->isEmpty()) {
+            return ['horizon_days' => $horizon, 'based_on_days' => $dayCount, 'items' => []];
+        }
+
+        $orderDate = [];
+        foreach ($orders as $o) {
+            $orderDate[$o->id] = Carbon::parse($o->created_at)->format('Y-m-d');
+        }
+
+        $items = OrderItem::whereIn('order_id', $orders->pluck('id'))
+            ->get(['order_id', 'menu_item_id', 'menu_item_option_id', 'quantity', 'menu_item_snapshot', 'menu_item_option_snapshot']);
+
+        $labels = [];          // key => label
+        $unitsByKeyDay = [];   // key => [date => units]
+        foreach ($items as $it) {
+            $key = $it->menu_item_option_id
+                ? 'o'.$it->menu_item_option_id
+                : ($it->menu_item_id ? 'm'.$it->menu_item_id : null);
+            if ($key === null) {
+                continue;
+            }
+            $date = $orderDate[$it->order_id] ?? null;
+            if ($date === null) {
+                continue;
+            }
+            if (! isset($labels[$key])) {
+                $labels[$key] = $this->basketItemLabel($it);
+            }
+            $unitsByKeyDay[$key][$date] = ($unitsByKeyDay[$key][$date] ?? 0) + (int) $it->quantity;
+        }
+
+        $result = [];
+        foreach ($unitsByKeyDay as $key => $byDay) {
+            $series = array_map(fn ($d) => $byDay[$d] ?? 0, $days);
+            $total = array_sum($series);
+            if ($total <= 0) {
+                continue;
+            }
+            $proj = $this->projectUnits($series, $horizon);
+            $projectedDaily = $horizon > 0 ? $proj['next_period'] / $horizon : 0;
+            $trendPct = $proj['avg_per_day'] > 0
+                ? (int) round((($projectedDaily - $proj['avg_per_day']) / $proj['avg_per_day']) * 100)
+                : 0;
+
+            $result[] = [
+                'label' => $labels[$key],
+                'total_units' => $total,
+                'avg_per_day' => $proj['avg_per_day'],
+                'projected_units' => $proj['next_period'],
+                'trend_pct' => $trendPct,
+            ];
+        }
+
+        usort($result, fn ($a, $b) => $b['projected_units'] <=> $a['projected_units']);
+
+        return [
+            'horizon_days' => $horizon,
+            'based_on_days' => $dayCount,
+            'items' => array_slice($result, 0, 12),
+        ];
+    }
+
+    /**
+     * Linear-regression projection of a daily series over the next `daysAhead`
+     * days. Returns the summed projection (floored at 0) and the daily average.
+     *
+     * @param  array<int>  $series
+     * @return array{next_period:float, avg_per_day:float, slope:float}
+     */
+    protected function projectUnits(array $series, int $daysAhead): array
+    {
+        $n = count($series);
+        if ($n === 0) {
+            return ['next_period' => 0.0, 'avg_per_day' => 0.0, 'slope' => 0.0];
+        }
+
+        $avg = array_sum($series) / $n;
+
+        if ($n < 3) {
+            return ['next_period' => round(max(0, $avg) * $daysAhead, 1), 'avg_per_day' => round($avg, 2), 'slope' => 0.0];
+        }
+
+        $meanX = ($n - 1) / 2;
+        $num = 0;
+        $den = 0;
+        for ($i = 0; $i < $n; $i++) {
+            $num += ($i - $meanX) * ($series[$i] - $avg);
+            $den += ($i - $meanX) ** 2;
+        }
+        $slope = $den ? $num / $den : 0;
+
+        $sum = 0;
+        for ($k = 1; $k <= $daysAhead; $k++) {
+            $pred = $avg + $slope * (($n - 1 + $k) - $meanX);
+            $sum += max(0, $pred);
+        }
+
+        return ['next_period' => round($sum, 1), 'avg_per_day' => round($avg, 2), 'slope' => round($slope, 3)];
+    }
+
+    /**
+     * Option-level display label for an order item, mirroring the product summary:
+     * prefer the option display name / label, fall back to the menu item name.
+     */
+    protected function basketItemLabel(OrderItem $it): string
+    {
+        $optSnap = $it->menu_item_option_snapshot ?? [];
+        $optLabel = $optSnap['display_name'] ?? $optSnap['option_label'] ?? null;
+        $name = ($it->menu_item_snapshot ?? [])['name'] ?? null;
+
+        if ($optLabel !== null && strtolower(trim($optLabel)) !== 'standard') {
+            return $optLabel;
+        }
+
+        return $name ?? $optLabel ?? ('Item #'.($it->menu_item_id ?? '?'));
     }
 
     /**

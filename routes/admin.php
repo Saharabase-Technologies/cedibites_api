@@ -153,6 +153,7 @@ Route::prefix('admin')->group(function () {
             Route::get('repeat-customers', [AdminAnalyticsController::class, 'repeatCustomers']);
             Route::get('customer-lifecycle', [AdminAnalyticsController::class, 'customerLifecycle']);
             Route::get('basket-affinity', [AdminAnalyticsController::class, 'basketAffinity']);
+            Route::get('demand-forecast', [AdminAnalyticsController::class, 'demandForecast']);
             Route::get('weekday-hour', [AdminAnalyticsController::class, 'weekdayHour']);
             Route::get('menu-catalog', [AdminAnalyticsController::class, 'menuCatalog']);
             Route::post('menu-comparison', [AdminAnalyticsController::class, 'menuComparison']);
