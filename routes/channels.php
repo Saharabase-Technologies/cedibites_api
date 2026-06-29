@@ -13,3 +13,8 @@ Broadcast::channel('orders.branch.{branchId}', function ($user, $branchId) {
 
     return $user->employee?->branches()->where('branches.id', $branchId)->exists() ?? false;
 });
+
+// IMS purchase-order live updates — any user who can view POs may listen.
+Broadcast::channel('inventory.purchase-orders', function ($user) {
+    return $user->can(\App\Enums\Permission::InventoryPurchaseView->value);
+});

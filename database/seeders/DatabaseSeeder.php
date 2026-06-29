@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
             MenuSeeder::class,
             MenuAddOnSeeder::class,
             PromoSeeder::class,
+            InventoryCatalogSeeder::class,
         ]);
     }
 }

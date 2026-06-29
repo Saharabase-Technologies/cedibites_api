@@ -68,9 +68,18 @@ enum Permission: string
     case ManageInventoryCatalog = 'manage_inventory_catalog';
     case ViewInventoryCatalog = 'view_inventory_catalog';
 
+    // Inventory — purchase orders
+    case InventoryPurchaseOrderCreate = 'inventory.purchase_order.create';
+    case InventoryPurchaseOrderUpdate = 'inventory.purchase_order.update';
+    case InventoryPurchaseOrderSubmit = 'inventory.purchase_order.submit';
+    case InventoryPurchaseOrderApprove = 'inventory.purchase_order.approve';
+    case InventoryPurchaseOrderCancel = 'inventory.purchase_order.cancel';
+    case InventoryPurchaseOrderClose = 'inventory.purchase_order.close';
+
     // Inventory — purchases
     case InventoryPurchaseCreate = 'inventory.purchase.create';
     case InventoryPurchaseView = 'inventory.purchase.view';
+    case InventoryPurchaseUrgentBuy = 'inventory.purchase.urgent_buy';
 
     // Inventory — requisitions
     case InventoryRequisitionCreate = 'inventory.requisition.create';
@@ -83,6 +92,9 @@ enum Permission: string
     case InventoryTransferDispute = 'inventory.transfer.dispute';
     case InventoryTransferResolveDispute = 'inventory.transfer.resolve_dispute';
     case InventoryTransferOverrideSourceCheck = 'inventory.transfer.override_source_check';
+
+    // Inventory — production (mother kitchen consuming raw materials)
+    case InventoryProductionRecord = 'inventory.production.record';
 
     // Inventory — wastage
     case InventoryWastageRecord = 'inventory.wastage.record';

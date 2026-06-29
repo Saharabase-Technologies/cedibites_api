@@ -186,8 +186,16 @@ class RoleSeeder extends Seeder
             Permission::AccessInventoryPortal->value,
             Permission::ViewInventoryCatalog->value,
             Permission::ManageInventoryCatalog->value,
+            // Purchase orders — WM authors and manages POs (approval is Admin-only)
+            Permission::InventoryPurchaseOrderCreate->value,
+            Permission::InventoryPurchaseOrderUpdate->value,
+            Permission::InventoryPurchaseOrderSubmit->value,
+            Permission::InventoryPurchaseOrderCancel->value,
+            Permission::InventoryPurchaseOrderClose->value,
             Permission::InventoryPurchaseCreate->value,
             Permission::InventoryPurchaseView->value,
+            // Production — mother kitchen consuming raw materials
+            Permission::InventoryProductionRecord->value,
             Permission::InventoryRequisitionCreate->value,
             Permission::InventoryRequisitionApprove->value,
             Permission::InventoryTransferCreate->value,
@@ -218,6 +226,8 @@ class RoleSeeder extends Seeder
             Permission::ViewInventoryCatalog->value,
             Permission::InventoryPurchaseCreate->value,
             Permission::InventoryPurchaseView->value,
+            // Clerk may record an ad-hoc receipt without a PO (emergency / market buy)
+            Permission::InventoryPurchaseUrgentBuy->value,
             Permission::InventoryReportView->value,
         ]);
 

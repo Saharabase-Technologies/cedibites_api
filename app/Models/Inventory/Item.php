@@ -6,6 +6,7 @@ use Database\Factories\Inventory\ItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Item extends Model
@@ -43,6 +44,12 @@ class Item extends Model
     public function defaultSupplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class, 'default_supplier_id');
+    }
+
+    /** Per-location balance rows; sum their quantity for total stock on hand. */
+    public function stockBalances(): HasMany
+    {
+        return $this->hasMany(StockBalance::class, 'item_id');
     }
 
     protected static function newFactory(): ItemFactory
