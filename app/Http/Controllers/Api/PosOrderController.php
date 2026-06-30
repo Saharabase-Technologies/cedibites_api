@@ -204,7 +204,7 @@ class PosOrderController extends Controller
                         \App\Models\Payment::create([
                             'order_id' => $order->id,
                             'payment_method' => $paymentMethod,
-                            'amount' => $totals['total_amount'],
+                            'amount' => $order->goods_amount,
                             'payment_status' => 'pending',
                             'customer_id' => $posCustomerId,
                         ]);
@@ -222,7 +222,7 @@ class PosOrderController extends Controller
                     \App\Models\Payment::create([
                         'order_id' => $order->id,
                         'payment_method' => 'manual_momo',
-                        'amount' => $totals['total_amount'],
+                        'amount' => $order->goods_amount,
                         'payment_status' => 'completed',
                         'paid_at' => $isManualEntry ? $request->validated('recorded_at') : now(),
                         'customer_id' => $posCustomerId,
@@ -233,7 +233,7 @@ class PosOrderController extends Controller
                     \App\Models\Payment::create([
                         'order_id' => $order->id,
                         'payment_method' => $paymentMethod,
-                        'amount' => $totals['total_amount'],
+                        'amount' => $order->goods_amount,
                         'payment_status' => 'completed',
                         'paid_at' => $isManualEntry ? $request->validated('recorded_at') : now(),
                         'customer_id' => $posCustomerId,

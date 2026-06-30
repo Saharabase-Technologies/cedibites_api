@@ -121,12 +121,14 @@ class OrderCreationService
             $paymentMethod = $session->payment_method;
             $paymentStatus = $this->resolvePaymentStatus($paymentMethod);
 
+            // Restaurant collects the goods amount only; the third-party delivery
+            // fee is collected by the rider on delivery (tracked via delivery_fee_status).
             Payment::create([
                 'order_id' => $order->id,
                 'customer_id' => $customerId,
                 'payment_method' => $paymentMethod,
                 'payment_status' => $paymentStatus,
-                'amount' => $session->total_amount,
+                'amount' => $order->goods_amount,
                 'transaction_id' => $session->hubtel_transaction_id,
                 'payment_gateway_response' => $session->payment_gateway_response,
                 'paid_at' => $paymentStatus === 'completed' ? ($isManualEntry ? $session->recorded_at : now()) : null,
