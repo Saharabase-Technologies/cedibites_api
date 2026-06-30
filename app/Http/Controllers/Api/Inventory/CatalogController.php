@@ -85,10 +85,23 @@ class CatalogController extends Controller
             ->get()
             ->keyBy('id');
 
+        // Resolve order references (sale deductions) → order number.
+        $orderIds = $movements
+            ->where('reference_type', 'order')
+            ->pluck('reference_id')
+            ->filter()
+            ->unique()
+            ->all();
+
+        $orders = \App\Models\Order::query()
+            ->whereIn('id', $orderIds)
+            ->get(['id', 'order_number'])
+            ->keyBy('id');
+
         $running = 0.0;
         $suppliers = [];
 
-        $rows = $movements->map(function (StockMovement $m) use (&$running, &$suppliers, $purchaseItems) {
+        $rows = $movements->map(function (StockMovement $m) use (&$running, &$suppliers, $purchaseItems, $orders) {
             $qty = (float) $m->quantity;
             $running = round($running + $qty, 4);
 
@@ -113,6 +126,12 @@ class CatalogController extends Controller
                         ];
                     }
                 }
+            } elseif ($m->reference_type === 'order' && $orders->has($m->reference_id)) {
+                $reference = [
+                    'type' => 'order',
+                    'order_id' => (int) $m->reference_id,
+                    'order_number' => $orders[$m->reference_id]->order_number,
+                ];
             }
 
             return [
@@ -128,9 +147,27 @@ class CatalogController extends Controller
             ];
         });
 
+        // Open FEFO batches (expiry-tracked items), soonest expiry first.
+        $batches = \App\Models\Inventory\Batch::query()
+            ->where('item_id', $item->id)
+            ->where('remaining_qty', '>', 0)
+            ->orderByRaw('expiry_date IS NULL')
+            ->orderBy('expiry_date')
+            ->orderBy('id')
+            ->get()
+            ->map(fn ($b) => [
+                'id' => $b->id,
+                'expiry_date' => optional($b->expiry_date)->toDateString(),
+                'remaining_qty' => (float) $b->remaining_qty,
+                'received_qty' => (float) $b->received_qty,
+                'unit_cost' => (float) $b->unit_cost,
+                'received_at' => optional($b->received_at)->toIso8601String(),
+            ]);
+
         return response()->success([
             'item' => new ItemResource($item),
             'suppliers' => array_values($suppliers),
+            'batches' => $batches,
             // Newest first for display; running balance was computed oldest-first.
             'movements' => $rows->reverse()->values(),
         ]);

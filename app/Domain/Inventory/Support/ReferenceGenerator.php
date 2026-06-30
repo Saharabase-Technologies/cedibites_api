@@ -24,6 +24,11 @@ class ReferenceGenerator
         return $this->next('inventory_purchases', 'RCP');
     }
 
+    public function production(): string
+    {
+        return $this->next('inventory_production_logs', 'PROD');
+    }
+
     private function next(string $table, string $prefix): string
     {
         $date = now()->format('ymd');

@@ -33,6 +33,8 @@ class RecordPurchaseRequest extends FormRequest
             'items.*.received_qty' => ['required', 'numeric', 'gt:0'],
             'items.*.variance_reason' => ['nullable', 'string', 'max:1000'],
             'items.*.unit_cost_paid' => ['required', 'numeric', 'min:0'],
+            // Expiry date for expiry-tracked items (creates a FEFO batch).
+            'items.*.expiry_date' => ['nullable', 'date'],
         ];
     }
 

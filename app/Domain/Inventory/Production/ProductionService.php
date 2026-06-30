@@ -20,6 +20,7 @@ class ProductionService
 {
     public function __construct(
         private readonly MovementPostingEngine $posting,
+        private readonly \App\Domain\Inventory\Batches\BatchService $batches,
     ) {}
 
     /**
@@ -30,7 +31,7 @@ class ProductionService
     {
         return DB::transaction(function () use ($data, $actor) {
             $locationId = (int) $data['location_id'];
-            $batch = (string) Str::uuid();
+            $ref = (string) Str::uuid();
             $itemIds = array_column($data['items'], 'item_id');
 
             // Lock balances so the availability check and the post are consistent.
@@ -61,18 +62,24 @@ class ProductionService
                     );
                 }
 
-                $movements[] = $this->posting->post([
-                    'item_id' => $itemId,
-                    'location_id' => $locationId,
-                    'quantity' => -1 * $qty, // negative = stock out
-                    'movement_type' => 'production',
-                    'reference_type' => 'production',
-                    'reference_id' => null,
-                    'unit_cost_at_time' => $balance ? (float) $balance->weighted_avg_cost : null,
-                    'user_id' => $actor->id,
-                    'idempotency_key' => "production:{$batch}:{$itemId}",
-                    'occurred_at' => $data['occurred_at'],
-                ]);
+                // FEFO: consume soonest-expiring batches first (one movement per
+                // source batch). Untracked items yield a single null-batch entry.
+                $avgCost = $balance ? (float) $balance->weighted_avg_cost : null;
+                foreach ($this->batches->allocate($itemId, $locationId, $qty) as $alloc) {
+                    $movements[] = $this->posting->post([
+                        'item_id' => $itemId,
+                        'location_id' => $locationId,
+                        'quantity' => -1 * $alloc['qty'], // negative = stock out
+                        'movement_type' => 'production',
+                        'reference_type' => 'production',
+                        'reference_id' => null,
+                        'batch_id' => $alloc['batch_id'],
+                        'unit_cost_at_time' => $alloc['unit_cost'] ?? $avgCost,
+                        'user_id' => $actor->id,
+                        'idempotency_key' => "production:{$ref}:{$itemId}:batch:".($alloc['batch_id'] ?? 0),
+                        'occurred_at' => $data['occurred_at'],
+                    ]);
+                }
             }
 
             return $movements;

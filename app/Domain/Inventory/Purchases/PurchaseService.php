@@ -17,6 +17,7 @@ class PurchaseService
     public function __construct(
         private readonly ReferenceGenerator $references,
         private readonly MovementPostingEngine $posting,
+        private readonly \App\Domain\Inventory\Batches\BatchService $batches,
     ) {}
 
     /**
@@ -45,7 +46,8 @@ class PurchaseService
 
         return DB::transaction(function () use ($data, $actor, $po, $isUrgent) {
             $itemIds = array_column($data['items'], 'item_id');
-            $units = Item::whereIn('id', $itemIds)->pluck('base_unit_id', 'id');
+            $itemModels = Item::whereIn('id', $itemIds)->get()->keyBy('id');
+            $units = $itemModels->map(fn ($i) => $i->base_unit_id);
             $poLines = $po ? $po->items->keyBy('id') : collect();
 
             $purchase = Purchase::create([
@@ -106,6 +108,17 @@ class PurchaseService
                     'line_total' => $lineTotal,
                 ]);
 
+                // For expiry-tracked items, record a FEFO batch for this lot.
+                $batch = $this->batches->recordReceipt(
+                    $itemModels[$itemId],
+                    (int) $purchase->destination_location_id,
+                    $received,
+                    $cost,
+                    $row['expiry_date'] ?? null,
+                    $purchaseItem->id,
+                    $purchase->received_at,
+                );
+
                 // Post the receipt into the warehouse ledger + balance.
                 $this->posting->post([
                     'item_id' => $itemId,
@@ -114,6 +127,7 @@ class PurchaseService
                     'movement_type' => 'purchase',
                     'reference_type' => 'inventory_purchase_item',
                     'reference_id' => $purchaseItem->id,
+                    'batch_id' => $batch?->id,
                     'unit_cost_at_time' => $cost,
                     'user_id' => $actor->id,
                     'idempotency_key' => "purchase_item:{$purchaseItem->id}",

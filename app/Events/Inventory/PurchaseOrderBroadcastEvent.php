@@ -5,7 +5,7 @@ namespace App\Events\Inventory;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
@@ -13,7 +13,7 @@ use Illuminate\Queue\SerializesModels;
  * Lightweight PO change signal. Carries scalars only — listeners refetch the
  * full PO via the API. Broadcast to anyone who can view purchase orders.
  */
-class PurchaseOrderBroadcastEvent implements ShouldBroadcast
+class PurchaseOrderBroadcastEvent implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 

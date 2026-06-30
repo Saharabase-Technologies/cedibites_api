@@ -68,6 +68,7 @@ class MovementPostingEngine
                 'movement_type' => $data['movement_type'],
                 'reference_type' => $data['reference_type'] ?? null,
                 'reference_id' => $data['reference_id'] ?? null,
+                'batch_id' => $data['batch_id'] ?? null,
                 'unit_cost_at_time' => $unitCost,
                 'user_id' => $data['user_id'] ?? null,
                 'parent_movement_id' => $data['parent_movement_id'] ?? null,

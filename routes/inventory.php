@@ -2,8 +2,11 @@
 
 use App\Http\Controllers\Api\Inventory\CatalogController;
 use App\Http\Controllers\Api\Inventory\ProductionController;
+use App\Http\Controllers\Api\Inventory\ProductionRunController;
 use App\Http\Controllers\Api\Inventory\PurchaseController;
 use App\Http\Controllers\Api\Inventory\PurchaseOrderController;
+use App\Http\Controllers\Api\Inventory\RecipeController;
+use App\Http\Controllers\Api\Inventory\ReportController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -85,5 +88,35 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         Route::prefix('production')->name('production.')->group(function () {
             Route::post('/', [ProductionController::class, 'store'])
                 ->middleware('permission:inventory.production.record')->name('store');
+        });
+
+        // ── Production runs (batch-prep: consume inputs → yield prepared item) ─
+        Route::prefix('production-runs')->name('production-runs.')->group(function () {
+            Route::get('/', [ProductionRunController::class, 'index'])
+                ->middleware('permission:inventory.production.record')->name('index');
+            Route::post('/', [ProductionRunController::class, 'store'])
+                ->middleware('permission:inventory.production.record')->name('store');
+        });
+
+        // ── Recipes / BOM ────────────────────────────────────────────────────
+        Route::prefix('recipes')->name('recipes.')->group(function () {
+            Route::get('/', [RecipeController::class, 'index'])
+                ->middleware('permission:inventory.recipe.view')->name('index');
+            Route::get('{recipe}', [RecipeController::class, 'show'])
+                ->middleware('permission:inventory.recipe.view')->name('show');
+            Route::post('/', [RecipeController::class, 'store'])
+                ->middleware('permission:inventory.recipe.edit_global')->name('store');
+            Route::patch('{recipe}', [RecipeController::class, 'update'])
+                ->middleware('permission:inventory.recipe.edit_global')->name('update');
+            Route::delete('{recipe}', [RecipeController::class, 'destroy'])
+                ->middleware('permission:inventory.recipe.edit_global')->name('destroy');
+            Route::post('{recipe}/lock', [RecipeController::class, 'lock'])
+                ->middleware('permission:inventory.recipe.lock')->name('lock');
+        });
+
+        // ── Reports ──────────────────────────────────────────────────────────
+        Route::prefix('reports')->name('reports.')->group(function () {
+            Route::get('expiring-batches', [ReportController::class, 'expiringBatches'])
+                ->middleware('permission:inventory.report.view')->name('expiring-batches');
         });
     });
