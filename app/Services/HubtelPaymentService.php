@@ -104,6 +104,17 @@ class HubtelPaymentService
     }
 
     /**
+     * Amount to charge / record for the restaurant: goods only (order total minus
+     * the third-party delivery fee, which the rider collects on delivery). Works
+     * for Order models and the lightweight stubs used by checkout-session flows;
+     * a stub missing delivery_fee degrades safely to the full total.
+     */
+    protected function chargeable(object $order): float
+    {
+        return round((float) $order->total_amount - (float) ($order->delivery_fee ?? 0), 2);
+    }
+
+    /**
      * Execute HTTP request with retry logic
      *
      * @param  callable  $request  The HTTP request to execute
@@ -215,9 +226,11 @@ class HubtelPaymentService
 
         $order = $data['order'];
 
-        // Build Hubtel API request payload
+        // Build Hubtel API request payload. Charge the GOODS amount only — the
+        // third-party delivery fee is collected by the rider on delivery, never
+        // through our payment rails.
         $payload = [
-            'totalAmount' => $order->total_amount,
+            'totalAmount' => $this->chargeable($order),
             'description' => $data['description'],
             'callbackUrl' => route('payments.hubtel.callback'),
             'returnUrl' => $data['return_url'] ?? config('app.frontend_url')."/orders/{$order->order_number}/payment/success",
@@ -247,7 +260,7 @@ class HubtelPaymentService
         Log::info('Hubtel payment initiation started', [
             'order_id' => $order->id,
             'order_number' => $order->order_number,
-            'amount' => $order->total_amount,
+            'amount' => $this->chargeable($order),
             'client_reference' => $payload['clientReference'],
             'payload' => $this->sanitizeForLogging($payload),
             'Authorization' => $this->getAuthHeader(),
@@ -287,7 +300,7 @@ class HubtelPaymentService
                 'customer_id' => $order->customer_id,
                 'payment_method' => 'mobile_money',
                 'payment_status' => 'pending',
-                'amount' => $order->total_amount,
+                'amount' => $this->chargeable($order),
                 'transaction_id' => $responseData['checkoutId'] ?? null,
                 'payment_gateway_response' => $responseData,
             ]);
@@ -296,7 +309,7 @@ class HubtelPaymentService
         Log::info('Hubtel payment initiated', [
             'order_id' => $order->id ?? null,
             'order_number' => $order->order_number,
-            'amount' => $order->total_amount,
+            'amount' => $this->chargeable($order),
             'checkout_id' => $responseData['checkoutId'] ?? null,
             'payment_record_created' => $createPaymentRecord,
         ]);
@@ -557,7 +570,8 @@ class HubtelPaymentService
             'CustomerName' => $data['customer_name'] ?? $order->contact_name,
             'CustomerMsisdn' => $msisdn,
             'Channel' => $channel,
-            'Amount' => round((float) $order->total_amount, 2),
+            // Goods only — delivery fee is collected by the rider, not via Hubtel.
+            'Amount' => $this->chargeable($order),
             'PrimaryCallbackUrl' => route('payments.hubtel.rmp.callback'),
             'Description' => $data['description'],
             'ClientReference' => $order->order_number,
@@ -566,7 +580,7 @@ class HubtelPaymentService
         Log::info('Hubtel RMP receive money initiated', [
             'order_id' => $order->id,
             'order_number' => $order->order_number,
-            'amount' => $order->total_amount,
+            'amount' => $this->chargeable($order),
             'channel' => $channel,
             'client_reference' => $payload['ClientReference'],
         ]);

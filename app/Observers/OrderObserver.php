@@ -18,6 +18,35 @@ use App\Notifications\OrderReadyNotification;
 class OrderObserver
 {
     /**
+     * Handle the Order "creating" event — default the delivery-fee collection
+     * state. A fee > 0 means the rider has something to collect (pending);
+     * otherwise it is not applicable. Already-collected/explicit values are kept.
+     */
+    public function creating(Order $order): void
+    {
+        // Respect an explicitly-provided collection state.
+        if (! in_array($order->delivery_fee_status, [null, '', 'not_applicable'], true)) {
+            return;
+        }
+
+        if (((float) $order->delivery_fee) <= 0) {
+            $order->delivery_fee_status = 'not_applicable';
+
+            return;
+        }
+
+        // Orders created already in a terminal delivery state (e.g. recorded past
+        // orders) are treated as already collected; otherwise the fee is pending.
+        if (in_array($order->status, ['delivered', 'completed'], true)) {
+            $order->delivery_fee_status = 'collected';
+            $order->delivery_fee_collected_at = $order->recorded_at ?? now();
+            $order->delivery_fee_collected_by = $order->assigned_employee_id;
+        } else {
+            $order->delivery_fee_status = 'pending';
+        }
+    }
+
+    /**
      * Handle the Order "created" event.
      */
     public function created(Order $order): void
@@ -111,6 +140,16 @@ class OrderObserver
                 'order_id' => $order->id,
                 'status' => $order->status,
                 'error' => $e->getMessage(),
+            ]);
+        }
+
+        // Mark the third-party delivery fee collected once the order is delivered —
+        // the rider hands it over on delivery. Only acts on still-pending fees.
+        if (in_array($order->status, ['delivered', 'completed'], true) && $order->delivery_fee_status === 'pending') {
+            $order->updateQuietly([
+                'delivery_fee_status' => 'collected',
+                'delivery_fee_collected_at' => now(),
+                'delivery_fee_collected_by' => $order->assigned_employee_id,
             ]);
         }
 

@@ -65,6 +65,9 @@ class Order extends Model
         'delivery_note',
         'subtotal',
         'delivery_fee',
+        'delivery_fee_status',
+        'delivery_fee_collected_at',
+        'delivery_fee_collected_by',
         'service_charge',
         'discount',
         'promo_id',
@@ -91,6 +94,7 @@ class Order extends Model
             'delivery_longitude' => 'decimal:8',
             'subtotal' => 'decimal:2',
             'delivery_fee' => 'decimal:2',
+            'delivery_fee_collected_at' => 'datetime',
             'service_charge' => 'decimal:2',
             'discount' => 'decimal:2',
             'total_amount' => 'decimal:2',
@@ -102,6 +106,16 @@ class Order extends Model
             'recorded_at' => 'datetime',
             'internal_notes' => 'array',
         ];
+    }
+
+    /**
+     * Restaurant-collectible amount = order total minus the third-party delivery
+     * fee. Delivery is collected by the rider on delivery and is never restaurant
+     * revenue, so this is the amount the restaurant charges/records for goods.
+     */
+    public function getGoodsAmountAttribute(): float
+    {
+        return round((float) $this->total_amount - (float) $this->delivery_fee, 2);
     }
 
     public function customer(): BelongsTo

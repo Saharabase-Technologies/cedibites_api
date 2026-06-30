@@ -204,12 +204,13 @@ class OrderController extends Controller
             // immediately since no gateway confirmation is needed.
             $isMomo = $paymentMethod === 'mobile_money';
 
+            // Goods amount only — delivery fee is collected by the rider on delivery.
             Payment::create([
                 'order_id' => $order->id,
                 'customer_id' => $resolvedCustomerId,
                 'payment_method' => $paymentMethod,
                 'payment_status' => $isMomo ? 'pending' : 'completed',
-                'amount' => $totalAmount,
+                'amount' => $order->goods_amount,
                 'paid_at' => $isMomo ? null : now(),
             ]);
 

@@ -12,10 +12,19 @@ class PaymentResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        // Goods only — the restaurant's share, excluding the third-party delivery
+        // fee. min() keeps it correct for both historical rows (amount = full total)
+        // and post-cutover rows (amount already = goods).
+        $order = $this->relationLoaded('order') ? $this->order : null;
+        $goodsAmount = $order
+            ? round(min((float) $this->amount, (float) $order->goods_amount), 2)
+            : (float) $this->amount;
+
         return [
             'id' => $this->id,
             'order_id' => $this->order_id,
             'amount' => $this->amount,
+            'goods_amount' => $goodsAmount,
             'payment_method' => $this->payment_method,
             'payment_status' => $this->payment_status,
             'transaction_id' => $this->transaction_id,
