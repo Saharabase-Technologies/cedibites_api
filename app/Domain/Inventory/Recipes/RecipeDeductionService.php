@@ -4,6 +4,7 @@ namespace App\Domain\Inventory\Recipes;
 
 use App\Domain\Inventory\Batches\BatchService;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
+use App\Models\Inventory\Alert;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Recipe;
 use App\Models\Inventory\StockMovement;
@@ -102,13 +103,15 @@ class RecipeDeductionService
                 }
 
                 // The sale already happened — a negative balance is a signal, not a
-                // blocker. Surface it for the warehouse team to reconcile.
+                // blocker. Surface it for the warehouse team to reconcile: log it and
+                // raise a portal-visible alert (deduped per item+location while open).
                 $balance = DB::table('inventory_stock_balances')
                     ->where('item_id', $itemId)->where('location_id', $location->id)->value('quantity');
                 if ($balance !== null && (float) $balance < 0) {
                     Log::warning('Recipe deduction drove stock negative.', [
                         'order_id' => $order->id, 'item_id' => $itemId, 'balance' => $balance,
                     ]);
+                    Alert::raiseNegativeStock((int) $itemId, $location->id, (float) $balance, $order->id);
                 }
             }
         });

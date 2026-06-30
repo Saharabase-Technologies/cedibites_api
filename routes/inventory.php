@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\Inventory\PurchaseController;
 use App\Http\Controllers\Api\Inventory\PurchaseOrderController;
 use App\Http\Controllers\Api\Inventory\RecipeController;
 use App\Http\Controllers\Api\Inventory\ReportController;
+use App\Http\Controllers\Api\Inventory\TransferController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -112,6 +113,34 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
                 ->middleware('permission:inventory.recipe.edit_global')->name('destroy');
             Route::post('{recipe}/lock', [RecipeController::class, 'lock'])
                 ->middleware('permission:inventory.recipe.lock')->name('lock');
+        });
+
+        // ── Transfers (stock movement between locations) ─────────────────────
+        Route::prefix('transfers')->name('transfers.')->group(function () {
+            Route::get('/', [TransferController::class, 'index'])
+                ->middleware('permission:view_inventory_catalog')->name('index');
+            Route::get('{transfer}', [TransferController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+
+            Route::post('/', [TransferController::class, 'store'])
+                ->middleware('permission:inventory.transfer.create')->name('store');
+            Route::patch('{transfer}', [TransferController::class, 'update'])
+                ->middleware('permission:inventory.transfer.create')->name('update');
+            Route::post('{transfer}/submit', [TransferController::class, 'submit'])
+                ->middleware('permission:inventory.transfer.create')->name('submit');
+            Route::post('{transfer}/cancel', [TransferController::class, 'cancel'])
+                ->middleware('permission:inventory.transfer.create')->name('cancel');
+
+            // Release authority — approving + sending stock out of the source.
+            Route::post('{transfer}/approve', [TransferController::class, 'approve'])
+                ->middleware('permission:inventory.transfer.send')->name('approve');
+            Route::post('{transfer}/send', [TransferController::class, 'send'])
+                ->middleware('permission:inventory.transfer.send')->name('send');
+
+            Route::post('{transfer}/receive', [TransferController::class, 'receive'])
+                ->middleware('permission:inventory.transfer.receive')->name('receive');
+            Route::post('{transfer}/resolve-dispute', [TransferController::class, 'resolveDispute'])
+                ->middleware('permission:inventory.transfer.resolve_dispute')->name('resolve-dispute');
         });
 
         // ── Reports ──────────────────────────────────────────────────────────

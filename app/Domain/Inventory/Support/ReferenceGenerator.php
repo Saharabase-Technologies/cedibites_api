@@ -29,6 +29,16 @@ class ReferenceGenerator
         return $this->next('inventory_production_logs', 'PROD');
     }
 
+    public function transfer(): string
+    {
+        return $this->next('inventory_transfers', 'TRF');
+    }
+
+    public function requisition(): string
+    {
+        return $this->next('inventory_requisitions', 'REQ');
+    }
+
     private function next(string $table, string $prefix): string
     {
         $date = now()->format('ymd');

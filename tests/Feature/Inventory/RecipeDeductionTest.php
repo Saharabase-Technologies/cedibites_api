@@ -2,6 +2,7 @@
 
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
 use App\Domain\Inventory\Recipes\RecipeDeductionService;
+use App\Models\Inventory\Alert;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Recipe;
@@ -123,6 +124,48 @@ it('honours yield — ingredient qty is per yield portions', function () {
     $this->service->deductForOrder($order);
 
     expect(onHand($this->item->id, $this->warehouse->id))->toBe(98.0); // 100 - (1.0 × 4/2)
+});
+
+it('allows the sale to go negative but raises a deduped negative-stock alert', function () {
+    $option = MenuItemOption::factory()->create();
+    // 100 on hand; 60 per portion × 4 portions = 240 demanded → balance -140.
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 60);
+
+    $order = Order::factory()->create();
+    OrderItem::factory()->create([
+        'order_id' => $order->id,
+        'menu_item_id' => $option->menu_item_id,
+        'menu_item_option_id' => $option->id,
+        'quantity' => 4,
+    ]);
+
+    $this->service->deductForOrder($order);
+
+    // Sale completes — balance is allowed below zero.
+    expect(onHand($this->item->id, $this->warehouse->id))->toBe(-140.0);
+
+    // Exactly one open negative-stock alert is raised for this item + location.
+    $alert = Alert::where('type', 'negative_stock')
+        ->where('item_id', $this->item->id)
+        ->where('location_id', $this->warehouse->id)
+        ->where('status', 'open')
+        ->get();
+
+    expect($alert)->toHaveCount(1)
+        ->and($alert->first()->severity)->toBe('critical')
+        ->and($alert->first()->reference_id)->toBe($order->id);
+
+    // A second overdrawing order updates the same alert rather than spamming rows.
+    $order2 = Order::factory()->create();
+    OrderItem::factory()->create([
+        'order_id' => $order2->id,
+        'menu_item_id' => $option->menu_item_id,
+        'menu_item_option_id' => $option->id,
+        'quantity' => 1,
+    ]);
+    $this->service->deductForOrder($order2);
+
+    expect(Alert::where('type', 'negative_stock')->where('status', 'open')->count())->toBe(1);
 });
 
 it('is a no-op when the ordered option has no recipe', function () {

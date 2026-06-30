@@ -44,28 +44,30 @@ class ProductionRunService
         $outputItem = Item::findOrFail($data['output_item_id']);
         $occurredAt = isset($data['occurred_at']) ? Carbon::parse($data['occurred_at']) : now();
 
-        // You can't cook with stock you don't have — validate inputs up front.
-        $inputItemIds = array_column($data['inputs'], 'item_id');
-        $balances = DB::table('inventory_stock_balances')
-            ->where('location_id', $locationId)
-            ->whereIn('item_id', $inputItemIds)
-            ->lockForUpdate()
-            ->get()
-            ->keyBy('item_id');
-
-        foreach ($data['inputs'] as $row) {
-            $qty = (float) $row['quantity'];
-            if ($qty <= 0) {
-                throw new InventoryException('Input quantity must be greater than zero.');
-            }
-            $onHand = isset($balances[$row['item_id']]) ? (float) $balances[$row['item_id']]->quantity : 0.0;
-            if ($qty > $onHand) {
-                $name = Item::whereKey($row['item_id'])->value('name') ?? "item {$row['item_id']}";
-                throw new InventoryException("Not enough stock of {$name}: {$onHand} on hand, need {$qty}.");
-            }
-        }
-
         return DB::transaction(function () use ($data, $actor, $locationId, $outputItem, $outputQty, $occurredAt) {
+            // You can't cook with stock you don't have. Lock the input balances and
+            // validate inside the transaction so the check holds against concurrent
+            // consumption (the lock must outlive the check, hence not before the tx).
+            $inputItemIds = array_column($data['inputs'], 'item_id');
+            $balances = DB::table('inventory_stock_balances')
+                ->where('location_id', $locationId)
+                ->whereIn('item_id', $inputItemIds)
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('item_id');
+
+            foreach ($data['inputs'] as $row) {
+                $qty = (float) $row['quantity'];
+                if ($qty <= 0) {
+                    throw new InventoryException('Input quantity must be greater than zero.');
+                }
+                $onHand = isset($balances[$row['item_id']]) ? (float) $balances[$row['item_id']]->quantity : 0.0;
+                if ($qty > $onHand) {
+                    $name = Item::whereKey($row['item_id'])->value('name') ?? "item {$row['item_id']}";
+                    throw new InventoryException("Not enough stock of {$name}: {$onHand} on hand, need {$qty}.");
+                }
+            }
+
             $log = ProductionLog::create([
                 'reference' => $this->references->production(),
                 'location_id' => $locationId,

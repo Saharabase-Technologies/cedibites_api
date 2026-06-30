@@ -227,6 +227,11 @@ class RoleSeeder extends Seeder
         $this->addPermissions($purchasingClerk, [
             Permission::AccessInventoryPortal->value,
             Permission::ViewInventoryCatalog->value,
+            // Clerk authors and manages POs; Admin still approves the >= ₵10k gate.
+            Permission::InventoryPurchaseOrderCreate->value,
+            Permission::InventoryPurchaseOrderUpdate->value,
+            Permission::InventoryPurchaseOrderSubmit->value,
+            Permission::InventoryPurchaseOrderCancel->value,
             Permission::InventoryPurchaseCreate->value,
             Permission::InventoryPurchaseView->value,
             // Clerk may record an ad-hoc receipt without a PO (emergency / market buy)
