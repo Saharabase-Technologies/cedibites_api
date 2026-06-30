@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Payment;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Canonical query factory for analytics.
@@ -55,7 +56,7 @@ class AnalyticsQueryBuilder
     /**
      * Revenue-contributing orders — placed, not cancelled, payment not refunded.
      *
-     * Revenue = SUM(total_amount) of these orders.
+     * Revenue = SUM(total_amount − delivery_fee) of these orders (see revenueExpr()).
      * Excludes: cancelled orders, refunded payments, no_charge orders.
      */
     public function revenueOrders(array $filters = []): Builder
@@ -148,11 +149,39 @@ class AnalyticsQueryBuilder
     }
 
     /**
-     * Compute revenue (the canonical number).
+     * SQL expression for restaurant revenue: the order total minus the
+     * third-party delivery fee. Delivery is a pass-through collected on behalf
+     * of independent riders and is never restaurant revenue, so it is excluded
+     * everywhere an order's monetary value is aggregated.
+     *
+     * delivery_fee defaults to 0 (non-delivery orders), so historical rows are
+     * handled correctly with no backfill — figures self-correct on read.
+     *
+     * @param  string  $prefix  Optional table alias/name (e.g. 'orders') for joined queries.
+     */
+    public static function revenueExpr(string $prefix = ''): string
+    {
+        $p = $prefix !== '' ? "{$prefix}." : '';
+
+        return "({$p}total_amount - COALESCE({$p}delivery_fee, 0))";
+    }
+
+    /**
+     * Compute revenue (the canonical number) — excludes third-party delivery fees.
      */
     public function computeRevenue(array $filters = []): float
     {
-        return round((float) $this->revenueOrders($filters)->sum('total_amount'), 2);
+        return round((float) $this->revenueOrders($filters)->sum(DB::raw(self::revenueExpr())), 2);
+    }
+
+    /**
+     * Compute total third-party delivery fees over revenue-contributing orders.
+     * This is the pass-through paid out to independent riders — surfaced as a
+     * standalone figure so it is never conflated with restaurant revenue.
+     */
+    public function computeDeliveryFees(array $filters = []): float
+    {
+        return round((float) $this->revenueOrders($filters)->sum('delivery_fee'), 2);
     }
 
     /**

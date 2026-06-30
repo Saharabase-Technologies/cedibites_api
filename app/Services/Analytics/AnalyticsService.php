@@ -37,6 +37,7 @@ class AnalyticsService
     public function getSalesMetrics(array $filters = []): array
     {
         $grossRevenue = $this->queryBuilder->computeRevenue($filters);
+        $deliveryFees = $this->queryBuilder->computeDeliveryFees($filters);
         $revenueOrderCount = $this->queryBuilder->computeRevenueOrderCount($filters);
         $totalOrders = $this->queryBuilder->computePlacedOrderCount($filters);
 
@@ -44,11 +45,11 @@ class AnalyticsService
 
         $cancelledQuery = $this->queryBuilder->cancelledOrders($filters);
         $cancelledOrders = (clone $cancelledQuery)->count();
-        $cancelledRevenue = round((float) (clone $cancelledQuery)->sum('total_amount'), 2);
+        $cancelledRevenue = round((float) (clone $cancelledQuery)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr())), 2);
 
         $noChargeQuery = $this->queryBuilder->noChargeOrders($filters);
         $noChargeCount = (clone $noChargeQuery)->count();
-        $noChargeAmount = round((float) (clone $noChargeQuery)->sum('total_amount'), 2);
+        $noChargeAmount = round((float) (clone $noChargeQuery)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr())), 2);
 
         $averageOrderValue = $revenueOrderCount > 0
             ? round($grossRevenue / $revenueOrderCount, 2)
@@ -58,7 +59,7 @@ class AnalyticsService
         $salesByDay = (clone $this->queryBuilder->revenueOrders($filters))
             ->select(
                 DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total_amount) as total'),
+                DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as total'),
                 DB::raw('COUNT(*) as orders')
             )
             ->groupBy('date')
@@ -67,7 +68,7 @@ class AnalyticsService
 
         // Sales by order type
         $salesByType = (clone $this->queryBuilder->revenueOrders($filters))
-            ->select('order_type', DB::raw('SUM(total_amount) as total'), DB::raw('COUNT(*) as orders'))
+            ->select('order_type', DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as total'), DB::raw('COUNT(*) as orders'))
             ->groupBy('order_type')
             ->get();
 
@@ -88,6 +89,7 @@ class AnalyticsService
 
         return [
             'total_sales' => $grossRevenue,
+            'delivery_fees' => $deliveryFees, // third-party rider pass-through, excluded from revenue
             'total_orders' => $totalOrders,
             'completed_orders' => $completedOrders,
             'cancelled_orders' => $cancelledOrders,
@@ -127,7 +129,7 @@ class AnalyticsService
             : 'HOUR(created_at)';
 
         $ordersByHour = (clone $placedQuery)
-            ->select(DB::raw("{$hourExpression} as hour"), DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
+            ->select(DB::raw("{$hourExpression} as hour"), DB::raw('COUNT(*) as count'), DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue'))
             ->groupBy('hour')
             ->orderBy('hour')
             ->get()
@@ -196,7 +198,7 @@ class AnalyticsService
             ->whereHas('orders', fn ($q) => $q->whereIn('orders.id', $fulfilledOrderIds))
             ->withCount(['orders as placed_order_count' => fn ($q) => $q->whereIn('orders.id', $fulfilledOrderIds)])
             ->addSelect([
-                'total_spend' => Order::selectRaw('SUM(total_amount)')
+                'total_spend' => Order::selectRaw('SUM('.AnalyticsQueryBuilder::revenueExpr().')')
                     ->whereColumn('customer_id', 'customers.id')
                     ->whereIn('id', $revenueOrderIds),
             ])
@@ -215,7 +217,7 @@ class AnalyticsService
             ->with(['user', 'orders' => fn ($q) => $q->latest()->limit(1)])
             ->whereHas('orders', fn ($q) => $q->whereIn('orders.id', $revenueOrderIds))
             ->addSelect([
-                'total_spend' => Order::selectRaw('SUM(total_amount)')
+                'total_spend' => Order::selectRaw('SUM('.AnalyticsQueryBuilder::revenueExpr().')')
                     ->whereColumn('customer_id', 'customers.id')
                     ->whereIn('id', $revenueOrderIds),
             ])
@@ -346,15 +348,15 @@ class AnalyticsService
         $branches = (clone $query)
             ->select(
                 'branch_id',
-                DB::raw("SUM(CASE
-                    WHEN status != 'cancelled'
-                         AND EXISTS (SELECT 1 FROM payments WHERE payments.order_id = orders.id AND payments.payment_status = 'completed')
-                    THEN total_amount ELSE 0 END) as revenue"),
+                DB::raw('SUM(CASE
+                    WHEN status != \'cancelled\'
+                         AND EXISTS (SELECT 1 FROM payments WHERE payments.order_id = orders.id AND payments.payment_status = \'completed\')
+                    THEN '.AnalyticsQueryBuilder::revenueExpr().' ELSE 0 END) as revenue'),
                 DB::raw('COUNT(*) as total_orders'),
-                DB::raw("AVG(CASE
-                    WHEN status != 'cancelled'
-                         AND EXISTS (SELECT 1 FROM payments WHERE payments.order_id = orders.id AND payments.payment_status = 'completed')
-                    THEN total_amount ELSE NULL END) as avg_value"),
+                DB::raw('AVG(CASE
+                    WHEN status != \'cancelled\'
+                         AND EXISTS (SELECT 1 FROM payments WHERE payments.order_id = orders.id AND payments.payment_status = \'completed\')
+                    THEN '.AnalyticsQueryBuilder::revenueExpr().' ELSE NULL END) as avg_value'),
                 DB::raw("COUNT(CASE WHEN status IN ('completed', 'delivered') THEN 1 END) as completed_orders"),
                 DB::raw("COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders")
             )
@@ -483,7 +485,7 @@ class AnalyticsService
 
         // Build dynamic breakdown for all order types
         $types = $orderTypes->map(function ($row) use ($query, $totalOrders) {
-            $revenue = (clone $query)->where('order_type', $row->order_type)->sum('total_amount');
+            $revenue = (clone $query)->where('order_type', $row->order_type)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr()));
 
             return [
                 'type' => $row->order_type,
@@ -500,8 +502,11 @@ class AnalyticsService
         return [
             'delivery_pct' => $totalOrders > 0 ? round((($delivery?->count ?? 0) / $totalOrders) * 100) : 0,
             'pickup_pct' => $totalOrders > 0 ? round((($pickup?->count ?? 0) / $totalOrders) * 100) : 0,
-            'delivery_revenue' => round((float) ((clone $query)->where('order_type', 'delivery')->sum('total_amount')), 2),
-            'pickup_revenue' => round((float) ((clone $query)->where('order_type', 'pickup')->sum('total_amount')), 2),
+            // Goods revenue (delivery fee excluded) for orders of each type.
+            'delivery_revenue' => round((float) ((clone $query)->where('order_type', 'delivery')->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr()))), 2),
+            'pickup_revenue' => round((float) ((clone $query)->where('order_type', 'pickup')->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr()))), 2),
+            // Third-party delivery fees collected (pass-through to riders) — tracked separately.
+            'delivery_fees' => $this->queryBuilder->computeDeliveryFees($filters),
             'types' => $types,
         ];
     }
@@ -566,8 +571,8 @@ class AnalyticsService
             ->select(
                 'order_source',
                 DB::raw('COUNT(*) as count'),
-                DB::raw('AVG(total_amount) as avg_value'),
-                DB::raw('SUM(total_amount) as total_revenue')
+                DB::raw('AVG('.AnalyticsQueryBuilder::revenueExpr().') as avg_value'),
+                DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as total_revenue')
             )
             ->groupBy('order_source')
             ->get();
@@ -663,7 +668,7 @@ class AnalyticsService
                 'promo_name',
                 DB::raw('COUNT(*) as usage_count'),
                 DB::raw('SUM(discount) as total_discount'),
-                DB::raw('SUM(total_amount) as revenue_generated')
+                DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue_generated')
             )
             ->groupBy('promo_id', 'promo_name')
             ->get();
@@ -768,21 +773,23 @@ class AnalyticsService
         $todayFilters = array_merge($filters, ['date_from' => $today, 'date_to' => $today]);
 
         $revenueToday = $this->queryBuilder->computeRevenue($todayFilters);
+        $deliveryFeesToday = $this->queryBuilder->computeDeliveryFees($todayFilters);
         $ordersToday = $this->queryBuilder->computePlacedOrderCount($todayFilters);
         $activeOrders = $this->queryBuilder->activeOrders($filters)->count();
 
         $cancelledToday = $this->queryBuilder->cancelledOrders($todayFilters)->count();
         $cancelledRevenueToday = round(
-            (float) $this->queryBuilder->cancelledOrders($todayFilters)->sum('total_amount'),
+            (float) $this->queryBuilder->cancelledOrders($todayFilters)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr())),
             2
         );
 
         $noChargeQuery = $this->queryBuilder->noChargeOrders($todayFilters);
         $noChargeToday = (clone $noChargeQuery)->count();
-        $noChargeTodayAmount = round((float) (clone $noChargeQuery)->sum('total_amount'), 2);
+        $noChargeTodayAmount = round((float) (clone $noChargeQuery)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr())), 2);
 
         return [
             'revenue_today' => $revenueToday,
+            'delivery_fees_today' => $deliveryFeesToday, // third-party rider pass-through, excluded from revenue
             'orders_today' => $ordersToday,
             'active_orders' => $activeOrders,
             'cancelled_today' => $cancelledToday,
@@ -823,7 +830,7 @@ class AnalyticsService
 
         $revenueByBranch = $this->queryBuilder->revenueOrders($filters)
             ->whereIn('branch_id', $branchIds)
-            ->select('branch_id', DB::raw('SUM(total_amount) as revenue'))
+            ->select('branch_id', DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue'))
             ->groupBy('branch_id')
             ->pluck('revenue', 'branch_id');
 
@@ -902,7 +909,7 @@ class AnalyticsService
         $dailyBreakdown = (clone $this->queryBuilder->revenueOrders($filters))
             ->select(
                 DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total_amount) as revenue'),
+                DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue'),
                 DB::raw('COUNT(*) as orders')
             )
             ->groupBy('date')
@@ -947,7 +954,7 @@ class AnalyticsService
             'month_revenue' => $this->queryBuilder->computeRevenue($monthFilters),
             'today_cancelled' => $this->queryBuilder->cancelledOrders($todayFilters)->count(),
             'today_cancelled_revenue' => round(
-                (float) $this->queryBuilder->cancelledOrders($todayFilters)->sum('total_amount'),
+                (float) $this->queryBuilder->cancelledOrders($todayFilters)->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr())),
                 2
             ),
         ];
@@ -992,7 +999,7 @@ class AnalyticsService
         ];
 
         $dailyRevenue = (clone $this->queryBuilder->revenueOrders($filters))
-            ->selectRaw('DATE(created_at) as date, SUM(total_amount) as revenue')
+            ->selectRaw('DATE(created_at) as date, SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue')
             ->groupBy('date')
             ->orderBy('date')
             ->get()
@@ -1131,7 +1138,7 @@ class AnalyticsService
         $rows = (clone $this->queryBuilder->revenueOrders($filters))
             ->select(
                 DB::raw("{$keyExpr} as period"),
-                DB::raw('SUM(total_amount) as revenue'),
+                DB::raw('SUM('.AnalyticsQueryBuilder::revenueExpr().') as revenue'),
                 DB::raw('COUNT(*) as orders')
             )
             ->groupBy(DB::raw($keyExpr))
@@ -1327,7 +1334,7 @@ class AnalyticsService
 
         $rows = $this->queryBuilder->revenueOrders($branchFilters)
             ->whereNotNull('customer_id')
-            ->selectRaw('customer_id, COUNT(*) as order_count, SUM(total_amount) as total_spend, MIN(created_at) as first_order, MAX(created_at) as last_order')
+            ->selectRaw('customer_id, COUNT(*) as order_count, SUM('.AnalyticsQueryBuilder::revenueExpr().') as total_spend, MIN(created_at) as first_order, MAX(created_at) as last_order')
             ->groupBy('customer_id')
             ->get();
 
@@ -1698,7 +1705,7 @@ class AnalyticsService
                 'branch_id' => $branch->id,
                 'date_from' => $monthStart->toDateString(),
                 'date_to' => $monthEnd->toDateString(),
-            ])->sum('total_amount');
+            ])->sum(DB::raw(AnalyticsQueryBuilder::revenueExpr()));
 
             $target = (float) ($targets->get($branch->id)->target_amount ?? 0);
             $attainment = $target > 0 ? round(($actual / $target) * 100, 1) : 0.0;
