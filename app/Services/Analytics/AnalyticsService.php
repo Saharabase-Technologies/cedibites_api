@@ -592,10 +592,13 @@ class AnalyticsService
 
     public function getPaymentStats(array $filters = []): array
     {
-        $query = Payment::query();
+        // Join orders so totals are GOODS only (exclude the third-party delivery
+        // fee). A payment's amount is always >= goods (full total historically, or
+        // goods post-cutover), so per-payment goods = the order's goods amount.
+        $query = Payment::query()->join('orders', 'payments.order_id', '=', 'orders.id');
 
         if (isset($filters['branch_id'])) {
-            $query->whereHas('order', fn ($q) => $q->where('branch_id', $filters['branch_id']));
+            $query->where('orders.branch_id', $filters['branch_id']);
         }
 
         if (isset($filters['date_from'])) {
@@ -607,30 +610,21 @@ class AnalyticsService
         }
 
         $rows = (clone $query)
-            ->selectRaw('payment_status, COUNT(*) as count, SUM(amount) as total')
-            ->groupBy('payment_status')
+            ->selectRaw('payments.payment_status, COUNT(*) as count, SUM(orders.total_amount - COALESCE(orders.delivery_fee, 0)) as total')
+            ->groupBy('payments.payment_status')
             ->get()
             ->keyBy('payment_status');
 
-        // For no_charge, sum the order total_amount (payment amount is always 0)
-        $noChargeOrderTotal = (clone $query)
-            ->where('payments.payment_status', 'no_charge')
-            ->join('orders', 'payments.order_id', '=', 'orders.id')
-            ->sum('orders.total_amount');
-
         $stat = fn (string $status) => [
             'count' => (int) ($rows[$status]->count ?? 0),
-            'total' => (float) ($rows[$status]->total ?? 0),
+            'total' => round((float) ($rows[$status]->total ?? 0), 2),
         ];
 
         return [
             'completed' => $stat('completed'),
             'pending' => $stat('pending'),
             'refunded' => $stat('refunded'),
-            'no_charge' => [
-                'count' => (int) ($rows['no_charge']->count ?? 0),
-                'total' => (float) $noChargeOrderTotal,
-            ],
+            'no_charge' => $stat('no_charge'),
         ];
     }
 
