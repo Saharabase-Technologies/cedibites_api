@@ -1,0 +1,56 @@
+<?php
+
+namespace App\Models\Inventory;
+
+use App\Enums\Inventory\DailyClosingStatus;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class DailyClosing extends Model
+{
+    use SoftDeletes;
+
+    protected $table = 'inventory_daily_closings';
+
+    protected $fillable = [
+        'location_id',
+        'business_date',
+        'status',
+        'notes',
+        'opened_by',
+        'completed_by',
+        'completed_at',
+    ];
+
+    public function lines(): HasMany
+    {
+        return $this->hasMany(DailyClosingLine::class, 'daily_closing_id');
+    }
+
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(Location::class, 'location_id');
+    }
+
+    public function openedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'opened_by');
+    }
+
+    public function completedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'completed_by');
+    }
+
+    protected function casts(): array
+    {
+        return [
+            'status' => DailyClosingStatus::class,
+            'business_date' => 'date',
+            'completed_at' => 'datetime',
+        ];
+    }
+}

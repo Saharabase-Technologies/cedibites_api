@@ -1,12 +1,14 @@
 <?php
 
 use App\Http\Controllers\Api\Inventory\CatalogController;
+use App\Http\Controllers\Api\Inventory\DailyClosingController;
 use App\Http\Controllers\Api\Inventory\ProductionController;
 use App\Http\Controllers\Api\Inventory\ProductionRunController;
 use App\Http\Controllers\Api\Inventory\PurchaseController;
 use App\Http\Controllers\Api\Inventory\PurchaseOrderController;
 use App\Http\Controllers\Api\Inventory\RecipeController;
 use App\Http\Controllers\Api\Inventory\ReportController;
+use App\Http\Controllers\Api\Inventory\RequisitionController;
 use App\Http\Controllers\Api\Inventory\TransferController;
 use Illuminate\Support\Facades\Route;
 
@@ -115,6 +117,27 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
                 ->middleware('permission:inventory.recipe.lock')->name('lock');
         });
 
+        // ── Requisitions (branch stock requests → spawn a transfer on approve) ─
+        Route::prefix('requisitions')->name('requisitions.')->group(function () {
+            Route::get('/', [RequisitionController::class, 'index'])
+                ->middleware('permission:view_inventory_catalog')->name('index');
+            Route::get('{requisition}', [RequisitionController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+
+            Route::post('/', [RequisitionController::class, 'store'])
+                ->middleware('permission:inventory.requisition.create')->name('store');
+            Route::patch('{requisition}', [RequisitionController::class, 'update'])
+                ->middleware('permission:inventory.requisition.create')->name('update');
+            Route::post('{requisition}/submit', [RequisitionController::class, 'submit'])
+                ->middleware('permission:inventory.requisition.create')->name('submit');
+
+            // Warehouse manager decides — approving spawns the fulfilling transfer.
+            Route::post('{requisition}/approve', [RequisitionController::class, 'approve'])
+                ->middleware('permission:inventory.requisition.approve')->name('approve');
+            Route::post('{requisition}/reject', [RequisitionController::class, 'reject'])
+                ->middleware('permission:inventory.requisition.approve')->name('reject');
+        });
+
         // ── Transfers (stock movement between locations) ─────────────────────
         Route::prefix('transfers')->name('transfers.')->group(function () {
             Route::get('/', [TransferController::class, 'index'])
@@ -141,6 +164,22 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
                 ->middleware('permission:inventory.transfer.receive')->name('receive');
             Route::post('{transfer}/resolve-dispute', [TransferController::class, 'resolveDispute'])
                 ->middleware('permission:inventory.transfer.resolve_dispute')->name('resolve-dispute');
+        });
+
+        // ── Daily closing (mandatory end-of-day count → variance) ────────────
+        Route::prefix('daily-closings')->name('daily-closings.')->group(function () {
+            Route::get('/', [DailyClosingController::class, 'index'])
+                ->middleware('permission:view_inventory_catalog')->name('index');
+            // Calendar (missed-day coverage) — must precede the {dailyClosing} wildcard.
+            Route::get('calendar', [DailyClosingController::class, 'calendar'])
+                ->middleware('permission:view_inventory_catalog')->name('calendar');
+            Route::get('{dailyClosing}', [DailyClosingController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+
+            Route::post('/', [DailyClosingController::class, 'store'])
+                ->middleware('permission:inventory.daily_closing.enter')->name('store');
+            Route::patch('{dailyClosing}', [DailyClosingController::class, 'update'])
+                ->middleware('permission:inventory.daily_closing.enter')->name('update');
         });
 
         // ── Reports ──────────────────────────────────────────────────────────

@@ -18,3 +18,14 @@ Broadcast::channel('orders.branch.{branchId}', function ($user, $branchId) {
 Broadcast::channel('inventory.purchase-orders', function ($user) {
     return $user->can(\App\Enums\Permission::InventoryPurchaseView->value);
 });
+
+// IMS stock-transfer live updates — any user who can view the inventory catalog
+// may listen (transfer index/show are gated by the same permission).
+Broadcast::channel('inventory.transfers', function ($user) {
+    return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
+});
+
+// IMS requisition live updates — same visibility rule as transfers.
+Broadcast::channel('inventory.requisitions', function ($user) {
+    return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
+});

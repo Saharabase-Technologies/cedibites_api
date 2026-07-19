@@ -14,12 +14,15 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Automatic stock deduction driven by recipes/BOM. When an order is paid, each
- * order line's option recipe is resolved and its ingredients are deducted from
- * the central warehouse (negative `sale` movements). Fully idempotent per order
- * line + item, so re-firing the payment-confirmed signal never double-deducts.
+ * order line's option recipe is resolved and its ingredients are deducted
+ * (negative `sale` movements) from the location that actually fulfilled the sale:
+ * the order's own branch. A branch with no inventory location mapped yet falls
+ * back to the central warehouse (logged), so the transition degrades gracefully.
+ * Fully idempotent per order + item, so re-firing the payment-confirmed signal
+ * never double-deducts.
  *
- * MVP simplifications (see plan): deduct from the single warehouse; recipe
- * ingredient quantities are taken in the item's base unit (no unit conversion).
+ * MVP simplification: recipe ingredient quantities are taken in the item's base
+ * unit (no unit conversion).
  */
 class RecipeDeductionService
 {
@@ -40,9 +43,11 @@ class RecipeDeductionService
             return;
         }
 
-        $location = $this->warehouseLocation();
+        $location = $this->resolveDeductionLocation($order);
         if (! $location) {
-            Log::warning('Recipe deduction skipped: no active warehouse location.', ['order_id' => $order->id]);
+            Log::warning('Recipe deduction skipped: no inventory location for the order.', [
+                'order_id' => $order->id, 'branch_id' => $order->branch_id,
+            ]);
 
             return;
         }
@@ -172,6 +177,33 @@ class RecipeDeductionService
             ->orderByRaw('branch_id IS NULL') // branch-specific (NOT NULL) first
             ->orderByRaw("status = 'locked' DESC")
             ->first();
+    }
+
+    /**
+     * The location a sale is deducted from: the order's branch (now that branch
+     * stock exists via transfers/requisitions). Falls back to the warehouse when
+     * the branch has no inventory location mapped yet, so nothing silently stops
+     * deducting during the roll-out.
+     */
+    private function resolveDeductionLocation(Order $order): ?Location
+    {
+        if ($order->branch_id) {
+            $branchLocation = Location::query()
+                ->where('branch_id', $order->branch_id)
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->first();
+
+            if ($branchLocation) {
+                return $branchLocation;
+            }
+
+            Log::info('Recipe deduction: branch has no inventory location, falling back to warehouse.', [
+                'order_id' => $order->id, 'branch_id' => $order->branch_id,
+            ]);
+        }
+
+        return $this->warehouseLocation();
     }
 
     private function warehouseLocation(): ?Location

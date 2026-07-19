@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Inventory;
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Permission;
+use App\Events\Inventory\TransferBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\TransferResource;
 use App\Models\Inventory\Transfer;
@@ -23,6 +24,7 @@ class TransferController extends Controller
         'approvedBy',
         'sentBy',
         'receivedBy',
+        'cancelledBy',
     ];
 
     public function __construct(
@@ -59,10 +61,12 @@ class TransferController extends Controller
             'items.*.requested_qty' => ['required', 'numeric', 'gt:0'],
         ]);
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->create($data, $request->user())),
-            'Transfer created.',
-        ));
+        return $this->guard(function () use ($data, $request) {
+            $transfer = $this->service->create($data, $request->user());
+            $this->broadcast($transfer, 'created');
+
+            return response()->success($this->fresh($transfer), 'Transfer created.');
+        });
     }
 
     public function update(Request $request, Transfer $transfer): JsonResponse
@@ -74,10 +78,12 @@ class TransferController extends Controller
             'items.*.requested_qty' => ['required_with:items', 'numeric', 'gt:0'],
         ]);
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->update($transfer, $data)),
-            'Transfer updated.',
-        ));
+        return $this->guard(function () use ($transfer, $data) {
+            $updated = $this->service->update($transfer, $data);
+            $this->broadcast($updated, 'updated');
+
+            return response()->success($this->fresh($updated), 'Transfer updated.');
+        });
     }
 
     /** draft → submitted (source-stock validated; admin may override the deficit). */
@@ -88,19 +94,23 @@ class TransferController extends Controller
             return response()->forbidden('Overriding the source-stock check requires admin permission.');
         }
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->submit($transfer, $request->user(), $override)),
-            'Transfer submitted.',
-        ));
+        return $this->guard(function () use ($transfer, $request, $override) {
+            $updated = $this->service->submit($transfer, $request->user(), $override);
+            $this->broadcast($updated, 'submitted');
+
+            return response()->success($this->fresh($updated), 'Transfer submitted.');
+        });
     }
 
     /** submitted → approved (release authority — gated by transfer.send). */
     public function approve(Request $request, Transfer $transfer): JsonResponse
     {
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->approve($transfer, $request->user())),
-            'Transfer approved.',
-        ));
+        return $this->guard(function () use ($transfer, $request) {
+            $updated = $this->service->approve($transfer, $request->user());
+            $this->broadcast($updated, 'approved');
+
+            return response()->success($this->fresh($updated), 'Transfer approved.');
+        });
     }
 
     /** approved → sent (deducts source, FEFO). */
@@ -114,10 +124,12 @@ class TransferController extends Controller
         $sentQty = collect($request->input('lines', []))
             ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['sent_qty']])->all();
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->send($transfer, $request->user(), $sentQty)),
-            'Transfer sent.',
-        ));
+        return $this->guard(function () use ($transfer, $request, $sentQty) {
+            $updated = $this->service->send($transfer, $request->user(), $sentQty);
+            $this->broadcast($updated, 'sent');
+
+            return response()->success($this->fresh($updated), 'Transfer sent.');
+        });
     }
 
     /** sent → received | disputed (adds to destination, FEFO batches rebuilt). */
@@ -132,10 +144,12 @@ class TransferController extends Controller
         $receivedQty = collect($request->input('lines', []))
             ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['received_qty']])->all();
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->receive($transfer, $request->user(), $receivedQty, $request->input('dispute_reason'))),
-            'Transfer received.',
-        ));
+        return $this->guard(function () use ($transfer, $request, $receivedQty) {
+            $updated = $this->service->receive($transfer, $request->user(), $receivedQty, $request->input('dispute_reason'));
+            $this->broadcast($updated, $updated->status->value);
+
+            return response()->success($this->fresh($updated), 'Transfer received.');
+        });
     }
 
     /** disputed → closed_disputed (spawns a corrective transfer for the shortfall). */
@@ -143,25 +157,40 @@ class TransferController extends Controller
     {
         $request->validate(['notes' => ['nullable', 'string', 'max:1000']]);
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->resolveDispute($transfer, $request->user(), $request->input('notes'))),
-            'Dispute resolved — corrective transfer created.',
-        ));
+        return $this->guard(function () use ($transfer, $request) {
+            $updated = $this->service->resolveDispute($transfer, $request->user(), $request->input('notes'));
+            $this->broadcast($updated, 'resolved');
+
+            return response()->success($this->fresh($updated), 'Dispute resolved — corrective transfer created.');
+        });
     }
 
     public function cancel(Request $request, Transfer $transfer): JsonResponse
     {
         $data = $request->validate(['reason' => ['required', 'string', 'max:1000']]);
 
-        return $this->guard(fn () => response()->success(
-            $this->fresh($this->service->cancel($transfer, $request->user(), $data['reason'])),
-            'Transfer cancelled.',
-        ));
+        return $this->guard(function () use ($transfer, $request, $data) {
+            $updated = $this->service->cancel($transfer, $request->user(), $data['reason']);
+            $this->broadcast($updated, 'cancelled');
+
+            return response()->success($this->fresh($updated), 'Transfer cancelled.');
+        });
     }
 
     private function fresh(Transfer $transfer): TransferResource
     {
         return new TransferResource($transfer->fresh(self::RELATIONS));
+    }
+
+    /** Fan out a lightweight change signal so every listening screen refetches. */
+    private function broadcast(Transfer $transfer, string $changeType): void
+    {
+        TransferBroadcastEvent::dispatch(
+            $transfer->id,
+            $transfer->reference,
+            $transfer->status->value,
+            $changeType,
+        );
     }
 
     private function guard(callable $fn): JsonResponse

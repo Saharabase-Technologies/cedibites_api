@@ -71,6 +71,86 @@ it('deducts recipe ingredients from the warehouse when an order is paid', functi
         ->and(StockMovement::where('movement_type', 'sale')->where('reference_id', $order->id)->count())->toBe(1);
 });
 
+it('deducts from the order\'s branch location when the branch has one mapped', function () {
+    $branch = App\Models\Branch::factory()->create();
+    $branchLocation = Location::factory()->satellite()->create(['branch_id' => $branch->id]);
+
+    // 50 units on hand at the branch (arrived via a transfer).
+    $this->engine->post([
+        'item_id' => $this->item->id,
+        'location_id' => $branchLocation->id,
+        'quantity' => 50,
+        'movement_type' => 'transfer_in',
+        'unit_cost_at_time' => 5.0,
+        'idempotency_key' => 'seed-branch',
+    ]);
+
+    $option = MenuItemOption::factory()->create();
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 0.5);
+
+    $order = Order::factory()->create(['branch_id' => $branch->id]);
+    OrderItem::factory()->create([
+        'order_id' => $order->id,
+        'menu_item_id' => $option->menu_item_id,
+        'menu_item_option_id' => $option->id,
+        'quantity' => 4,
+    ]);
+
+    $this->service->deductForOrder($order);
+
+    // Deducts from the branch, leaving the warehouse untouched.
+    expect(onHand($this->item->id, $branchLocation->id))->toBe(48.0)        // 50 - (0.5 × 4)
+        ->and(onHand($this->item->id, $this->warehouse->id))->toBe(100.0)
+        ->and(StockMovement::where('movement_type', 'sale')->where('reference_id', $order->id)->where('location_id', $branchLocation->id)->count())->toBe(1);
+});
+
+it('reverses a branch deduction back to the branch on refund', function () {
+    $branch = App\Models\Branch::factory()->create();
+    $branchLocation = Location::factory()->satellite()->create(['branch_id' => $branch->id]);
+    $this->engine->post([
+        'item_id' => $this->item->id,
+        'location_id' => $branchLocation->id,
+        'quantity' => 50,
+        'movement_type' => 'transfer_in',
+        'unit_cost_at_time' => 5.0,
+        'idempotency_key' => 'seed-branch-refund',
+    ]);
+
+    $option = MenuItemOption::factory()->create();
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 0.5);
+
+    $order = Order::factory()->create(['branch_id' => $branch->id]);
+    OrderItem::factory()->create([
+        'order_id' => $order->id,
+        'menu_item_id' => $option->menu_item_id,
+        'menu_item_option_id' => $option->id,
+        'quantity' => 4,
+    ]);
+
+    $this->service->deductForOrder($order);
+    $this->service->reverseForOrder($order);
+
+    expect(onHand($this->item->id, $branchLocation->id))->toBe(50.0);
+});
+
+it('falls back to the warehouse when the order branch has no inventory location', function () {
+    // Order's branch has NO mapped inventory location → warehouse fallback.
+    $option = MenuItemOption::factory()->create();
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 0.5);
+
+    $order = Order::factory()->create(); // random branch, unmapped
+    OrderItem::factory()->create([
+        'order_id' => $order->id,
+        'menu_item_id' => $option->menu_item_id,
+        'menu_item_option_id' => $option->id,
+        'quantity' => 4,
+    ]);
+
+    $this->service->deductForOrder($order);
+
+    expect(onHand($this->item->id, $this->warehouse->id))->toBe(98.0);
+});
+
 it('is idempotent — re-firing payment does not double-deduct', function () {
     $option = MenuItemOption::factory()->create();
     makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 0.5);

@@ -22,6 +22,7 @@ class Transfer extends Model
         'destination_location_id',
         'status',
         'parent_transfer_id',
+        'requisition_id',
         'source_validation_overridden_by',
         'notes',
         'created_by',
@@ -57,6 +58,11 @@ class Transfer extends Model
         return $this->belongsTo(self::class, 'parent_transfer_id');
     }
 
+    public function requisition(): BelongsTo
+    {
+        return $this->belongsTo(Requisition::class, 'requisition_id');
+    }
+
     public function dispute(): HasOne
     {
         return $this->hasOne(DisputeResolution::class, 'transfer_id')->latestOfMany();
@@ -80,6 +86,11 @@ class Transfer extends Model
     public function receivedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'received_by');
+    }
+
+    public function cancelledBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by');
     }
 
     protected function casts(): array

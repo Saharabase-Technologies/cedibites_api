@@ -6,9 +6,11 @@ use App\Domain\Inventory\Batches\BatchService;
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
 use App\Domain\Inventory\Support\ReferenceGenerator;
+use App\Enums\Inventory\RequisitionStatus;
 use App\Enums\Inventory\TransferStatus;
 use App\Models\Inventory\Batch;
 use App\Models\Inventory\Item;
+use App\Models\Inventory\Requisition;
 use App\Models\Inventory\Transfer;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -276,10 +278,31 @@ class TransferService
             } else {
                 $transfer->status = TransferStatus::Received;
                 $transfer->save();
+                $this->fulfilRequisition($transfer);
             }
 
             return $transfer;
         });
+    }
+
+    /**
+     * Flip a linked requisition to `fulfilled` once its transfer is received in
+     * full. The single coupling point between the transfer and requisition flows.
+     */
+    private function fulfilRequisition(Transfer $transfer): void
+    {
+        if (! $transfer->requisition_id) {
+            return;
+        }
+
+        $requisition = Requisition::whereKey($transfer->requisition_id)
+            ->where('status', RequisitionStatus::Approved->value)
+            ->first();
+
+        $requisition?->update([
+            'status' => RequisitionStatus::Fulfilled,
+            'fulfilled_at' => now(),
+        ]);
     }
 
     /**
@@ -310,6 +333,9 @@ class TransferService
                     'destination_location_id' => $transfer->destination_location_id,
                     'status' => TransferStatus::Draft,
                     'parent_transfer_id' => $transfer->id,
+                    // Carry the requisition link so fulfilment still tracks once the
+                    // corrective transfer is received.
+                    'requisition_id' => $transfer->requisition_id,
                     'notes' => 'Corrective transfer for disputed '.$transfer->reference,
                     'created_by' => $actor->id,
                 ]);

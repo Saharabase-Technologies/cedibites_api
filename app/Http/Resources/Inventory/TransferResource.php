@@ -52,10 +52,13 @@ class TransferResource extends JsonResource
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'sent_by' => $this->whenLoaded('sentBy', fn () => $this->sentBy?->name),
             'received_by' => $this->whenLoaded('receivedBy', fn () => $this->receivedBy?->name),
+            'cancelled_by' => $this->whenLoaded('cancelledBy', fn () => $this->cancelledBy?->name),
+            'cancel_reason' => $this->cancel_reason,
             'submitted_at' => optional($this->submitted_at)->toIso8601String(),
             'approved_at' => optional($this->approved_at)->toIso8601String(),
             'sent_at' => optional($this->sent_at)->toIso8601String(),
             'received_at' => optional($this->received_at)->toIso8601String(),
+            'cancelled_at' => optional($this->cancelled_at)->toIso8601String(),
             'created_at' => optional($this->created_at)->toIso8601String(),
         ];
     }
