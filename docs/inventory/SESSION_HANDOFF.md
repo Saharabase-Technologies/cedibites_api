@@ -1,130 +1,188 @@
-# IMS Session Handoff — May 5, 2026
+# IMS Session Handoff — July 20, 2026
 
-> **For the next chat session.** Read this first when resuming IMS work.
+> **Read this first when resuming IMS work.** Supersedes the May 5 planning-phase
+> handoff. The IMS outbound (stock-out) roadmap is now **complete end-to-end**
+> (Phases A–E). This doc is the map for making edits.
 
-## Goal / Intent
+Work spans **two repos**, both on branch `feature/ims`:
+- **Backend** — `cedibites_api/` (Laravel 12, PostgreSQL). API served at `/v1`.
+- **Frontend** — `cedibites/` (Next.js 16, React 19). Inventory portal at `/inventory/*`.
 
-Plan and lock the architecture for the **CediBites Inventory Management System (IMS)** before any code is written. Strategic decision phase — Master Orchestrator coordinating, no agents delegated yet.
+Everything below is **committed** on `feature/ims` (frontend HEAD `5994f7a`,
+backend HEAD `4a64f81`) but **not pushed**.
 
-## Progress Summary
+---
 
-- [x] v1 architecture proposed
-- [x] All 8 initial decisions answered
-- [x] Both transcript files (CBIMS + CBIMS 2) read
-- [x] v2 architecture produced with 17 transcript-derived nuances incorporated
-- [x] All 11 locked architectural decisions confirmed
-- [x] All 4 final open decisions answered (G1–G4):
-    - G1: Inter-branch transfer approval → **Branch B's manager approves**
-    - G2: Daily closing entry → **mandatory**
-    - G3: Per-branch recipe override → **full replace, no inheritance**
-    - G4: POS / phone / order serial / SMS / finance → **explicitly out of scope**
-- [x] Foundation files created (this session):
-    - [`cedibites_api/.github/instructions/ims-considerations.instructions.md`](../../.github/instructions/ims-considerations.instructions.md)
-    - [`cedibites/.github/instructions/ims-considerations.instructions.md`](../../../../cedibites/.github/instructions/ims-considerations.instructions.md)
-    - [`cedibites_api/.github/instructions/code-quality.instructions.md`](../../.github/instructions/code-quality.instructions.md)
-    - [`cedibites/.github/instructions/code-quality.instructions.md`](../../../../cedibites/.github/instructions/code-quality.instructions.md)
-    - [`cedibites_api/.github/agents/inventory-auditor.agent.md`](../../.github/agents/inventory-auditor.agent.md)
-    - [`cedibites/.github/agents/inventory-auditor.agent.md`](../../../../cedibites/.github/agents/inventory-auditor.agent.md)
-    - [`cedibites_api/docs/agents/inventory-auditor-kb.md`](../agents/inventory-auditor-kb.md)
-    - [`cedibites_api/docs/inventory/architecture.md`](architecture.md) ← **read this for the full architecture**
-- [ ] DevOps / pipeline audit (beta↔main auto-merge concern) — blocked, awaiting user
-- [ ] Phase 0 kickoff — not started, awaiting user signal
-- [ ] PROJECT_CHRONICLE entries for both repos — not yet written this session
+## 1. The spirit (why this exists)
 
-## Key Decisions Made (All Locked)
+From the founder's transcripts (`CBIMS.txt` / `CBIMS 2.txt`):
 
-See [`ims-considerations.instructions.md` §1–§2](../../.github/instructions/ims-considerations.instructions.md) for the full canonical list. Highlights:
+> *"Inventory management is basically like accounting. Whatever comes in, whatever
+> comes out must cancel out. Where there are discrepancies we allow some within a
+> threshold, then we cancel it out — another cycle begins."*
 
-1. **Same domain, dedicated portal** at `cedibites/app/inventory/` (POS/KDS pattern)
-2. **Separate `inventory_locations` table** (warehouse + satellites), branches table untouched
-3. **Single warehouse MVP**, schema supports N
-4. **Append-only ledger + denormalized balances** with idempotency keys
-5. **Deduction on `OrderCompleted`** event, queued, idempotent
-6. **Recipes**: global default + per-branch override (Admin only, **full replace**, no inheritance), versioned, `draft → observation → locked` status machine
-7. **Weighted-average costing** for MVP
-8. **Batch/FEFO schema present day-one**, UI Phase 3
-9. **Tablet-first** UX, operator vocabulary ("mother kitchen", "satellite", "requisition", etc.)
-10. **Stack**: Laravel 12 + MySQL + Sanctum + Reverb + Next.js 16 — **no Supabase, no new deps**
-11. **Wastage threshold ₵500** default, configurable per location
-12. **Inter-branch transfer**: Branch B's manager approves; warehouse manager notified read-only
-13. **Daily closing entry mandatory**; missed days flagged on variance report
-14. **Disputed transfers immutable**; resolution = NEW corrective transfer linked via `parent_transfer_id`
-15. **Source-stock validation** on every transfer creation (admin override permission required)
-16. **Reconciliation cycles**: manager-initiated, NOT calendar-enforced
-17. **Stock Ledger canonical columns**: Opening · Received · Transfers In · Transfers Out · Sales (BOM) · Wastage · Expected Closing · Actual Closing · Variance
-18. **Out of scope**: POS phone, order serial refactor, service-charge separation, SMS routing, finance module
+Every phase serves this: make **every movement tracked** (transfers, requisitions,
+branch-level sale deductions, daily counts) so the books can be **reconciled to
+zero** periodically. Keep it **simple enough for a non-technical branch operator**
+("the Branch Manager Test"). Mother/central kitchen = warehouse; branches =
+satellite kitchens; the mother feeds the branches.
 
-## Thinking Patterns & Approach
+---
 
-- **Strict module isolation** — `inventory_*` tables only, FKs point OUT only, no ALTERs to existing tables, dedicated queue, one-way event coupling
-- **Append-only ledger as source of truth** — denormalized balances for hot reads; reversals are NEW rows, never edits
-- **Engine pattern for all complex logic** — single-purpose classes, fully unit-testable, no facades inside
-- **Operator-language UX** — "Branch Manager Test": non-technical user understands in 30 seconds
-- **Phased rollout behind feature flag** — frequent small flag-OFF PRs to main, staging on prod-snapshot DB, prod flips after UAT
+## 2. How to run & test
 
-## Challenges & Solutions
+All three servers are typically already running. To start them fresh:
 
-- **Challenge:** Lovable mock had requisition as one-item-per-form. **Resolution:** Confirmed multi-line invoice-style header + lines pattern.
-- **Challenge:** "10 sent / 8 received" disputes — should they edit? **Resolution:** Locked — disputed records permanent, corrective transfer creates new linked record.
-- **Challenge:** No memory tool available for `/memories/handoff.md`. **Resolution:** Wrote handoff to this file in the workspace docs.
-- **Blocker:** DevOps pipeline (beta ↔ main auto-merge concern from user). **Status:** Unresolved, awaiting user to either bring DevOps engineer in or point to pipeline config files for audit before `feature/ims` branch is cut.
+```bash
+# Backend API  (from cedibites_api/)
+php artisan serve                    # http://localhost:8000  (routes under /v1)
+php artisan reverb:start             # realtime, port 8080  (optional)
+# php artisan queue:work             # only if broadcasting is queued (it's ShouldBroadcastNow → not required)
 
-## Files Modified / Created This Session
+# Frontend  (from cedibites/)
+npm run dev                          # http://localhost:3000
+```
 
-- `cedibites_api/.github/instructions/ims-considerations.instructions.md` — NEW (locked decisions, workflow rules, isolation rules, out-of-scope list)
-- `cedibites/.github/instructions/ims-considerations.instructions.md` — NEW (frontend mirror)
-- `cedibites_api/.github/instructions/code-quality.instructions.md` — NEW (file caps, engine pattern, anti-patterns, pre-commit checklist)
-- `cedibites/.github/instructions/code-quality.instructions.md` — NEW (frontend mirror with TS-specific caps)
-- `cedibites_api/.github/agents/inventory-auditor.agent.md` — NEW (canonical agent)
-- `cedibites/.github/agents/inventory-auditor.agent.md` — NEW (frontend mirror)
-- `cedibites_api/docs/agents/inventory-auditor-kb.md` — NEW (institutional memory, §1–§9 sections initialized)
-- `cedibites_api/docs/inventory/architecture.md` — NEW (formal architecture doc, ERD, engines, roadmap)
-- `cedibites_api/docs/inventory/SESSION_HANDOFF.md` — NEW (this file)
+Frontend env (`cedibites/.env.local`): `NEXT_PUBLIC_API_URL=http://localhost:8000/v1`,
+`NEXT_PUBLIC_IMS_MOCK=false` (must be false; it's a build-time var — restart dev
+server if you change it).
 
-## Current State
+**Test accounts** (all password `password`, log in at `/staff/login`):
+| Role | Email | Can do |
+|------|-------|--------|
+| Warehouse Manager | `warehouse@cedibites.test` | everything IMS incl. reconciliation/adjustments |
+| Purchasing Clerk | `purchasing@cedibites.test` | POs + receipts |
+| Admin | `admin@cedibites.com` | full business + PO approvals |
 
-- **Architecture**: locked and documented
-- **Code**: zero IMS code written yet
-- **Branches**: not yet cut — `feature/ims` to be created in both repos when user gives signal
-- **Permissions**: documented in KB §3, not yet registered
-- **Feature flag**: documented, not yet implemented
-- **Master Orchestrator + 7 specialist agents** are aware of IMS via the always-on instruction file
+After login the WM lands on `/inventory/dashboard`. Sidebar → **Transfers,
+Requisitions, Daily Closing, Reconciliation** (+ Purchasing, Catalog, Configure).
 
-## Next Steps (Ordered)
+**Smoke-test the reconciliation loop (Phase E), the newest work:**
+1. `/inventory/reconciliation` → pick a location → **Open reconciliation**.
+2. Enter counts (or "Match all to system", then tweak one item to create a variance).
+3. **Post & reset** → confirm. Balances are corrected; cycle closes; net variance shown.
+4. Re-open a cycle → the snapshot reflects the corrected balances ("new cycle begins").
 
-1. **DevOps pipeline audit** — verify beta/main auto-merge behavior, confirm staging exists with prod-snapshot capability. User must surface DevOps engineer or point to pipeline config files (`.github/workflows/`, deploy scripts).
-2. **Update both `PROJECT_CHRONICLE.md` files** with this session's decisions (was on TODO, deprioritized due to context). Project Chronicle agent can do this in next session.
-3. **User signal to begin Phase 0** — once DevOps is clear:
-    - Cut `feature/ims` branch in both repos
-    - Generate Phase 0 backlog (scaffold, feature flag, route group, permissions registration, locations CRUD, items/categories/units/suppliers CRUD, warehouse-portal three-section layout)
-    - Delegate via Master Orchestrator: IAM Auditor (permissions), Inventory Auditor (backend scaffold), UX Architect (portal shell), Project Chronicle (record decisions)
-4. **Phase 0 → 1 → 2 → 3 → 4** as per [architecture.md §13](architecture.md)
+---
 
-## Important Context
+## 3. What was built (Phases A–E)
 
-- **Transcript files were read in full** — both CBIMS and CBIMS 2 transcripts were attached and parsed, with 17 specific nuances surfaced (see message exchange). Sections 12–15 of user's summary are explicitly out-of-scope.
-- **Operator vocabulary matters** — "mother kitchen" / "satellite kitchen" / etc. UI copy must use these terms. Code can stay neutral.
-- **Simplicity is a product principle** — encoded in instruction file. Branch Manager Test: 30-second comprehension by non-technical operator.
-- **Two new roles introduced**: `Purchasing Clerk` and `Warehouse Manager` — IAM Auditor must register their permissions in Phase 0.
-- **Ingredient deduction is the highest-risk integration** — touches Order completion path. Phase 3 work; Order Auditor must confirm `OrderCompleted` event payload includes `branch_id` and line items with `menu_item_id` + `quantity`.
-- **Stock Ledger report has FIXED columns** — do not invent variations.
-- **Wastage threshold default is ₵500 GHS** — configurable per location via `inventory_settings`.
+The stock-out flow: **PO/Purchase → warehouse stock → (Requisition→)Transfer →
+branch stock → Sale deducts branch → Daily count → Reconciliation trues-up.**
 
-## Workspace & Branch Info
+### Phase A — Transfers frontend
+Physical stock movement (mother ⇄ satellite). Lifecycle
+`draft→submitted→approved→sent→received→closed`, `sent↘disputed→closed_disputed`,
+`(draft|submitted|approved)→cancelled`. Stock leaves source at **sent** (FEFO),
+arrives at dest on **receive**; short receipt → dispute → corrective transfer.
+- FE: `app/inventory/transfers/**`, `lib/api/services/inventory/transfers.service.ts`,
+  `lib/api/hooks/inventory/useTransfers.ts`, `_components/TransferStatusBadge.tsx`.
+- BE (pre-existing + broadcast added): `app/Domain/Inventory/Transfers/TransferService.php`,
+  `TransferController`, `TransferBroadcastEvent`.
 
-- Workspace folders:
-    - `c:\Users\iamjn\Desktop\WEBZ\CediBites\cedibites` — Frontend (Next.js 16). Branch: `main`. Default: `main`.
-    - `c:\Users\iamjn\Desktop\WEBZ\cedibites_api\cedibites_api` — Backend (Laravel 12). Branch: `master`. Default: `master`.
-- No `feature/ims` branches exist yet. Do NOT cut them until DevOps audit clears.
-- No running processes started this session.
+### Phase B — Requisitions (full-stack)
+The request layer in front of transfers. `draft→submitted→approved→fulfilled`,
+`↘rejected`. **Approving auto-spawns a draft transfer** (warehouse→branch) and, when
+that transfer is **received in full**, the requisition **auto-flips to fulfilled**
+(the coupling lives in `TransferService::receive()` → `fulfilRequisition()`; the
+link propagates onto corrective transfers). MVP = warehouse→branch only.
+- BE: `app/Domain/Inventory/Requisitions/RequisitionService.php`, `RequisitionController`,
+  `Requisition`/`RequisitionLine` models, `RequisitionResource`, migrations
+  `..._create_inventory_requisitions_table` (+ lines, + `requisition_id` on transfers).
+- FE: `app/inventory/requisitions/**`, `requisitions.service.ts`, `useRequisitions.ts`.
 
-## How to Resume
+### Phase C — Sales deduction re-pointed to the branch (backend-only)
+`RecipeDeductionService::resolveDeductionLocation()` now deducts a paid order's
+BOM ingredients from the **order's branch** inventory location
+(`inventory_locations.branch_id = order.branch_id`), **falling back to the
+warehouse** when a branch has no location mapped (logged). Refunds + negative-stock
+alerts follow to the branch automatically.
 
-1. Read this file fully.
-2. Read [`cedibites_api/docs/inventory/architecture.md`](architecture.md).
-3. Read [`cedibites_api/docs/agents/inventory-auditor-kb.md`](../agents/inventory-auditor-kb.md).
-4. Confirm with user:
-    - DevOps pipeline status (gating Phase 0 kickoff)
-    - Whether to update PROJECT_CHRONICLE.md files now
-    - Whether to begin Phase 0 backlog generation
-5. Proceed via Master Orchestrator decomposition + delegation protocol.
+### Phase D — Daily Closing (full-stack)
+Mandatory end-of-day count → variance. `open→completed`. Opening snapshots expected
+qty from the ledger; operator counts; completing requires **every** line counted.
+14-day **coverage strip flags missed days**. Does **not** adjust stock (that's Phase E).
+- BE: `app/Domain/Inventory/Closing/DailyClosingService.php` (+ `calendar()`), controller,
+  `DailyClosing`/`DailyClosingLine`, migrations.
+- FE: `app/inventory/daily-closing/**`, `dailyClosings.service.ts`, `useDailyClosings.ts`.
+
+### Phase E — Reconciliation (full-stack) — the loop closes
+Stock-take that **posts adjustments and resets the books**. `open→closed`. Opening
+snapshots system qty + weighted cost; operator counts everything; **posting writes a
+`cycle_adjustment` movement per non-zero variance** (via `MovementPostingEngine`) so
+the ledger equals the count, then closes. One open cycle per location. Variances
+worth > **₵500** (flat const) are flagged (red flag, still reconciled). Gated to the
+**warehouse manager** (`inventory.reconciliation.adjust`) — *"he would do the adjustments."*
+- BE: `app/Domain/Inventory/Reconciliation/ReconciliationService.php`, `ReconciliationController`,
+  `ReconciliationCycle`/`ReconciliationLine`, `ReconciliationCycleResource`, migrations
+  `2026_07_20_100001/100002_*`.
+- FE: `app/inventory/reconciliation/**`, `reconciliations.service.ts`, `useReconciliations.ts`.
+
+---
+
+## 4. Patterns to follow when editing (keep it consistent)
+
+- **Types are the contract.** `cedibites/types/inventory.ts` mirrors each backend
+  `*Resource` exactly. Backend resources return **actor NAME strings** (not objects),
+  nested `{id,name,type}` locations, and per-stage ISO timestamps. When a backend
+  field changes, update the type first, then services/components. (The original
+  speculative types were wrong — always re-derive from the resource.)
+- **API layer:** `lib/api/services/inventory/*.service.ts` (thin axios wrappers,
+  `extractData` unwraps `{data}`) → `lib/api/hooks/inventory/use*.ts` (React Query;
+  query key `['inventory', <domain>]`; mutations invalidate that key).
+- **Pages:** `app/inventory/<domain>/page.tsx` (server wrapper) → `_components/*Page.tsx`
+  (client). Detail = `[id]/page.tsx`. Shared UI from `app/inventory/_components`
+  (`PageHeader`, `DataTable`, `FilterBar`, `FormField/TextInput/Select/Textarea/PrimaryButton`,
+  `InventoryModal`, `*StatusBadge`). Permission gating via `useStaffAuth().can('perm.string')`.
+- **Backend writes:** all go through a domain **Service** in `app/Domain/Inventory/<Domain>/`;
+  controllers validate + call the service + dispatch a `*BroadcastEvent` + return a Resource.
+  The **only** ledger writer is `MovementPostingEngine::post()` (idempotent via
+  `idempotency_key`). Domain errors throw `InventoryException` → controller `guard()` → 422.
+- **Realtime:** `*BroadcastEvent` (ShouldBroadcastNow, channel `inventory.<domain>`,
+  event `.<domain>.updated`) + `routes/channels.php` auth (gated `view_inventory_catalog`)
+  + FE `use*Realtime.ts` invalidates the query key.
+- **Permissions** live in `app/Enums/Permission.php`, granted in `database/seeders/RoleSeeder.php`,
+  registered by `PermissionSeeder`. Gate reads with `view_inventory_catalog`.
+- **Reference numbers:** `ReferenceGenerator` → `PREFIX-YYMMDD-NNN` (TRF/REQ/PO/RCP/PROD).
+- **Tests:** `tests/Feature/Inventory/*Test.php` (Pest). Run `php artisan test tests/Feature/Inventory`
+  → **53 passing**. Note the test DB is **sqlite :memory:** — `date` columns store a full
+  datetime string there, so **query dates with `whereDate()`**, never `where()`/`whereBetween()`.
+
+Verify a FE change compiles: `npx tsc --noEmit` (ignore the stale `.next/…/validator.ts`
+error) and curl the route on :3000 for HTTP 200.
+
+---
+
+## 5. Known gaps / candidate next work
+
+- **Inventory dashboard is mock-backed on the BACKEND** — no `/inventory/dashboard/stats`
+  or alerts read endpoint; FE `dashboard.service.ts` expects them, stat cards silently
+  don't render. Building these + surfacing `inventory_alerts` (negative-stock, over-threshold)
+  is the highest-value next step.
+- No **IMS settings table** — thresholds are constants (reconciliation ₵500). A
+  per-location settings table would let thresholds be configured; IMS Settings
+  "Assign role" is still a stub.
+- **Inter-branch** transfers/requisitions deferred (warehouse→branch only for MVP).
+  The transcript wants branch→branch with the source branch's manager approving.
+- **Wastage** flow: schema/threshold discussed but no full build; return-to-warehouse
+  evidence flow for disputed wastage not implemented.
+- No production void/reversal; no near-expiry report **page** (endpoint exists);
+  no Edit-Item form; no delete/deactivate for catalog entities; recipe editor is
+  global-only UI; no unit conversion (recipe qty assumed in item base unit).
+- **Pre-existing:** unauthenticated API requests to IMS routes 500 instead of 401
+  (auth-exception not rendered as JSON) — cosmetic; authenticated use is fine.
+- **Beyond IMS:** the founder's next big (separate) build is the **finance/accounting
+  rollup** — cost-to-run vs revenue vs taxes/salaries, service-charge separation, CEO
+  dashboard — *"once we get the inventory money right."* Out of scope for IMS.
+
+---
+
+## 6. Locked decisions (context for edits)
+
+- Requisition approve → **auto-spawn transfer + auto-fulfill on receipt**; **warehouse→branch only** (2026-07-19).
+- Reconciliation = **standalone cycle** (architecture §6.5), posts `cycle_adjustment`, resets to zero; WM-only.
+- Disputed transfers are **immutable**; reconciled by a NEW corrective transfer (`parent_transfer_id`).
+- Weighted-average costing; FEFO/expiry batches; recipes keyed per `menu_item_option`, global default + per-branch override (full replace).
+- Wastage/variance red-flag threshold default **₵500**.
+
+See `docs/inventory/architecture.md` for the full ERD, engines, and state machines.
