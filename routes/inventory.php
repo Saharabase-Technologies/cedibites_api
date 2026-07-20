@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\Inventory\ProductionRunController;
 use App\Http\Controllers\Api\Inventory\PurchaseController;
 use App\Http\Controllers\Api\Inventory\PurchaseOrderController;
 use App\Http\Controllers\Api\Inventory\RecipeController;
+use App\Http\Controllers\Api\Inventory\ReconciliationController;
 use App\Http\Controllers\Api\Inventory\ReportController;
 use App\Http\Controllers\Api\Inventory\RequisitionController;
 use App\Http\Controllers\Api\Inventory\TransferController;
@@ -180,6 +181,24 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
                 ->middleware('permission:inventory.daily_closing.enter')->name('store');
             Route::patch('{dailyClosing}', [DailyClosingController::class, 'update'])
                 ->middleware('permission:inventory.daily_closing.enter')->name('update');
+        });
+
+        // ── Reconciliation (stock-take → post cycle_adjustment → reset books) ─
+        Route::prefix('reconciliations')->name('reconciliations.')->group(function () {
+            Route::get('/', [ReconciliationController::class, 'index'])
+                ->middleware('permission:view_inventory_catalog')->name('index');
+            Route::get('{reconciliation}', [ReconciliationController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+
+            // Opening + counting is the warehouse manager's stock-take.
+            Route::post('/', [ReconciliationController::class, 'store'])
+                ->middleware('permission:inventory.reconciliation.open_cycle')->name('store');
+            Route::patch('{reconciliation}', [ReconciliationController::class, 'update'])
+                ->middleware('permission:inventory.reconciliation.open_cycle')->name('update');
+
+            // Posting writes cycle_adjustment movements — the adjust authority.
+            Route::post('{reconciliation}/post', [ReconciliationController::class, 'post'])
+                ->middleware('permission:inventory.reconciliation.adjust')->name('post');
         });
 
         // ── Reports ──────────────────────────────────────────────────────────

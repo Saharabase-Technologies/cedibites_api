@@ -29,3 +29,8 @@ Broadcast::channel('inventory.transfers', function ($user) {
 Broadcast::channel('inventory.requisitions', function ($user) {
     return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
 });
+
+// IMS reconciliation live updates — same visibility rule as transfers.
+Broadcast::channel('inventory.reconciliations', function ($user) {
+    return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
+});
