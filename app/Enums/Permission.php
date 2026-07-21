@@ -121,4 +121,8 @@ enum Permission: string
     // Absent this, a user's inventory reads are confined to the locations
     // belonging to their assigned branches (see User::accessibleLocationIds).
     case InventoryViewAllLocations = 'inventory.view_all_locations';
+
+    // Feedback — triage access (view/manage all reports). Submitting a report
+    // needs no permission beyond being authenticated.
+    case FeedbackTriage = 'feedback.triage';
 }

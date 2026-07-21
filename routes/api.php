@@ -13,6 +13,7 @@ Route::middleware('auth:sanctum')->group(function () {
     require __DIR__.'/admin.php';
     require __DIR__.'/promos.php';
     require __DIR__.'/platform.php';
+    require __DIR__.'/feedback.php';
 });
 
 // Hubtel Payment Routes

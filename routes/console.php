@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 
 Schedule::command('otp:cleanup')->hourly();
 Schedule::command('menu:compute-smart-categories')->everySixHours();
+Schedule::command('feedback:purge-request-logs')->daily();

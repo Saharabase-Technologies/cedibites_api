@@ -15,7 +15,23 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Feedback voice-note transcription — provider chosen by config; falls
+        // back to a no-op when unconfigured.
+        $this->app->bind(
+            \App\Services\Feedback\Transcription\Transcriber::class,
+            function () {
+                $key = config('feedback.transcription.openai_key');
+
+                if (config('feedback.transcription.provider') === 'openai' && $key) {
+                    return new \App\Services\Feedback\Transcription\OpenAiTranscriber(
+                        $key,
+                        config('feedback.transcription.openai_model', 'whisper-1'),
+                    );
+                }
+
+                return new \App\Services\Feedback\Transcription\NullTranscriber();
+            },
+        );
     }
 
     /**
