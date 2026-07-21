@@ -24,6 +24,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'customer.active' => \App\Http\Middleware\EnsureCustomerActive::class,
             'inventory.enabled' => \App\Http\Middleware\EnsureInventoryEnabled::class,
         ]);
+
+        // Fail-open request logging for feedback correlation. Appended so it runs
+        // after route middleware resolve the authenticated user (see LogRequest).
+        $middleware->api(append: [
+            \App\Http\Middleware\LogRequest::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
