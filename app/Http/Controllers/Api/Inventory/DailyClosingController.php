@@ -28,6 +28,7 @@ class DailyClosingController extends Controller
     {
         $closings = DailyClosing::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('location_id'), fn ($q) => $q->where('location_id', $request->integer('location_id')))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('date_from'), fn ($q) => $q->whereDate('business_date', '>=', $request->string('date_from')))
@@ -38,8 +39,10 @@ class DailyClosingController extends Controller
         return response()->success(DailyClosingResource::collection($closings));
     }
 
-    public function show(DailyClosing $dailyClosing): JsonResponse
+    public function show(Request $request, DailyClosing $dailyClosing): JsonResponse
     {
+        abort_unless($dailyClosing->isVisibleTo($request->user()), 404);
+
         return response()->success(new DailyClosingResource($dailyClosing->load(self::RELATIONS)));
     }
 

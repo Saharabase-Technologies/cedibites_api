@@ -4,6 +4,7 @@ namespace App\Models\Inventory;
 
 use App\Enums\Inventory\DailyClosingStatus;
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class DailyClosing extends Model
 {
-    use SoftDeletes;
+    use ScopedToLocations, SoftDeletes;
 
     protected $table = 'inventory_daily_closings';
 
@@ -52,5 +53,13 @@ class DailyClosing extends Model
             'business_date' => 'date',
             'completed_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['location_id'];
     }
 }

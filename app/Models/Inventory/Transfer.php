@@ -4,6 +4,7 @@ namespace App\Models\Inventory;
 
 use App\Enums\Inventory\TransferStatus;
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -12,7 +13,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Transfer extends Model
 {
-    use SoftDeletes;
+    use ScopedToLocations, SoftDeletes;
 
     protected $table = 'inventory_transfers';
 
@@ -103,5 +104,13 @@ class Transfer extends Model
             'received_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['source_location_id', 'destination_location_id'];
     }
 }

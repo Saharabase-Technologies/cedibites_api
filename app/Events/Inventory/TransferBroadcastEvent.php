@@ -5,7 +5,7 @@ namespace App\Events\Inventory;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
@@ -14,7 +14,7 @@ use Illuminate\Queue\SerializesModels;
  * refetch the full transfer via the API. Broadcast to anyone who can view the
  * inventory catalog (including the receiving branch).
  */
-class TransferBroadcastEvent implements ShouldBroadcastNow
+class TransferBroadcastEvent implements ShouldBroadcast
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 

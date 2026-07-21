@@ -2,6 +2,7 @@
 
 namespace App\Models\Inventory;
 
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -13,6 +14,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class StockBalance extends Model
 {
+    use ScopedToLocations;
+
     public const CREATED_AT = null;
 
     protected $table = 'inventory_stock_balances';
@@ -46,5 +49,13 @@ class StockBalance extends Model
             'weighted_avg_cost' => 'decimal:4',
             'updated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['location_id'];
     }
 }

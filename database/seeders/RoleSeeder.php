@@ -214,6 +214,8 @@ class RoleSeeder extends Seeder
             Permission::InventoryReconciliationAdjust->value,
             Permission::InventoryReportView->value,
             Permission::InventorySettingsManage->value,
+            // Warehouse manager oversees every location, not just one branch.
+            Permission::InventoryViewAllLocations->value,
             // Cross-portal visibility for warehouse manager
             Permission::ViewBranches->value,
             Permission::ViewMenu->value,
@@ -237,6 +239,8 @@ class RoleSeeder extends Seeder
             // Clerk may record an ad-hoc receipt without a PO (emergency / market buy)
             Permission::InventoryPurchaseUrgentBuy->value,
             Permission::InventoryReportView->value,
+            // Clerk buys into every location, so purchasing is not branch-confined.
+            Permission::InventoryViewAllLocations->value,
         ]);
 
     }

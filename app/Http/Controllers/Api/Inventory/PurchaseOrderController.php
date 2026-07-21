@@ -37,6 +37,7 @@ class PurchaseOrderController extends Controller
     {
         $orders = PurchaseOrder::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('supplier_id'), fn ($q) => $q->where('supplier_id', $request->integer('supplier_id')))
             ->when($request->filled('destination_location_id'), fn ($q) => $q->where('destination_location_id', $request->integer('destination_location_id')))
@@ -54,8 +55,10 @@ class PurchaseOrderController extends Controller
         return response()->success(PurchaseOrderResource::collection($orders));
     }
 
-    public function show(PurchaseOrder $purchaseOrder): JsonResponse
+    public function show(Request $request, PurchaseOrder $purchaseOrder): JsonResponse
     {
+        abort_unless($purchaseOrder->isVisibleTo($request->user()), 404);
+
         $purchaseOrder->load(self::RELATIONS);
 
         return response()->success(new PurchaseOrderResource($purchaseOrder));

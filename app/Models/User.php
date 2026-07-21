@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\Permission;
+use App\Models\Inventory\Location;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -19,6 +21,12 @@ class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use CausesActivity, HasApiTokens, HasFactory, HasPushSubscriptions, HasRoles, LogsActivity, Notifiable, SoftDeletes;
+
+    /** Memoised inventory location scope — see accessibleLocationIds(). */
+    private bool $locationScopeResolved = false;
+
+    /** @var array<int, int>|null */
+    private ?array $locationScopeCache = null;
 
     public function getActivitylogOptions(): LogOptions
     {
@@ -117,5 +125,54 @@ class User extends Authenticatable
     public function employee(): HasOne
     {
         return $this->hasOne(Employee::class);
+    }
+
+    /**
+     * Inventory locations this user is allowed to read.
+     *
+     * `null` means unrestricted — the caller must skip scoping entirely rather
+     * than treating it as "no locations". Users holding
+     * `inventory.view_all_locations` (admin, warehouse manager, purchasing
+     * clerk) see everything; everyone else is confined to the locations
+     * belonging to their assigned branches, which for a branch manager is
+     * normally the single branch they run.
+     *
+     * An empty array is meaningful and distinct from `null`: a user with no
+     * branch assignment sees nothing.
+     *
+     * @return array<int, int>|null
+     */
+    public function accessibleLocationIds(): ?array
+    {
+        // `null` is a meaningful result, so resolution needs its own flag.
+        if ($this->locationScopeResolved) {
+            return $this->locationScopeCache;
+        }
+
+        $this->locationScopeCache = $this->resolveAccessibleLocationIds();
+        $this->locationScopeResolved = true;
+
+        return $this->locationScopeCache;
+    }
+
+    /**
+     * @return array<int, int>|null
+     */
+    private function resolveAccessibleLocationIds(): ?array
+    {
+        if ($this->can(Permission::InventoryViewAllLocations->value)) {
+            return null;
+        }
+
+        $branchIds = $this->employee?->branches()->pluck('branches.id') ?? collect();
+
+        if ($branchIds->isEmpty()) {
+            return [];
+        }
+
+        return Location::query()
+            ->whereIn('branch_id', $branchIds)
+            ->pluck('id')
+            ->all();
     }
 }

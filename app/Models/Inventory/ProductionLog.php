@@ -3,12 +3,15 @@
 namespace App\Models\Inventory;
 
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ProductionLog extends Model
 {
+    use ScopedToLocations;
+
     protected $table = 'inventory_production_logs';
 
     protected $fillable = [
@@ -58,5 +61,13 @@ class ProductionLog extends Model
             'output_unit_cost' => 'decimal:4',
             'produced_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['location_id'];
     }
 }

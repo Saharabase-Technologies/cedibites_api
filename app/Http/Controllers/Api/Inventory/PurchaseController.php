@@ -32,6 +32,7 @@ class PurchaseController extends Controller
     {
         $purchases = Purchase::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('supplier_id'), fn ($q) => $q->where('supplier_id', $request->integer('supplier_id')))
             ->when($request->has('is_urgent_buy'), fn ($q) => $q->where('is_urgent_buy', $request->boolean('is_urgent_buy')))
             ->when($request->filled('date_from'), fn ($q) => $q->whereDate('received_at', '>=', $request->date('date_from')))
@@ -49,8 +50,10 @@ class PurchaseController extends Controller
         return response()->success(PurchaseResource::collection($purchases));
     }
 
-    public function show(Purchase $purchase): JsonResponse
+    public function show(Request $request, Purchase $purchase): JsonResponse
     {
+        abort_unless($purchase->isVisibleTo($request->user()), 404);
+
         $purchase->load(self::RELATIONS);
 
         return response()->success(new PurchaseResource($purchase));

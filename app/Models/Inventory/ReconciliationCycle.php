@@ -4,6 +4,7 @@ namespace App\Models\Inventory;
 
 use App\Enums\Inventory\ReconciliationStatus;
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ReconciliationCycle extends Model
 {
-    use SoftDeletes;
+    use ScopedToLocations, SoftDeletes;
 
     protected $table = 'inventory_reconciliation_cycles';
 
@@ -56,5 +57,13 @@ class ReconciliationCycle extends Model
             'opened_at' => 'datetime',
             'closed_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['location_id'];
     }
 }

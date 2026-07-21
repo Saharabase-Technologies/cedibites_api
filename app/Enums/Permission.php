@@ -116,4 +116,9 @@ enum Permission: string
     // Inventory — reports & settings
     case InventoryReportView = 'inventory.report.view';
     case InventorySettingsManage = 'inventory.settings.manage';
+
+    // Inventory — visibility scope.
+    // Absent this, a user's inventory reads are confined to the locations
+    // belonging to their assigned branches (see User::accessibleLocationIds).
+    case InventoryViewAllLocations = 'inventory.view_all_locations';
 }

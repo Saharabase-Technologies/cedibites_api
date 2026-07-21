@@ -35,6 +35,7 @@ class TransferController extends Controller
     {
         $transfers = Transfer::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('source_location_id'), fn ($q) => $q->where('source_location_id', $request->integer('source_location_id')))
             ->when($request->filled('destination_location_id'), fn ($q) => $q->where('destination_location_id', $request->integer('destination_location_id')))
@@ -45,8 +46,12 @@ class TransferController extends Controller
         return response()->success(TransferResource::collection($transfers));
     }
 
-    public function show(Transfer $transfer): JsonResponse
+    public function show(Request $request, Transfer $transfer): JsonResponse
     {
+        // 404 rather than 403 — an out-of-scope transfer should not be
+        // confirmed to exist.
+        abort_unless($transfer->isVisibleTo($request->user()), 404);
+
         return response()->success(new TransferResource($transfer->load(self::RELATIONS)));
     }
 

@@ -4,6 +4,7 @@ namespace App\Models\Inventory;
 
 use App\Enums\Inventory\RequisitionStatus;
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Requisition extends Model
 {
-    use SoftDeletes;
+    use ScopedToLocations, SoftDeletes;
 
     protected $table = 'inventory_requisitions';
 
@@ -72,5 +73,13 @@ class Requisition extends Model
             'rejected_at' => 'datetime',
             'fulfilled_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['requesting_location_id', 'source_location_id'];
     }
 }

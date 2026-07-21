@@ -3,6 +3,7 @@
 namespace App\Models\Inventory;
 
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -12,6 +13,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class StockMovement extends Model
 {
+    use ScopedToLocations;
+
     public const UPDATED_AT = null; // append-only; created_at only
 
     protected $table = 'inventory_stock_movements';
@@ -54,5 +57,13 @@ class StockMovement extends Model
             'occurred_at' => 'datetime',
             'created_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['location_id'];
     }
 }

@@ -31,6 +31,7 @@ class RequisitionController extends Controller
     {
         $requisitions = Requisition::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('requesting_location_id'), fn ($q) => $q->where('requesting_location_id', $request->integer('requesting_location_id')))
             ->when($request->filled('source_location_id'), fn ($q) => $q->where('source_location_id', $request->integer('source_location_id')))
@@ -42,8 +43,12 @@ class RequisitionController extends Controller
         return response()->success(RequisitionResource::collection($requisitions));
     }
 
-    public function show(Requisition $requisition): JsonResponse
+    public function show(Request $request, Requisition $requisition): JsonResponse
     {
+        // 404 rather than 403 — an out-of-scope requisition should not be
+        // confirmed to exist.
+        abort_unless($requisition->isVisibleTo($request->user()), 404);
+
         return response()->success(new RequisitionResource($requisition->load(self::RELATIONS)));
     }
 

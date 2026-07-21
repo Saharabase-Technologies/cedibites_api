@@ -31,6 +31,9 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- IMS routes register at boot only when the flag is on, so it cannot
+             be toggled from inside a test. -->
+        <env name="IMS_ENABLED" value="true"/>
         <ini name="memory_limit" value="512M"/>
     </php>
 </phpunit>

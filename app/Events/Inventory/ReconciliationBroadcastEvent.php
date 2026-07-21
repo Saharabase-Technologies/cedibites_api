@@ -5,7 +5,7 @@ namespace App\Events\Inventory;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
@@ -14,7 +14,7 @@ use Illuminate\Queue\SerializesModels;
  * listeners refetch the full cycle via the API. Broadcast to anyone who can view
  * the inventory catalog.
  */
-class ReconciliationBroadcastEvent implements ShouldBroadcastNow
+class ReconciliationBroadcastEvent implements ShouldBroadcast
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 

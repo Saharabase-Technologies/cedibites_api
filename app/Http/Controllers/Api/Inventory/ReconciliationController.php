@@ -29,6 +29,7 @@ class ReconciliationController extends Controller
     {
         $cycles = ReconciliationCycle::query()
             ->with(self::RELATIONS)
+            ->visibleTo($request->user())
             ->when($request->filled('location_id'), fn ($q) => $q->where('location_id', $request->integer('location_id')))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->latest('opened_at')
@@ -37,8 +38,10 @@ class ReconciliationController extends Controller
         return response()->success(ReconciliationCycleResource::collection($cycles));
     }
 
-    public function show(ReconciliationCycle $reconciliation): JsonResponse
+    public function show(Request $request, ReconciliationCycle $reconciliation): JsonResponse
     {
+        abort_unless($reconciliation->isVisibleTo($request->user()), 404);
+
         return response()->success(new ReconciliationCycleResource($reconciliation->load(self::RELATIONS)));
     }
 

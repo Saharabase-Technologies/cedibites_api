@@ -3,12 +3,15 @@
 namespace App\Models\Inventory;
 
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Purchase extends Model
 {
+    use ScopedToLocations;
+
     protected $table = 'inventory_purchases';
 
     protected $fillable = [
@@ -58,5 +61,13 @@ class Purchase extends Model
             'total_paid' => 'decimal:4',
             'received_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['destination_location_id'];
     }
 }

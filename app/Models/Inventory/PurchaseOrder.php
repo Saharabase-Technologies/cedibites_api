@@ -4,6 +4,7 @@ namespace App\Models\Inventory;
 
 use App\Enums\Inventory\PurchaseOrderStatus;
 use App\Models\User;
+use App\Models\Inventory\Concerns\ScopedToLocations;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class PurchaseOrder extends Model
 {
-    use SoftDeletes;
+    use ScopedToLocations, SoftDeletes;
 
     protected $table = 'inventory_purchase_orders';
 
@@ -80,5 +81,13 @@ class PurchaseOrder extends Model
             'approved_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function locationScopeColumns(): array
+    {
+        return ['destination_location_id'];
     }
 }
