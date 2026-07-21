@@ -214,6 +214,7 @@ class FeedbackService
             $out[] = [
                 'url' => $this->upload($file, 'screenshots'),
                 'source' => $m['source'] ?? 'capture',
+                'route' => is_string($m['route'] ?? null) ? $m['route'] : null,
                 'pins' => is_array($m['pins'] ?? null) ? $m['pins'] : [],
                 'rects' => is_array($m['rects'] ?? null) ? $m['rects'] : [],
             ];
