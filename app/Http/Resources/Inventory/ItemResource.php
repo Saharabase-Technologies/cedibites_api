@@ -39,6 +39,10 @@ class ItemResource extends JsonResource
             'expiry_tracked' => (bool) $this->expiry_tracked,
             'reorder_level' => $this->reorder_level !== null ? (float) $this->reorder_level : null,
             'min_threshold' => $this->min_threshold !== null ? (float) $this->min_threshold : null,
+            // Option A — buy-in-packs-of (e.g. a "crate" of 30 pieces). Null when the
+            // item is only ever bought in its base unit.
+            'purchase_pack_label' => $this->purchase_pack_label,
+            'purchase_pack_size' => $this->purchase_pack_size !== null ? (float) $this->purchase_pack_size : null,
             'weighted_avg_cost' => (float) $this->weighted_avg_cost,
             // Total quantity on hand across all locations (summed balance cache).
             'stock_on_hand' => (float) ($this->stock_on_hand ?? 0),
