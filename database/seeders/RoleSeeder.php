@@ -177,7 +177,13 @@ class RoleSeeder extends Seeder
             Permission::ManageShifts->value,
         ]);
 
-        // Create Warehouse Manager role (mother kitchen — full IMS warehouse-level control)
+        // Create Warehouse Manager role (mother kitchen — warehouse-level operations).
+        // Scope follows the architecture §3 permission matrix (inventory-auditor-kb.md):
+        // full operational control (transfers, requisitions, wastage, closing,
+        // reconciliation, production, purchases) but NOT Admin-only concerns —
+        // recipe authoring/locking, structural master-data setup, or IMS role
+        // assignment. See WarehouseManagerCleanupSeeder for revoking these on
+        // environments that were seeded before this scoping.
         $warehouseManager = Role::updateOrCreate(
             ['name' => RoleEnum::WarehouseManager->value, 'guard_name' => 'api'],
             ['name' => RoleEnum::WarehouseManager->value, 'guard_name' => 'api']
@@ -185,6 +191,8 @@ class RoleSeeder extends Seeder
         $this->addPermissions($warehouseManager, [
             Permission::AccessInventoryPortal->value,
             Permission::ViewInventoryCatalog->value,
+            // Day-to-day catalog upkeep — items & suppliers only. Structural
+            // master data (units/categories/locations) is Admin-only setup.
             Permission::ManageInventoryCatalog->value,
             // Purchase orders — WM authors and manages POs (approval is Admin-only)
             Permission::InventoryPurchaseOrderCreate->value,
@@ -206,14 +214,15 @@ class RoleSeeder extends Seeder
             Permission::InventoryWastageRecord->value,
             Permission::InventoryWastageApprove->value,
             Permission::InventoryDailyClosingEnter->value,
+            // Recipes are view-only for WM — authoring/locking is Admin-only
+            // (founder: "I'll do the BOMs myself"; §3 matrix).
             Permission::InventoryRecipeView->value,
-            Permission::InventoryRecipeEditGlobal->value,
-            Permission::InventoryRecipeOverridePerBranch->value,
-            Permission::InventoryRecipeLock->value,
             Permission::InventoryReconciliationOpenCycle->value,
             Permission::InventoryReconciliationAdjust->value,
             Permission::InventoryReportView->value,
-            Permission::InventorySettingsManage->value,
+            // NOTE: InventorySettingsManage is intentionally NOT granted — it gates
+            // structural master-data setup (units/categories/locations) and IMS
+            // role assignment, both Admin-only.
             // Warehouse manager oversees every location, not just one branch.
             Permission::InventoryViewAllLocations->value,
             // Cross-portal visibility for warehouse manager

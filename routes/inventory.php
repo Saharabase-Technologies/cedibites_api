@@ -43,13 +43,20 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         });
 
         // ── Catalog (writes) ─────────────────────────────────────────────────
+        // Day-to-day upkeep — items & suppliers. Warehouse Manager + Admin.
         Route::middleware('permission:manage_inventory_catalog')->group(function () {
             Route::post('suppliers', [CatalogController::class, 'storeSupplier'])->name('suppliers.store');
             Route::patch('suppliers/{supplier}', [CatalogController::class, 'updateSupplier'])->name('suppliers.update');
-            Route::post('categories', [CatalogController::class, 'storeCategory'])->name('categories.store');
-            Route::post('units', [CatalogController::class, 'storeUnit'])->name('units.store');
             Route::post('items', [CatalogController::class, 'storeItem'])->name('items.store');
             Route::patch('items/{item}', [CatalogController::class, 'updateItem'])->name('items.update');
+        });
+
+        // Structural master data — units, categories, locations. Admin-only setup
+        // (§3 matrix). The Warehouse Manager selects from existing structure when
+        // creating items but does not define it.
+        Route::middleware('permission:inventory.settings.manage')->group(function () {
+            Route::post('categories', [CatalogController::class, 'storeCategory'])->name('categories.store');
+            Route::post('units', [CatalogController::class, 'storeUnit'])->name('units.store');
             Route::post('locations', [CatalogController::class, 'storeLocation'])->name('locations.store');
         });
 
