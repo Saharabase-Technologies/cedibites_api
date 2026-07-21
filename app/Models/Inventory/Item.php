@@ -27,6 +27,8 @@ class Item extends Model
         'expiry_tracked',
         'reorder_level',
         'min_threshold',
+        'purchase_pack_label',
+        'purchase_pack_size',
         'weighted_avg_cost',
         'is_active',
     ];
@@ -65,6 +67,7 @@ class Item extends Model
             'is_active' => 'boolean',
             'reorder_level' => 'decimal:3',
             'min_threshold' => 'decimal:3',
+            'purchase_pack_size' => 'decimal:3',
             'weighted_avg_cost' => 'decimal:4',
         ];
     }

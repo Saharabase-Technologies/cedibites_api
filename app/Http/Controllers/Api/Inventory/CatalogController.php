@@ -316,6 +316,9 @@ class CatalogController extends Controller
             'expiry_tracked' => ['sometimes', 'boolean'],
             'reorder_level' => ['nullable', 'numeric', 'min:0'],
             'min_threshold' => ['nullable', 'numeric', 'min:0'],
+            // Option A — buy-in-packs-of. Label + size travel as a pair.
+            'purchase_pack_label' => ['nullable', 'string', 'max:32', 'required_with:purchase_pack_size'],
+            'purchase_pack_size' => ['nullable', 'numeric', 'gt:0', 'required_with:purchase_pack_label'],
         ]);
 
         $item = Item::create([...$data, 'sku' => $this->nextCode(Item::class, 'ITM', 6, 'sku'), 'is_active' => true]);
@@ -336,6 +339,9 @@ class CatalogController extends Controller
             'expiry_tracked' => ['sometimes', 'boolean'],
             'reorder_level' => ['nullable', 'numeric', 'min:0'],
             'min_threshold' => ['nullable', 'numeric', 'min:0'],
+            // Option A — buy-in-packs-of. Label + size travel as a pair.
+            'purchase_pack_label' => ['nullable', 'string', 'max:32', 'required_with:purchase_pack_size'],
+            'purchase_pack_size' => ['nullable', 'numeric', 'gt:0', 'required_with:purchase_pack_label'],
             'is_active' => ['sometimes', 'boolean'],
         ]);
 
