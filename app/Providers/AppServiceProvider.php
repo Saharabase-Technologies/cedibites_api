@@ -20,11 +20,18 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(
             \App\Services\Feedback\Transcription\Transcriber::class,
             function () {
-                $key = config('feedback.transcription.openai_key');
+                $provider = config('feedback.transcription.provider');
 
-                if (config('feedback.transcription.provider') === 'openai' && $key) {
+                if ($provider === 'groq' && config('feedback.transcription.groq_key')) {
+                    return new \App\Services\Feedback\Transcription\GroqTranscriber(
+                        config('feedback.transcription.groq_key'),
+                        config('feedback.transcription.groq_model', 'whisper-large-v3'),
+                    );
+                }
+
+                if ($provider === 'openai' && config('feedback.transcription.openai_key')) {
                     return new \App\Services\Feedback\Transcription\OpenAiTranscriber(
-                        $key,
+                        config('feedback.transcription.openai_key'),
                         config('feedback.transcription.openai_model', 'whisper-1'),
                     );
                 }
