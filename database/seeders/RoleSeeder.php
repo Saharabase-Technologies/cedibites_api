@@ -178,11 +178,14 @@ class RoleSeeder extends Seeder
         ]);
 
         // Create Warehouse Manager role (mother kitchen — warehouse-level operations).
-        // Scope follows the architecture §3 permission matrix (inventory-auditor-kb.md):
-        // full operational control (transfers, requisitions, wastage, closing,
-        // reconciliation, production, purchases) but NOT Admin-only concerns —
-        // recipe authoring/locking, structural master-data setup, or IMS role
-        // assignment. See WarehouseManagerCleanupSeeder for revoking these on
+        // Scope (Warehouse Manager Cleanup 2): the WM owns the mother kitchen and its
+        // day-to-day stock operations — transfers, requisitions, wastage, closing,
+        // reconciliation, production, recording purchases — plus the item catalog she
+        // curates (items, categories, units). She does NOT touch Admin/Clerk concerns:
+        // suppliers, purchase-order authoring, recipes, structural setup (locations),
+        // wastage-threshold settings, or IMS role assignment. She may VIEW purchase
+        // orders (inventory.purchase.view) but not create/edit them.
+        // See WarehouseManagerCleanup2Seeder for reconciling these grants on
         // environments that were seeded before this scoping.
         $warehouseManager = Role::updateOrCreate(
             ['name' => RoleEnum::WarehouseManager->value, 'guard_name' => 'api'],
@@ -191,15 +194,13 @@ class RoleSeeder extends Seeder
         $this->addPermissions($warehouseManager, [
             Permission::AccessInventoryPortal->value,
             Permission::ViewInventoryCatalog->value,
-            // Day-to-day catalog upkeep — items & suppliers only. Structural
-            // master data (units/categories/locations) is Admin-only setup.
+            // Item catalog the WM curates — items plus their taxonomy (categories,
+            // units). Suppliers and locations are intentionally NOT here.
             Permission::ManageInventoryCatalog->value,
-            // Purchase orders — WM authors and manages POs (approval is Admin-only)
-            Permission::InventoryPurchaseOrderCreate->value,
-            Permission::InventoryPurchaseOrderUpdate->value,
-            Permission::InventoryPurchaseOrderSubmit->value,
-            Permission::InventoryPurchaseOrderCancel->value,
-            Permission::InventoryPurchaseOrderClose->value,
+            Permission::InventoryCategoryManage->value,
+            Permission::InventoryUnitManage->value,
+            // Purchase orders are VIEW-only for the WM (authoring is Clerk/Admin).
+            // She still records the actual receipts (purchases) into the warehouse.
             Permission::InventoryPurchaseCreate->value,
             Permission::InventoryPurchaseView->value,
             // Production — mother kitchen consuming raw materials
@@ -214,15 +215,14 @@ class RoleSeeder extends Seeder
             Permission::InventoryWastageRecord->value,
             Permission::InventoryWastageApprove->value,
             Permission::InventoryDailyClosingEnter->value,
-            // Recipes are view-only for WM — authoring/locking is Admin-only
-            // (founder: "I'll do the BOMs myself"; §3 matrix).
-            Permission::InventoryRecipeView->value,
             Permission::InventoryReconciliationOpenCycle->value,
             Permission::InventoryReconciliationAdjust->value,
             Permission::InventoryReportView->value,
-            // NOTE: InventorySettingsManage is intentionally NOT granted — it gates
-            // structural master-data setup (units/categories/locations) and IMS
-            // role assignment, both Admin-only.
+            // NOTE: intentionally NOT granted —
+            //   InventorySupplierManage / InventoryLocationManage — Admin/Clerk concerns;
+            //   InventoryPurchaseOrder* (authoring) — Clerk/Admin;
+            //   InventoryRecipeView + recipe authoring — Admin ("I'll do the BOMs myself");
+            //   InventorySettingsManage — wastage-threshold + IMS role assignment (Admin).
             // Warehouse manager oversees every location, not just one branch.
             Permission::InventoryViewAllLocations->value,
             // Cross-portal visibility for warehouse manager
@@ -238,6 +238,8 @@ class RoleSeeder extends Seeder
         $this->addPermissions($purchasingClerk, [
             Permission::AccessInventoryPortal->value,
             Permission::ViewInventoryCatalog->value,
+            // Suppliers are a purchasing concern — the Clerk maintains the vendor list.
+            Permission::InventorySupplierManage->value,
             // Clerk authors and manages POs; Admin still approves the >= ₵10k gate.
             Permission::InventoryPurchaseOrderCreate->value,
             Permission::InventoryPurchaseOrderUpdate->value,

@@ -32,13 +32,16 @@ jobs:
             composer install --no-dev --optimize-autoloader
             php artisan config:clear
 
-            # Run migrations; only seed if new migrations were applied
-            MIGRATE_OUTPUT=$(php artisan migrate --force 2>&1)
-            echo "$MIGRATE_OUTPUT"
-            if ! echo "$MIGRATE_OUTPUT" | grep -qi "nothing to migrate"; then
-              php artisan db:seed --class=PermissionSeeder --force
-              php artisan db:seed --class=RoleSeeder --force
-            fi
+            php artisan migrate --force
+
+            # Permissions & roles are the source of truth — re-sync every deploy so
+            # code that references new grants works without needing a migration.
+            # All three seeders are idempotent, so re-running them is safe.
+            php artisan db:seed --class=PermissionSeeder --force
+            php artisan db:seed --class=RoleSeeder --force
+            # Warehouse Manager Cleanup 2 — revokes the WM's stale grants that
+            # RoleSeeder (additive) cannot remove. Idempotent; safe to keep.
+            php artisan db:seed --class=WarehouseManagerCleanup2Seeder --force
 
             php artisan cache:clear
             php artisan route:clear

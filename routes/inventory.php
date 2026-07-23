@@ -43,20 +43,30 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         });
 
         // ── Catalog (writes) ─────────────────────────────────────────────────
-        // Day-to-day upkeep — items & suppliers. Warehouse Manager + Admin.
+        // Item master data — Warehouse Manager + Admin.
         Route::middleware('permission:manage_inventory_catalog')->group(function () {
-            Route::post('suppliers', [CatalogController::class, 'storeSupplier'])->name('suppliers.store');
-            Route::patch('suppliers/{supplier}', [CatalogController::class, 'updateSupplier'])->name('suppliers.update');
             Route::post('items', [CatalogController::class, 'storeItem'])->name('items.store');
             Route::patch('items/{item}', [CatalogController::class, 'updateItem'])->name('items.update');
         });
 
-        // Structural master data — units, categories, locations. Admin-only setup
-        // (§3 matrix). The Warehouse Manager selects from existing structure when
-        // creating items but does not define it.
-        Route::middleware('permission:inventory.settings.manage')->group(function () {
+        // Suppliers — a purchasing concern. Purchasing Clerk + Admin (NOT WM).
+        Route::middleware('permission:inventory.supplier.manage')->group(function () {
+            Route::post('suppliers', [CatalogController::class, 'storeSupplier'])->name('suppliers.store');
+            Route::patch('suppliers/{supplier}', [CatalogController::class, 'updateSupplier'])->name('suppliers.update');
+        });
+
+        // Categories & units — item taxonomy the Warehouse Manager curates
+        // alongside items. WM + Admin.
+        Route::middleware('permission:inventory.category.manage')->group(function () {
             Route::post('categories', [CatalogController::class, 'storeCategory'])->name('categories.store');
+        });
+        Route::middleware('permission:inventory.unit.manage')->group(function () {
             Route::post('units', [CatalogController::class, 'storeUnit'])->name('units.store');
+        });
+
+        // Locations — structural warehouse topology. Admin-only setup; the
+        // Warehouse Manager operates within it but does not define it.
+        Route::middleware('permission:inventory.location.manage')->group(function () {
             Route::post('locations', [CatalogController::class, 'storeLocation'])->name('locations.store');
         });
 
