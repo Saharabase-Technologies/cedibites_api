@@ -65,8 +65,17 @@ enum Permission: string
     case AccessInventoryPortal = 'access_inventory_portal';
 
     // Inventory — catalog (Phase 0 CRUD)
+    // `manage_inventory_catalog` now gates item master-data writes only. Suppliers,
+    // categories, units and locations each have their own grant below so the
+    // Warehouse Manager, Purchasing Clerk and Admin can own them independently.
     case ManageInventoryCatalog = 'manage_inventory_catalog';
     case ViewInventoryCatalog = 'view_inventory_catalog';
+
+    // Inventory — catalog master data (granular, split out of the coarse bundles)
+    case InventoryCategoryManage = 'inventory.category.manage';
+    case InventoryUnitManage = 'inventory.unit.manage';
+    case InventorySupplierManage = 'inventory.supplier.manage';
+    case InventoryLocationManage = 'inventory.location.manage';
 
     // Inventory — purchase orders
     case InventoryPurchaseOrderCreate = 'inventory.purchase_order.create';

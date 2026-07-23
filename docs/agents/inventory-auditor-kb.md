@@ -101,8 +101,17 @@ opened (by warehouse manager) → counts_in_progress → variances_computed → 
 
 **Status:** To be registered by IAM Auditor in Phase 0.
 
+**Revised by Warehouse Manager Cleanup 2 (see §6, 2026-07-23).** WM owns the item
+catalog + operations; suppliers → Clerk, PO authoring → Clerk/Admin, recipes → Admin.
+
 | Permission                                 | Purchasing Clerk | Branch Manager                        | Warehouse Manager    | Admin |
 | ------------------------------------------ | ---------------- | ------------------------------------- | -------------------- | ----- |
+| `manage_inventory_catalog` (items)         |                  | view                                  | ✓                    | ✓     |
+| `inventory.category.manage`                |                  |                                       | ✓                    | ✓     |
+| `inventory.unit.manage`                    |                  |                                       | ✓                    | ✓     |
+| `inventory.supplier.manage`                | ✓                |                                       |                      | ✓     |
+| `inventory.location.manage`                |                  |                                       |                      | ✓     |
+| `inventory.purchase_order.create`/`update` | ✓                |                                       |                      | ✓     |
 | `inventory.purchase.create`                | ✓                |                                       | ✓                    | ✓     |
 | `inventory.purchase.view`                  | ✓                | view own branch costs only            | ✓                    | ✓     |
 | `inventory.requisition.create`             |                  | ✓ (own branch)                        | ✓                    | ✓     |
@@ -116,7 +125,7 @@ opened (by warehouse manager) → counts_in_progress → variances_computed → 
 | `inventory.wastage.record`                 |                  | ✓                                     | ✓                    | ✓     |
 | `inventory.wastage.approve`                |                  |                                       | ✓                    | ✓     |
 | `inventory.daily_closing.enter`            |                  | ✓                                     | ✓                    | ✓     |
-| `inventory.recipe.view`                    |                  | ✓                                     | ✓                    | ✓     |
+| `inventory.recipe.view`                    |                  | ✓                                     |                      | ✓     |
 | `inventory.recipe.edit_global`             |                  |                                       |                      | ✓     |
 | `inventory.recipe.override_per_branch`     |                  |                                       |                      | ✓     |
 | `inventory.recipe.lock`                    |                  |                                       |                      | ✓     |
@@ -166,6 +175,27 @@ _None yet._
 ---
 
 ## §6 Decision Log
+
+### 2026-07-23 — Warehouse Manager Cleanup 2 (role re-scoping)
+
+Founder clarified the Warehouse Manager is responsible for the mother kitchen and
+its day-to-day stock operations only. The coarse permission bundles
+(`manage_inventory_catalog` = items + suppliers; `inventory.settings.manage` =
+categories + units + locations + wastage-threshold + role assignment) were split so
+resources map to their real owner:
+
+- New granular perms: `inventory.category.manage`, `inventory.unit.manage`,
+  `inventory.supplier.manage`, `inventory.location.manage`.
+- `manage_inventory_catalog` now gates **item** writes only (suppliers moved out).
+- **WM gains** category + unit management. **WM loses** supplier management,
+  purchase-order authoring (keeps `inventory.purchase.view` — view-only), and recipe
+  visibility. Locations, wastage-threshold settings and IMS role assignment stay Admin.
+- **Purchasing Clerk gains** supplier management.
+- Wastage threshold: kept, Admin-only (auto-accept logic unchanged).
+
+Reconcile already-seeded environments with `WarehouseManagerCleanup2Seeder`
+(after `PermissionSeeder` + `RoleSeeder`). Supersedes the recipe.view / settings.manage
+rows of the original §3 matrix for the WM column.
 
 ### 2026-05-05 — Initial Architecture Locked (v2)
 
