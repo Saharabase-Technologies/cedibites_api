@@ -59,6 +59,11 @@ class RequisitionService
             throw new InventoryException("Only draft requisitions can be edited (current status: {$requisition->status->value}).");
         }
 
+        if (array_key_exists('source_location_id', $data)
+            && (int) $data['source_location_id'] === (int) $requisition->requesting_location_id) {
+            throw new InventoryException('The requesting and source locations must be different.');
+        }
+
         return DB::transaction(function () use ($requisition, $data) {
             if (array_key_exists('items', $data)) {
                 $requisition->lines()->delete();

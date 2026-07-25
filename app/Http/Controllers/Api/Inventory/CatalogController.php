@@ -211,8 +211,18 @@ class CatalogController extends Controller
 
     public function locations(Request $request): JsonResponse
     {
+        // Confine the list to what the caller can actually act on. Warehouses stay
+        // visible to everyone: a branch has to be able to name the warehouse it is
+        // requesting stock from, and it is a counterparty on every transfer in.
+        // Without this, branch pickers offered locations whose records the user
+        // would then 404 on.
+        $accessible = $request->user()?->accessibleLocationIds();
+
         $locations = Location::query()
             ->with('branch')
+            ->when($accessible !== null, fn ($q) => $q->where(
+                fn ($q) => $q->whereIn('id', $accessible)->orWhere('type', 'warehouse')
+            ))
             ->when($request->filled('type'), fn ($q) => $q->where('type', $request->string('type')))
             ->when($request->has('is_active'), fn ($q) => $q->where('is_active', $request->boolean('is_active')))
             ->orderBy('name')

@@ -68,8 +68,16 @@ trait ScopedToLocations
             return true;
         }
 
+        // Compare as ints on both sides. The list scope filters in SQL, where
+        // MySQL coerces freely; a strict PHP comparison here against a driver
+        // that hands back numeric strings would silently disagree with it, and
+        // a row would list but 404 on open.
+        $ids = array_map('intval', $ids);
+
         foreach ($this->locationScopeColumns() as $column) {
-            if (in_array($this->{$column}, $ids, true)) {
+            $value = $this->{$column};
+
+            if ($value !== null && in_array((int) $value, $ids, true)) {
                 return true;
             }
         }
