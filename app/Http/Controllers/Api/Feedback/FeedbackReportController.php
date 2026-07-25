@@ -16,7 +16,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class FeedbackReportController extends Controller
 {
-    private const RELATIONS = ['reporter', 'branch', 'assignee'];
+    private const RELATIONS = ['reporter', 'branch', 'assignee', 'notes'];
 
     public function __construct(
         private readonly FeedbackService $service,

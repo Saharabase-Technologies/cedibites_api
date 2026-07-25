@@ -40,6 +40,28 @@ class FeedbackExporter
             $lines[] = $report->transcript;
         }
 
+        // Per-page notes, grouped by the page they were recorded on — the
+        // reporter's train of thought, in order, page by page.
+        $notes = $report->notes()->get();
+        if ($notes->isNotEmpty()) {
+            $lines[] = "\n## Notes by page\n";
+
+            foreach ($notes->groupBy(fn ($n) => $n->route ?: '—') as $route => $group) {
+                $lines[] = "\n### {$route}\n";
+
+                foreach ($group as $note) {
+                    if ($note->body) {
+                        $lines[] = "- {$note->body}";
+                    }
+                    if ($note->transcript) {
+                        $lines[] = "- _(voice)_ {$note->transcript}";
+                    } elseif ($note->audio_url) {
+                        $lines[] = "- _(voice note, not transcribed)_ {$note->audio_url}";
+                    }
+                }
+            }
+        }
+
         $lines[] = "\n## Steps before reporting\n";
         foreach (($report->breadcrumbs ?? []) as $b) {
             $lines[] = "- [{$b['kind']}] ".($b['label'] ?? '');

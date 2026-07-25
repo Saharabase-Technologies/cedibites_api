@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A durable feedback report a human triages. See the feedback_reports migration.
@@ -47,6 +48,12 @@ class FeedbackReport extends Model
     public function reporter(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reporter_id');
+    }
+
+    /** Per-page notes, in the order the reporter recorded them. */
+    public function notes(): HasMany
+    {
+        return $this->hasMany(FeedbackReportNote::class)->orderBy('position')->orderBy('id');
     }
 
     public function branch(): BelongsTo

@@ -66,12 +66,69 @@ class FeedbackService
 
         $this->assignNumber($report); // C17 — best-effort, never blocks the report
 
-        // Auto-transcribe the voice note off-request (no-op if no provider).
-        if ($report->audio_url) {
+        $this->attachNotes(
+            $report,
+            is_array($data['notes'] ?? null) ? $data['notes'] : [],
+            $this->normaliseFiles($request->file('note_audio')),
+        );
+
+        // Auto-transcribe the voice notes off-request (no-op if no provider).
+        if ($report->audio_url || $report->notes()->whereNotNull('audio_url')->exists()) {
             TranscribeFeedbackReport::dispatch($report->id);
         }
 
         return $report->fresh();
+    }
+
+    /**
+     * Persist the per-page notes.
+     *
+     * A note references its voice clip by index into the uploaded `note_audio[]`
+     * files rather than relying on positional alignment — notes and clips are
+     * not one-to-one, since a note may be text-only.
+     *
+     * I2 applies: a note that ends up with neither text nor audio is dropped
+     * rather than rejected, and a bad audio index degrades to no audio.
+     *
+     * @param  array<int, mixed>  $notes
+     * @param  array<int, UploadedFile>  $audioFiles
+     */
+    private function attachNotes(FeedbackReport $report, array $notes, array $audioFiles): void
+    {
+        $uploaded = [];
+        $position = 0;
+
+        foreach ($notes as $note) {
+            if (! is_array($note)) {
+                continue;
+            }
+
+            $body = is_string($note['body'] ?? null) ? trim($note['body']) : '';
+            $audioUrl = null;
+
+            $index = $note['audio_index'] ?? null;
+            if (is_numeric($index)) {
+                $index = (int) $index;
+                $file = $audioFiles[$index] ?? null;
+
+                if ($file instanceof UploadedFile) {
+                    // Upload each clip once even if two notes point at it.
+                    $audioUrl = $uploaded[$index] ??= $this->upload($file, 'audio');
+                }
+            }
+
+            if ($body === '' && $audioUrl === null) {
+                continue;
+            }
+
+            $report->notes()->create([
+                'route' => is_string($note['route'] ?? null) ? $note['route'] : null,
+                'page_title' => is_string($note['page_title'] ?? null) ? $note['page_title'] : null,
+                'body' => $body !== '' ? $body : null,
+                'audio_url' => $audioUrl,
+                'position' => $position++,
+            ]);
+        }
     }
 
     /**
@@ -81,24 +138,42 @@ class FeedbackService
      */
     public function transcribeReport(FeedbackReport $report): void
     {
-        if (! $report->audio_url || $report->transcript) {
-            return;
+        if ($report->audio_url && ! $report->transcript) {
+            $text = $this->transcribeUrl($report->audio_url);
+
+            if ($text) {
+                $report->transcript = $text;
+                $report->save();
+            }
         }
 
-        $path = Str::after($report->audio_url, '/storage/');
-        if ($path === $report->audio_url || ! Storage::disk('public')->exists($path)) {
-            return;
+        // Each per-page voice note gets its own transcript, so triage can read
+        // the words against the page they were said about.
+        foreach ($report->notes()->whereNotNull('audio_url')->whereNull('transcript')->get() as $note) {
+            $text = $this->transcribeUrl($note->audio_url);
+
+            if ($text) {
+                $note->transcript = $text;
+                $note->save();
+            }
+        }
+    }
+
+    /** Transcribe an uploaded clip by its public URL, or null if unavailable. */
+    private function transcribeUrl(string $url): ?string
+    {
+        // Read the bytes straight off the public disk rather than re-fetching
+        // our own URL over the network.
+        $path = Str::after($url, '/storage/');
+
+        if ($path === $url || ! Storage::disk('public')->exists($path)) {
+            return null;
         }
 
-        $text = app(Transcriber::class)->transcribe(
+        return app(Transcriber::class)->transcribe(
             Storage::disk('public')->get($path),
             basename($path),
         );
-
-        if ($text) {
-            $report->transcript = $text;
-            $report->save();
-        }
     }
 
     /**
