@@ -4,6 +4,7 @@ use App\Enums\Inventory\TransferStatus;
 use App\Enums\Permission;
 use App\Models\Branch;
 use App\Models\Employee;
+use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Transfer;
 use App\Models\User;
@@ -130,4 +131,103 @@ it('shows nothing to a scoped user with no branch assignment', function () {
         ->getJson('/v1/inventory/transfers')
         ->assertSuccessful()
         ->assertJsonCount(0, 'data');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Requisition creation must not outrun the read scope
+|--------------------------------------------------------------------------
+|
+| Creation once accepted any location that merely existed, while `show()`
+| enforced the location scope — so a branch manager could file a requisition and
+| be met with a 404 on the record they had just created.
+|
+*/
+
+/** @return array<string, mixed> */
+function requisitionPayload(int $sourceId, int $itemId, ?int $requestingId = null): array
+{
+    return array_filter([
+        'requesting_location_id' => $requestingId,
+        'source_location_id' => $sourceId,
+        'purpose' => 'supplementary',
+        'items' => [['item_id' => $itemId, 'requested_qty' => 5]],
+    ], fn ($v) => $v !== null);
+}
+
+it('lets a branch manager read back the requisition they just created', function () {
+    $this->bm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
+    $item = Item::factory()->create();
+
+    // No requesting_location_id — the manager's own branch is implied.
+    $id = $this->actingAs($this->bm)
+        ->postJson('/v1/inventory/requisitions', requisitionPayload($this->warehouse->id, $item->id))
+        ->assertSuccessful()
+        ->json('data.id');
+
+    $this->actingAs($this->bm)
+        ->getJson("/v1/inventory/requisitions/{$id}")
+        ->assertSuccessful()
+        ->assertJsonPath('data.id', $id)
+        ->assertJsonPath('data.requesting_location.id', $this->ownLocation->id);
+});
+
+it('refuses a requisition raised against a branch the manager does not run', function () {
+    $this->bm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
+    $item = Item::factory()->create();
+
+    $this->actingAs($this->bm)
+        ->postJson('/v1/inventory/requisitions', requisitionPayload(
+            $this->warehouse->id,
+            $item->id,
+            $this->otherLocation->id,
+        ))
+        ->assertStatus(422)
+        ->assertJsonPath('message', 'You can only raise requisitions for your own branch.');
+});
+
+it('tells a manager whose branch has no inventory location why they cannot requisition', function () {
+    $item = Item::factory()->create();
+
+    // Assigned to a branch, but nothing provisioned an inventory location for it
+    // — the state a branch created after the IMS seeder ran lands in.
+    $stranded = User::factory()->create();
+    Employee::factory()->create(['user_id' => $stranded->id])
+        ->branches()->attach(Branch::factory()->create()->id);
+    $stranded->givePermissionTo([
+        Permission::ViewInventoryCatalog->value,
+        Permission::InventoryRequisitionCreate->value,
+    ]);
+
+    $this->actingAs($stranded)
+        ->postJson('/v1/inventory/requisitions', requisitionPayload($this->warehouse->id, $item->id))
+        ->assertStatus(422)
+        ->assertJsonPath('message', fn (string $m) => str_contains($m, 'not linked to an inventory location'));
+});
+
+it('offers a branch manager only their own location plus warehouses to pick from', function () {
+    $ids = collect(
+        $this->actingAs($this->bm)
+            ->getJson('/v1/inventory/locations')
+            ->assertSuccessful()
+            ->json('data')
+    )->pluck('id');
+
+    expect($ids)->toContain($this->ownLocation->id)
+        ->and($ids)->toContain($this->warehouse->id)
+        ->and($ids)->not->toContain($this->otherLocation->id);
+});
+
+it('still lets an unrestricted user raise a requisition for any branch', function () {
+    $this->wm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
+    $item = Item::factory()->create();
+
+    $this->actingAs($this->wm)
+        ->postJson('/v1/inventory/requisitions', requisitionPayload(
+            $this->warehouse->id,
+            $item->id,
+            $this->otherLocation->id,
+        ))
+        ->assertSuccessful()
+        ->assertJsonPath('data.requesting_location.id', $this->otherLocation->id);
 });

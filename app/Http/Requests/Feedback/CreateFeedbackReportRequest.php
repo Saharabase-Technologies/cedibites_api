@@ -55,8 +55,18 @@ class CreateFeedbackReportRequest extends FormRequest
             'screenshot_meta' => ['nullable', 'array'],
             'client_meta' => ['nullable', 'array'],
 
+            // Per-page notes. Shape only — each entry may name a route and carry
+            // text, a voice clip (by index into `note_audio[]`), or both.
+            'notes' => ['nullable', 'array', 'max:20'],
+            'notes.*.route' => ['nullable', 'string', 'max:255'],
+            'notes.*.page_title' => ['nullable', 'string', 'max:255'],
+            'notes.*.body' => ['nullable', 'string', 'max:5000'],
+            'notes.*.audio_index' => ['nullable', 'integer'],
+
             // Files — the ONLY hard rejects (size + count caps).
             'audio' => ['nullable', 'file', 'max:10240'],       // 10 MB
+            'note_audio' => ['nullable', 'array', 'max:20'],    // ≤ 20 voice notes
+            'note_audio.*' => ['file', 'max:10240'],            // 10 MB each
             'screenshots' => ['nullable', 'array', 'max:5'],    // ≤ 5 shots
             'screenshots.*' => ['file', 'max:5120'],            // 5 MB each
             'replay' => ['nullable', 'file', 'max:8192'],       // 8 MB

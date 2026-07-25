@@ -175,4 +175,30 @@ class User extends Authenticatable
             ->pluck('id')
             ->all();
     }
+
+    /**
+     * The satellite location this user implicitly acts for.
+     *
+     * A branch manager runs one branch, so screens that would otherwise ask
+     * "which branch is this for?" can answer it themselves. Returns null when
+     * the answer is genuinely ambiguous — an unrestricted user (warehouse
+     * manager, admin) who could mean any branch, a user spanning several
+     * branches, or one whose branch has no inventory location yet. Callers must
+     * fall back to asking, or fail with a message, rather than guessing.
+     */
+    public function defaultInventoryLocationId(): ?int
+    {
+        $ids = $this->accessibleLocationIds();
+
+        if ($ids === null || $ids === []) {
+            return null;
+        }
+
+        $satellites = Location::query()
+            ->whereIn('id', $ids)
+            ->where('type', 'satellite')
+            ->pluck('id');
+
+        return $satellites->count() === 1 ? (int) $satellites->first() : null;
+    }
 }

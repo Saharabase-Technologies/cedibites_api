@@ -8,6 +8,7 @@ use App\Events\Inventory\RequisitionBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\RequisitionResource;
 use App\Models\Inventory\Requisition;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -54,9 +55,13 @@ class RequisitionController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        // `requesting_location_id` is optional: a branch manager is by definition
+        // requesting for their own branch, so the server fills it in. It stays
+        // accepted for unrestricted users (warehouse manager, admin), who may
+        // raise a requisition on any branch's behalf.
         $data = $request->validate([
-            'requesting_location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
-            'source_location_id' => ['required', 'integer', 'different:requesting_location_id', 'exists:inventory_locations,id'],
+            'requesting_location_id' => ['sometimes', 'integer', 'exists:inventory_locations,id'],
+            'source_location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
             'purpose' => ['nullable', 'in:opening,supplementary'],
             'notes' => ['nullable', 'string', 'max:2000'],
             'items' => ['required', 'array', 'min:1'],
@@ -65,6 +70,11 @@ class RequisitionController extends Controller
         ]);
 
         return $this->guard(function () use ($data, $request) {
+            $data['requesting_location_id'] = $this->resolveRequestingLocation(
+                $request->user(),
+                isset($data['requesting_location_id']) ? (int) $data['requesting_location_id'] : null,
+            );
+
             $requisition = $this->service->create($data, $request->user());
             $this->broadcast($requisition, 'created');
 
@@ -72,10 +82,55 @@ class RequisitionController extends Controller
         });
     }
 
+    /**
+     * Settle which branch a new requisition is for, and refuse to create one the
+     * requester could not then read back.
+     *
+     * Creation used to accept any location that merely existed while `show()`
+     * enforced the location scope, so a branch manager could file a requisition
+     * against a branch outside their scope and be met with a 404 on the record
+     * they had just created.
+     */
+    private function resolveRequestingLocation(User $actor, ?int $requested): int
+    {
+        $ids = $actor->accessibleLocationIds();
+
+        // Unrestricted — they could mean any branch, so they must say which.
+        if ($ids === null) {
+            if ($requested === null) {
+                throw new InventoryException('Choose the branch this requisition is for.');
+            }
+
+            return $requested;
+        }
+
+        if ($ids === []) {
+            throw new InventoryException(
+                'Your account is not linked to an inventory location, so it cannot raise requisitions. '
+                .'Ask an administrator to assign you to a branch and to give that branch an inventory location.'
+            );
+        }
+
+        $requested ??= $actor->defaultInventoryLocationId();
+
+        if ($requested === null) {
+            throw new InventoryException('Choose which of your branches this requisition is for.');
+        }
+
+        if (! in_array($requested, array_map('intval', $ids), true)) {
+            throw new InventoryException('You can only raise requisitions for your own branch.');
+        }
+
+        return $requested;
+    }
+
     public function update(Request $request, Requisition $requisition): JsonResponse
     {
+        // No `different:requesting_location_id` here — that column is never in an
+        // update payload, so the rule always passed vacuously. The service
+        // compares against the stored requesting location instead.
         $data = $request->validate([
-            'source_location_id' => ['sometimes', 'integer', 'different:requesting_location_id', 'exists:inventory_locations,id'],
+            'source_location_id' => ['sometimes', 'integer', 'exists:inventory_locations,id'],
             'purpose' => ['sometimes', 'in:opening,supplementary'],
             'notes' => ['sometimes', 'nullable', 'string', 'max:2000'],
             'items' => ['sometimes', 'array', 'min:1'],
