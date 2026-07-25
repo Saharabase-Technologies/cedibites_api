@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Inventory;
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Events\Inventory\RequisitionBroadcastEvent;
+use App\Events\Inventory\TransferBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\RequisitionResource;
 use App\Models\Inventory\Requisition;
@@ -171,6 +172,19 @@ class RequisitionController extends Controller
         return $this->guard(function () use ($requisition, $request, $approvedQty) {
             $updated = $this->service->approve($requisition, $request->user(), $approvedQty);
             $this->broadcast($updated, 'approved');
+
+            // Approving spawns a transfer. Announce it on the TRANSFER channel
+            // too, or the transfers screen never learns the new row exists —
+            // a requisition event tells it nothing it listens for.
+            $transfer = $updated->fulfillingTransfer;
+            if ($transfer) {
+                TransferBroadcastEvent::dispatch(
+                    $transfer->id,
+                    $transfer->reference,
+                    $transfer->status->value,
+                    'created',
+                );
+            }
 
             return response()->success($this->fresh($updated), 'Requisition approved — fulfilling transfer created.');
         });

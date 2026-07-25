@@ -2,6 +2,7 @@
 
 namespace App\Domain\Inventory\Movements\Engines;
 
+use App\Events\Inventory\StockBroadcastEvent;
 use App\Models\Inventory\StockMovement;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -35,7 +36,7 @@ class MovementPostingEngine
      */
     public function post(array $data): StockMovement
     {
-        return DB::transaction(function () use ($data) {
+        $posted = DB::transaction(function () use ($data) {
             // Idempotency: if this business operation already posted, return it.
             $existing = StockMovement::where('idempotency_key', $data['idempotency_key'])->first();
             if ($existing) {
@@ -91,5 +92,17 @@ class MovementPostingEngine
 
             return $movement;
         });
+
+        // Announce the balance change AFTER commit, so a listener that refetches
+        // immediately cannot read the pre-movement balance. Idempotent replays
+        // return the original movement and re-announce harmlessly — the signal
+        // carries no state, it only tells screens to refetch.
+        StockBroadcastEvent::dispatch(
+            (int) $posted->item_id,
+            (int) $posted->location_id,
+            (string) $posted->movement_type,
+        );
+
+        return $posted;
     }
 }

@@ -34,3 +34,11 @@ Broadcast::channel('inventory.requisitions', function ($user) {
 Broadcast::channel('inventory.reconciliations', function ($user) {
     return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
 });
+
+// IMS stock-balance changes. Screens that read balances rather than documents
+// (items, dashboard, reports, daily closing) have no document event to follow;
+// this is theirs. The signal is scalars only and listeners refetch through the
+// API, which re-applies the caller's own location scope.
+Broadcast::channel('inventory.stock', function ($user) {
+    return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
+});

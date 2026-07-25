@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Inventory;
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Permission;
+use App\Events\Inventory\RequisitionBroadcastEvent;
 use App\Events\Inventory\TransferBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\TransferResource;
@@ -196,6 +197,26 @@ class TransferController extends Controller
             $transfer->status->value,
             $changeType,
         );
+
+        // A transfer raised from a requisition drags that requisition along with
+        // it: receiving the last one flips it to `fulfilled`, and its detail
+        // screen shows a live "fulfilling transfer" banner. Requisition screens
+        // listen on their own channel and hear nothing from a transfer event, so
+        // without this they sit on a stale status until a hard refresh — which
+        // is exactly how an already-fulfilled requisition kept reading
+        // "Approved".
+        if ($transfer->requisition_id) {
+            $requisition = $transfer->requisition()->first();
+
+            if ($requisition) {
+                RequisitionBroadcastEvent::dispatch(
+                    $requisition->id,
+                    $requisition->reference,
+                    $requisition->status->value,
+                    'transfer.'.$changeType,
+                );
+            }
+        }
     }
 
     private function guard(callable $fn): JsonResponse
