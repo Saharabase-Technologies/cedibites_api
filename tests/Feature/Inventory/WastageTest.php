@@ -10,6 +10,7 @@ use App\Enums\Inventory\WastageOrigin;
 use App\Enums\Inventory\WastageReason;
 use App\Enums\Inventory\WastageStatus;
 use App\Enums\Permission;
+use App\Http\Controllers\Api\Inventory\InventorySettingController;
 use App\Models\Branch;
 use App\Models\Employee;
 use App\Models\Inventory\Item;
@@ -17,7 +18,6 @@ use App\Models\Inventory\Location;
 use App\Models\Inventory\StockMovement;
 use App\Models\Inventory\Transfer;
 use App\Models\Inventory\Wastage;
-use App\Http\Controllers\Api\Inventory\InventorySettingController;
 use App\Models\User;
 use App\Services\SystemSettingService;
 use Database\Seeders\PermissionSeeder;
@@ -627,4 +627,89 @@ it('leaves an unexplained shortfall unexplained rather than blocking the day', f
     expect($closing->status->value)->toBe('completed')
         ->and($closing->wastage_id)->toBeNull()
         ->and(onHandAt($this->branch->id, $this->rice->id))->toBe(39.0);
+});
+
+/*
+ * ── Media weight ─────────────────────────────────────────────────────────────
+ *
+ * Measured on production after the first phone field test: one claim held six
+ * photos totalling ~14 MB, the largest 6.2 MB, and opening the claim pulled all
+ * of it to draw six 112px squares.
+ */
+it('builds a small thumbnail and a display copy, and never touches the original', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+
+    $photo = $this->wastages->attachPhoto(
+        $wastage,
+        UploadedFile::fake()->image('crate.jpg', 3000, 2000),
+        $this->jesse,
+    );
+
+    $disk = Storage::disk('public');
+
+    expect($photo->thumb_path)->not->toBeNull()
+        ->and($photo->display_path)->not->toBeNull();
+
+    $disk->assertExists($photo->path);
+    $disk->assertExists($photo->thumb_path);
+    $disk->assertExists($photo->display_path);
+
+    // The point of the exercise: the grid must not cost what the original costs.
+    expect($disk->size($photo->thumb_path))->toBeLessThan($disk->size($photo->path))
+        ->and($disk->size($photo->thumb_path))->toBeLessThan($disk->size($photo->display_path));
+
+    // The original is the evidence. It is not re-encoded, resized or replaced.
+    expect(getimagesize($disk->path($photo->path))[0])->toBe(3000)
+        ->and(getimagesize($disk->path($photo->thumb_path))[0])
+        ->toBe(App\Services\Media\EvidenceImageProcessor::THUMB_WIDTH);
+});
+
+it('leaves video alone rather than pretending to transcode it', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+
+    $photo = $this->wastages->attachPhoto(
+        $wastage,
+        UploadedFile::fake()->create('crate.mp4', 900, 'video/mp4'),
+        $this->jesse,
+    );
+
+    // No ffmpeg on the VPS, so no renditions - and the resource falls back to
+    // the original rather than serving a broken URL.
+    expect($photo->thumb_path)->toBeNull()
+        ->and($photo->display_path)->toBeNull();
+
+    $body = (new App\Http\Resources\Inventory\WastageResource(
+        $wastage->fresh(['photos.uploadedBy'])
+    ))->toArray(request());
+
+    expect($body['photos'][0]['thumb_url'])->toBe($photo->url)
+        ->and($body['photos'][0]['display_url'])->toBe($photo->url);
+});
+
+it('takes the renditions with it when a photo is removed', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+
+    $photo = $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+    [$original, $thumb, $display] = [$photo->path, $photo->thumb_path, $photo->display_path];
+
+    $this->wastages->detachPhoto($wastage->fresh(), $photo, $this->jesse);
+
+    Storage::disk('public')->assertMissing($original);
+    Storage::disk('public')->assertMissing($thumb);
+    Storage::disk('public')->assertMissing($display);
 });

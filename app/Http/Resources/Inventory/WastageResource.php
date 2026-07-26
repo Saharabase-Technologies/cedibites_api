@@ -84,7 +84,17 @@ class WastageResource extends JsonResource
             'photos' => $this->whenLoaded('photos', fn () => $this->photos->map(fn ($photo) => [
                 'id' => $photo->id,
                 'stage' => $photo->stage,          // declared | inspection
+
+                /*
+                 * Three sizes, and the client picks by what it is drawing.
+                 * `url` stays the ORIGINAL - it is the evidence, and "view full
+                 * size" opens it. The other two fall back to it, so video rows,
+                 * rows predating the derivatives, and anything GD could not read
+                 * all keep rendering rather than showing a broken image.
+                 */
                 'url' => $photo->url,
+                'thumb_url' => $photo->thumb_url ?? $photo->url,
+                'display_url' => $photo->display_url ?? $photo->url,
 
                 // A phone can send a clip as well as a still, so the gallery
                 // has to know whether to render <img> or <video>. Derived here

@@ -19,6 +19,13 @@ class WastagePhoto extends Model
         'stage',
         'path',
         'url',
+        // Smaller renditions for the grid and the lightbox. Nullable: video rows
+        // have none, and neither does anything GD could not read. Every consumer
+        // falls back to the original.
+        'thumb_path',
+        'thumb_url',
+        'display_path',
+        'display_url',
         'caption',
         'mime_type',
         'size_bytes',

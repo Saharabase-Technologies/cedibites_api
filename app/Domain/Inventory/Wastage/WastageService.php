@@ -18,6 +18,7 @@ use App\Models\Inventory\Transfer;
 use App\Models\Inventory\Wastage;
 use App\Models\Inventory\WastagePhoto;
 use App\Models\User;
+use App\Services\Media\EvidenceImageProcessor;
 use App\Services\SystemSettingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -203,6 +204,13 @@ class WastageService
             throw new InventoryException('That file could not be saved. Try again.');
         }
 
+        // Smaller renditions for the grid and the lightbox. Returns null for
+        // video, and for any image GD cannot read - in which case the row simply
+        // carries no derivatives and every consumer falls back to the original.
+        // Never allowed to fail the attach: the evidence matters, the thumbnail
+        // does not.
+        $derivatives = app(EvidenceImageProcessor::class)->process($path, $mime) ?? [];
+
         return $wastage->photos()->create([
             'stage' => $stage,
             'path' => $path,
@@ -211,6 +219,7 @@ class WastageService
             'mime_type' => $mime,
             'size_bytes' => $size,
             'uploaded_by' => $actor->id,
+            ...$derivatives,
         ]);
     }
 
@@ -234,8 +243,13 @@ class WastageService
         // Delete the row first: an orphaned file on disk is harmless, a row
         // pointing at a file that is gone renders as a broken image forever.
         $path = $photo->path;
+        $thumb = $photo->thumb_path;
+        $display = $photo->display_path;
+
         $photo->delete();
+
         Storage::disk('public')->delete($path);
+        app(EvidenceImageProcessor::class)->forget($thumb, $display);
     }
 
     // ── Deciding ──────────────────────────────────────────────────────────────
