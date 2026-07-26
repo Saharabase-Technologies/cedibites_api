@@ -7,6 +7,7 @@ use App\Domain\Inventory\PurchaseOrders\PurchaseOrderService;
 use App\Enums\Inventory\PurchaseOrderStatus;
 use App\Enums\Permission;
 use App\Events\Inventory\PurchaseOrderBroadcastEvent;
+use App\Http\Controllers\Api\Inventory\Concerns\SearchesText;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Inventory\ApprovePurchaseOrderRequest;
 use App\Http\Requests\Inventory\CancelPurchaseOrderRequest;
@@ -19,6 +20,8 @@ use Illuminate\Http\Request;
 
 class PurchaseOrderController extends Controller
 {
+    use SearchesText;
+
     private const RELATIONS = [
         'supplier',
         'destinationLocation',
@@ -46,8 +49,8 @@ class PurchaseOrderController extends Controller
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = '%'.$request->string('search').'%';
                 $q->where(fn ($w) => $w
-                    ->where('reference', 'like', $term)
-                    ->orWhereHas('supplier', fn ($s) => $s->where('name', 'like', $term)));
+                    ->where('reference', $this->likeOperator(), $term)
+                    ->orWhereHas('supplier', fn ($s) => $s->where('name', $this->likeOperator(), $term)));
             })
             ->latest()
             ->get();

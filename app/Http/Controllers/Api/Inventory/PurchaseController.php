@@ -6,6 +6,7 @@ use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Purchases\PurchaseService;
 use App\Enums\Permission;
 use App\Events\Inventory\PurchaseOrderBroadcastEvent;
+use App\Http\Controllers\Api\Inventory\Concerns\SearchesText;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Inventory\RecordPurchaseRequest;
 use App\Http\Resources\Inventory\PurchaseResource;
@@ -15,6 +16,8 @@ use Illuminate\Http\Request;
 
 class PurchaseController extends Controller
 {
+    use SearchesText;
+
     private const RELATIONS = [
         'purchaseOrder',
         'supplier',
@@ -40,9 +43,9 @@ class PurchaseController extends Controller
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = '%'.$request->string('search').'%';
                 $q->where(fn ($w) => $w
-                    ->where('reference', 'like', $term)
-                    ->orWhere('invoice_number', 'like', $term)
-                    ->orWhereHas('supplier', fn ($s) => $s->where('name', 'like', $term)));
+                    ->where('reference', $this->likeOperator(), $term)
+                    ->orWhere('invoice_number', $this->likeOperator(), $term)
+                    ->orWhereHas('supplier', fn ($s) => $s->where('name', $this->likeOperator(), $term)));
             })
             ->latest('received_at')
             ->get();

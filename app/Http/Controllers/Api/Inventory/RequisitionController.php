@@ -6,6 +6,7 @@ use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Events\Inventory\RequisitionBroadcastEvent;
 use App\Events\Inventory\TransferBroadcastEvent;
+use App\Http\Controllers\Api\Inventory\Concerns\SearchesText;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\RequisitionResource;
 use App\Models\Inventory\Requisition;
@@ -15,6 +16,8 @@ use Illuminate\Http\Request;
 
 class RequisitionController extends Controller
 {
+    use SearchesText;
+
     private const RELATIONS = [
         'requestingLocation',
         'sourceLocation',
@@ -39,7 +42,7 @@ class RequisitionController extends Controller
             ->when($request->filled('requesting_location_id'), fn ($q) => $q->where('requesting_location_id', $request->integer('requesting_location_id')))
             ->when($request->filled('source_location_id'), fn ($q) => $q->where('source_location_id', $request->integer('source_location_id')))
             ->when($request->filled('purpose'), fn ($q) => $q->where('purpose', $request->string('purpose')))
-            ->when($request->filled('search'), fn ($q) => $q->where('reference', 'like', '%'.$request->string('search').'%'))
+            ->when($request->filled('search'), fn ($q) => $q->where('reference', $this->likeOperator(), '%'.$request->string('search').'%'))
             ->latest()
             ->get();
 

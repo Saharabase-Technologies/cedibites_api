@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Inventory;
 
+use App\Http\Controllers\Api\Inventory\Concerns\SearchesText;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\CategoryResource;
 use App\Http\Resources\Inventory\ItemResource;
@@ -27,6 +28,8 @@ use Illuminate\Validation\Rule;
  */
 class CatalogController extends Controller
 {
+    use SearchesText;
+
     /**
      * Which locations an item's `stock_on_hand` should be summed over.
      *
@@ -83,7 +86,7 @@ class CatalogController extends Controller
             ->when($request->has('is_active'), fn ($q) => $q->where('is_active', $request->boolean('is_active')))
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = '%'.$request->string('search').'%';
-                $q->where(fn ($w) => $w->where('name', 'like', $term)->orWhere('sku', 'like', $term));
+                $q->where(fn ($w) => $w->where('name', $this->likeOperator(), $term)->orWhere('sku', $this->likeOperator(), $term));
             })
             ->orderBy('name')
             ->get();
