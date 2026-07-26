@@ -5,6 +5,8 @@ use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Inventory\RequisitionStatus;
 use App\Enums\Inventory\TransferStatus;
+use App\Enums\Permission;
+use Database\Seeders\PermissionSeeder;
 use App\Models\Inventory\DisputeResolution;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
@@ -21,13 +23,20 @@ use App\Models\User;
  * be written off instead of chased.
  */
 beforeEach(function () {
+    // VIEW_ALL_FOR_TESTS: outbound acts (submit/approve/send) are gated to the
+    // SOURCE location. The warehouse has no branch, so whoever dispatches from
+    // it must hold view_all_locations — that is what makes them a warehouse
+    // operator rather than branch staff.
+    $this->seed(PermissionSeeder::class);
     $this->engine = app(MovementPostingEngine::class);
     $this->requisitions = app(RequisitionService::class);
     $this->transfers = app(TransferService::class);
 
     $this->actor = User::factory()->create();
+    $this->actor->givePermissionTo(Permission::InventoryViewAllLocations->value);
     // Separation of duties: the requester may not approve their own request.
     $this->approver = User::factory()->create();
+    $this->approver->givePermissionTo(Permission::InventoryViewAllLocations->value);
     $this->warehouse = Location::factory()->warehouse()->create();
     $destBranch = Branch::factory()->create();
     $this->branch = Location::factory()->satellite()->create(['branch_id' => $destBranch->id]);
@@ -157,6 +166,49 @@ it('lets an admin receive at either end, belonging to no kitchen', function () {
     $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
 
     expect($this->transfers->receive($transfer, $admin)->status)->toBe(TransferStatus::Received);
+});
+
+// ── Dispatching belongs to the source, not the destination ───────────────────
+
+it('blocks the receiving branch from dispatching the warehouse\'s transfer', function () {
+    // The branch manager is the one EXPECTING this delivery. He must not be able
+    // to declare that the mother kitchen shipped it.
+    $bm = User::factory()->create();
+    Employee::factory()->create(['user_id' => $bm->id])
+        ->branches()->attach($this->branch->branch_id);
+    $bm->givePermissionTo(Permission::ViewInventoryCatalog->value);
+
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
+    $transfer = Transfer::find($r->fulfilling_transfer_id);
+
+    expect(fn () => $this->transfers->send($transfer, $bm))
+        ->toThrow(Exception::class, 'only someone there can send it');
+});
+
+it('lets the warehouse dispatch its own transfer', function () {
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
+
+    expect($this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor)->status)
+        ->toBe(TransferStatus::Sent);
+});
+
+it('allows sending more than was requested, and keeps the excess on the record', function () {
+    // Rounding up to a whole crate is legitimate; it is not a dispute. But the
+    // branch is receiving stock it did not ask for, so the variance must survive.
+    $r = $this->requisitions->approve(submittedRequisition($this, 12), $this->approver);
+    $transfer = Transfer::find($r->fulfilling_transfer_id);
+    $lineId = $transfer->lines()->first()->id;
+
+    $sent = $this->transfers->send($transfer, $this->actor, [$lineId => 14]);
+    $line = $sent->lines()->first();
+
+    expect($sent->status)->toBe(TransferStatus::Sent)
+        ->and((float) $line->requested_qty)->toBe(12.0)
+        ->and((float) $line->sent_qty)->toBe(14.0);
+
+    // Receiving all 14 is a clean receipt — an overage is not a shortfall.
+    expect($this->transfers->receive($sent, $this->receiver, [$lineId => 14])->status)
+        ->toBe(TransferStatus::Received);
 });
 
 // ── Drafts are private and disposable ────────────────────────────────────────

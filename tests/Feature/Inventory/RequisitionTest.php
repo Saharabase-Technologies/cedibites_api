@@ -5,6 +5,8 @@ use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Inventory\RequisitionStatus;
 use App\Enums\Inventory\TransferStatus;
+use App\Enums\Permission;
+use Database\Seeders\PermissionSeeder;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Requisition;
@@ -14,12 +16,19 @@ use App\Models\Inventory\Transfer;
 use App\Models\User;
 
 beforeEach(function () {
+    // VIEW_ALL_FOR_TESTS: outbound acts (submit/approve/send) are gated to the
+    // SOURCE location. The warehouse has no branch, so whoever dispatches from
+    // it must hold view_all_locations — that is what makes them a warehouse
+    // operator rather than branch staff.
+    $this->seed(PermissionSeeder::class);
     $this->engine = app(MovementPostingEngine::class);
     $this->requisitions = app(RequisitionService::class);
     $this->transfers = app(TransferService::class);
     $this->actor = User::factory()->create();
+    $this->actor->givePermissionTo(Permission::InventoryViewAllLocations->value);
     // Separation of duties: the requester may not approve their own request.
     $this->approver = User::factory()->create();
+    $this->approver->givePermissionTo(Permission::InventoryViewAllLocations->value);
 
     $this->warehouse = Location::factory()->warehouse()->create();
     $destBranch = Branch::factory()->create();

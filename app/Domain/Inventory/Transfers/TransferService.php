@@ -82,6 +82,7 @@ class TransferService
     public function submit(Transfer $transfer, User $actor, bool $override = false): Transfer
     {
         $this->assertStatus($transfer, TransferStatus::Draft, 'submitted');
+        $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'submit');
 
         return DB::transaction(function () use ($transfer, $actor, $override) {
             $deficits = $this->sourceDeficits($transfer);
@@ -104,6 +105,7 @@ class TransferService
     public function approve(Transfer $transfer, User $actor): Transfer
     {
         $this->assertStatus($transfer, TransferStatus::Submitted, 'approved');
+        $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'approve');
 
         $transfer->status = TransferStatus::Approved;
         $transfer->approved_by = $actor->id;
@@ -124,6 +126,11 @@ class TransferService
         if (! $transfer->status->canSend()) {
             throw new InventoryException("Only approved transfers can be sent (current status: {$transfer->status->value}).");
         }
+
+        // Dispatching is the SOURCE's act. The destination watches it arrive —
+        // a branch manager receiving from the mother kitchen has no business
+        // declaring that the mother kitchen shipped.
+        $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'send');
 
         return DB::transaction(function () use ($transfer, $actor, $sentQty) {
             $sourceId = $transfer->source_location_id;
@@ -563,6 +570,26 @@ class TransferService
             ->where('item_id', $itemId)->where('location_id', $locationId)->value('weighted_avg_cost');
 
         return $cost !== null ? (float) $cost : null;
+    }
+
+    /**
+     * Refuse an action at a location the actor does not work at.
+     *
+     * Outbound actions (submit, approve, send, cancel) belong to the source;
+     * receiving belongs to the destination. Admins operate anywhere.
+     */
+    private function assertOperatesAt(User $actor, int $locationId, ?string $locationName, string $action): void
+    {
+        $operating = $actor->operatingLocationIds();
+
+        if ($operating === null || in_array($locationId, array_map('intval', $operating), true)) {
+            return;
+        }
+
+        $where = $locationName ?? 'that location';
+        throw new InventoryException(
+            "This transfer is dispatched from {$where}, so only someone there can {$action} it."
+        );
     }
 
     private function assertEditable(Transfer $transfer): void
