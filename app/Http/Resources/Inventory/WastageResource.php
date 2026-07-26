@@ -85,6 +85,15 @@ class WastageResource extends JsonResource
                 'id' => $photo->id,
                 'stage' => $photo->stage,          // declared | inspection
                 'url' => $photo->url,
+
+                // A phone can send a clip as well as a still, so the gallery
+                // has to know whether to render <img> or <video>. Derived here
+                // rather than sniffed from the URL: an iPhone .mov and an
+                // Android .webm share nothing but their mime prefix.
+                'kind' => str_starts_with((string) $photo->mime_type, 'video/') ? 'video' : 'image',
+                'mime_type' => $photo->mime_type,
+                'size_bytes' => $photo->size_bytes,
+
                 'caption' => $photo->caption,
                 'uploaded_by' => $photo->relationLoaded('uploadedBy') ? $photo->uploadedBy?->name : null,
                 'uploaded_by_id' => $photo->uploaded_by,

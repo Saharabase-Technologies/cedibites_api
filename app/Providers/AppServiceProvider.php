@@ -36,7 +36,7 @@ class AppServiceProvider extends ServiceProvider
                     );
                 }
 
-                return new \App\Services\Feedback\Transcription\NullTranscriber();
+                return new \App\Services\Feedback\Transcription\NullTranscriber;
             },
         );
     }
@@ -69,6 +69,9 @@ class AppServiceProvider extends ServiceProvider
         // Register Payment observer
         \App\Models\Payment::observe(\App\Observers\PaymentObserver::class);
 
+        // Settling a wastage claim kills any live phone-upload QR code on it.
+        \App\Models\Inventory\Wastage::observe(\App\Observers\WastageObserver::class);
+
         // Register rate limiters (relaxed in local for testing)
         \Illuminate\Support\Facades\RateLimiter::for('otp-send', function ($request) {
             $limit = app()->environment('local') ? 60 : 3;
@@ -80,6 +83,35 @@ class AppServiceProvider extends ServiceProvider
             $limit = app()->environment('local') ? 30 : 5;
 
             return \Illuminate\Cache\RateLimiting\Limit::perMinute($limit)->by($request->input('phone') ?? $request->ip());
+        });
+
+        /*
+         * Phone-as-camera upload sessions. These two routes sit outside auth -
+         * the token in the URL is the whole credential - so they are limited on
+         * both axes at once:
+         *
+         *   by token — caps what one leaked QR code can do.
+         *   by IP    — caps guessing. A per-token limit is useless against
+         *              brute force, because every guess is a different token.
+         *
+         * The IP allowance is the looser of the two on purpose: a branch is one
+         * NAT'd connection, and several people photographing several crates
+         * must not lock each other out.
+         */
+        \Illuminate\Support\Facades\RateLimiter::for('upload-session-view', function ($request) {
+            return [
+                \Illuminate\Cache\RateLimiting\Limit::perMinute(30)->by('us-view:'.$request->route('token')),
+                \Illuminate\Cache\RateLimiting\Limit::perMinute(120)->by('us-view-ip:'.$request->ip()),
+            ];
+        });
+
+        \Illuminate\Support\Facades\RateLimiter::for('upload-session-store', function ($request) {
+            return [
+                // `max_files` is the real cap on a session; this is the cap on
+                // how fast it can be spent, including on rejected files.
+                \Illuminate\Cache\RateLimiting\Limit::perMinute(20)->by('us-store:'.$request->route('token')),
+                \Illuminate\Cache\RateLimiting\Limit::perMinute(60)->by('us-store-ip:'.$request->ip()),
+            ];
         });
     }
 }

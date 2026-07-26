@@ -11,6 +11,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\WastageResource;
 use App\Models\Inventory\Wastage;
 use App\Models\Inventory\WastagePhoto;
+use App\Rules\EvidenceMedia;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -136,8 +137,12 @@ class WastageController extends Controller
     {
         abort_unless($wastage->isVisibleTo($request->user()), 404);
 
+        // The same rule the phone endpoint uses, so a clip the laptop accepts is
+        // never refused by the QR page or the reverse. It covers video as well
+        // as stills: a still of a crate proves it is full, a ten-second pan
+        // proves the smell argument in a way a still cannot.
         $request->validate([
-            'photo' => ['required', 'image', 'mimes:jpeg,jpg,png,webp,heic', 'max:10240'], // 10 MB
+            'photo' => ['required', 'file', new EvidenceMedia],
             'caption' => ['nullable', 'string', 'max:255'],
         ]);
 

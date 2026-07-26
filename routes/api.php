@@ -6,6 +6,11 @@ require __DIR__.'/auth.php';
 require __DIR__.'/public.php';
 require __DIR__.'/cart.php';
 
+// Phone-as-camera upload sessions. Required OUTSIDE the auth group on purpose:
+// the file declares its own middleware, because the pair of routes a phone hits
+// have no logged-in user - the token in the URL is the whole credential.
+require __DIR__.'/uploads.php';
+
 Route::middleware('auth:sanctum')->group(function () {
     require __DIR__.'/protected.php';
     require __DIR__.'/employee.php';

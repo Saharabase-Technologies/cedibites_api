@@ -188,10 +188,19 @@ class WastageService
 
         $stage = (int) $wastage->recorded_by === (int) $actor->id ? 'declared' : 'inspection';
 
+        // Read the file's own properties BEFORE storing it - once it has been
+        // written to the disk the temp file is no longer something to depend on.
+        // The mime type is SNIFFED, not taken from what the uploader claimed:
+        // the gallery decides <img> versus <video> from this value, so a phone
+        // that labels a .mov as image/jpeg would otherwise produce a permanently
+        // broken thumbnail.
+        $mime = $file->getMimeType() ?: $file->getClientMimeType();
+        $size = $file->getSize();
+
         try {
             $path = $file->store("inventory/wastage/{$wastage->id}", 'public');
         } catch (\Throwable $e) {
-            throw new InventoryException('That photo could not be saved. Try again.');
+            throw new InventoryException('That file could not be saved. Try again.');
         }
 
         return $wastage->photos()->create([
@@ -199,8 +208,8 @@ class WastageService
             'path' => $path,
             'url' => Storage::disk('public')->url($path),
             'caption' => $caption !== null && trim($caption) !== '' ? trim($caption) : null,
-            'mime_type' => $file->getClientMimeType(),
-            'size_bytes' => $file->getSize(),
+            'mime_type' => $mime,
+            'size_bytes' => $size,
             'uploaded_by' => $actor->id,
         ]);
     }
