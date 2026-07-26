@@ -10,7 +10,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Lightweight stock-transfer change signal. Carries scalars only — listeners
+ * Lightweight stock-transfer change signal. Carries scalars only - listeners
  * refetch the full transfer via the API. Broadcast to anyone who can view the
  * inventory catalog (including the receiving branch).
  */

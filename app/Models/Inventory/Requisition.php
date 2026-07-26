@@ -87,7 +87,7 @@ class Requisition extends Model
     /**
      * Hide other people's drafts.
      *
-     * A draft is unfinished thinking, not a request anyone has made yet — it
+     * A draft is unfinished thinking, not a request anyone has made yet - it
      * should not appear in someone else's queue or approval list. Everything
      * from `submitted` onward is a record and stays visible to whoever the
      * location scope allows.

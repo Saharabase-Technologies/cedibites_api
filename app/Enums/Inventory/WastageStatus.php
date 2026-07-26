@@ -11,7 +11,7 @@ namespace App\Enums\Inventory;
  *   (over threshold, at warehouse) → pending_approval → approved / rejected
  *
  * The founder's rule: the warehouse manager supplied the goods, so he answers
- * for a branch claiming they arrived bad — and goods claimed bad must physically
+ * for a branch claiming they arrived bad - and goods claimed bad must physically
  * come back to the warehouse before he signs it off. `pending_return` is that
  * journey; the return transfer carries the stock and its receipt advances the
  * claim.

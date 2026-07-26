@@ -5,7 +5,7 @@ namespace App\Enums\Inventory;
 /**
  * Why stock left without being sold.
  *
- * A fixed list, deliberately — free text produces a wastage report nobody can
+ * A fixed list, deliberately - free text produces a wastage report nobody can
  * total or trend. `Other` is the escape hatch and REQUIRES a note, so the
  * unusual case is still captured without diluting the list.
  *

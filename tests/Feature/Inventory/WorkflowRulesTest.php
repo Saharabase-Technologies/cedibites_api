@@ -47,6 +47,14 @@ beforeEach(function () {
     Employee::factory()->create(['user_id' => $this->receiver->id])
         ->branches()->attach($destBranch->id);
 
+    // A requisition is a BRANCH asking the warehouse to supply it, so it has to
+    // be raised by someone who works at that branch. `$this->actor` holds
+    // view_all_locations, which makes it a warehouse operator, and a warehouse
+    // supplies stock rather than requesting it.
+    $this->requester = User::factory()->create();
+    Employee::factory()->create(['user_id' => $this->requester->id])
+        ->branches()->attach($destBranch->id);
+
     $this->item = Item::factory()->create();
 
     $this->engine->post([
@@ -65,9 +73,9 @@ function submittedRequisition($test, float $qty = 20, ?User $author = null): Req
         'requesting_location_id' => $test->branch->id,
         'source_location_id' => $test->warehouse->id,
         'items' => [['item_id' => $test->item->id, 'requested_qty' => $qty]],
-    ], $author ?? $test->actor);
+    ], $author ?? $test->requester);
 
-    return $test->requisitions->submit($r, $author ?? $test->actor);
+    return $test->requisitions->submit($r, $author ?? $test->requester);
 }
 
 // ── Approval should not be given four times ──────────────────────────────────
@@ -101,20 +109,20 @@ it('lets an override push an approval through a short source', function () {
 it('blocks a manager from approving a requisition they raised', function () {
     // A branch manager holds both grants: create, and approve (so they can serve
     // other branches drawing on their stock). Not so they can serve themselves.
-    $r = submittedRequisition($this, 20, $this->actor);
+    $r = submittedRequisition($this, 20, $this->requester);
 
-    expect(fn () => $this->requisitions->approve($r, $this->actor))
+    expect(fn () => $this->requisitions->approve($r, $this->requester))
         ->toThrow(Exception::class, 'you cannot also approve it');
 });
 
 it('lets someone at the fulfilling location approve it', function () {
-    $r = $this->requisitions->approve(submittedRequisition($this, 20, $this->actor), $this->approver);
+    $r = $this->requisitions->approve(submittedRequisition($this, 20, $this->requester), $this->approver);
 
     expect($r->status)->toBe(RequisitionStatus::Approved);
 });
 
 it('still lets the requester withdraw their own request by rejecting it', function () {
-    $r = $this->requisitions->reject(submittedRequisition($this, 20, $this->actor), $this->actor, 'changed my mind');
+    $r = $this->requisitions->reject(submittedRequisition($this, 20, $this->requester), $this->requester, 'changed my mind');
 
     expect($r->status)->toBe(RequisitionStatus::Rejected);
 });
@@ -218,9 +226,9 @@ it('deletes a draft requisition', function () {
         'requesting_location_id' => $this->branch->id,
         'source_location_id' => $this->warehouse->id,
         'items' => [['item_id' => $this->item->id, 'requested_qty' => 5]],
-    ], $this->actor);
+    ], $this->requester);
 
-    $this->requisitions->delete($r, $this->actor);
+    $this->requisitions->delete($r, $this->requester);
 
     expect(Requisition::find($r->id))->toBeNull();
 });
@@ -237,7 +245,7 @@ it('refuses to let someone delete a draft they did not start', function () {
         'requesting_location_id' => $this->branch->id,
         'source_location_id' => $this->warehouse->id,
         'items' => [['item_id' => $this->item->id, 'requested_qty' => 5]],
-    ], $this->actor);
+    ], $this->requester);
 
     expect(fn () => $this->requisitions->delete($r, $this->receiver))
         ->toThrow(Exception::class, 'Only the person who started this draft');
@@ -248,13 +256,13 @@ it('hides a draft from everyone but its author, and shows it once submitted', fu
         'requesting_location_id' => $this->branch->id,
         'source_location_id' => $this->warehouse->id,
         'items' => [['item_id' => $this->item->id, 'requested_qty' => 5]],
-    ], $this->actor);
+    ], $this->requester);
 
     expect(Requisition::visibleDrafts($this->receiver)->pluck('id'))->not->toContain($mine->id)
-        ->and(Requisition::visibleDrafts($this->actor)->pluck('id'))->toContain($mine->id)
+        ->and(Requisition::visibleDrafts($this->requester)->pluck('id'))->toContain($mine->id)
         ->and($mine->isHiddenDraftFor($this->receiver))->toBeTrue();
 
-    $this->requisitions->submit($mine, $this->actor);
+    $this->requisitions->submit($mine, $this->requester);
 
     expect(Requisition::visibleDrafts($this->receiver)->pluck('id'))->toContain($mine->id);
 });

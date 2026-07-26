@@ -10,7 +10,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Lightweight requisition change signal. Carries scalars only — listeners refetch
+ * Lightweight requisition change signal. Carries scalars only - listeners refetch
  * the full requisition via the API. Broadcast to anyone who can view the
  * inventory catalog (the requesting branch + the approving warehouse manager).
  */

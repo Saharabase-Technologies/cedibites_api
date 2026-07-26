@@ -416,6 +416,57 @@ it('sends refused goods straight back to the sender instead of calling them miss
         ->and((float) $claim->lines->first()->quantity)->toBe(3.0);
 });
 
+it('lets the branch that refused a delivery see the claim and photograph it', function () {
+    Storage::fake('public');
+
+    $transfer = $this->transfers->create([
+        'source_location_id' => $this->warehouse->id,
+        'destination_location_id' => $this->branch->id,
+        'items' => [['item_id' => $this->rice->id, 'requested_qty' => 10]],
+    ], $this->wilfred);
+    $this->transfers->submit($transfer, $this->wilfred);
+    $this->transfers->approve($transfer->fresh(), $this->wilfred);
+    $this->transfers->send($transfer->fresh('lines'), $this->wilfred);
+
+    $line = $transfer->fresh('lines')->lines->first();
+    $this->transfers->receive(
+        $transfer->fresh('lines'),
+        $this->jesse,
+        [$line->id => 7],
+        null,
+        [$line->id => ['qty' => 3, 'reason' => WastageReason::Spoiled->value]],
+    );
+
+    $claim = Wastage::where('origin', WastageOrigin::DeliveryRejection->value)->firstOrFail();
+
+    // The goods are the warehouse's problem, but Jesse is the only person who
+    // saw what was wrong with them. If he cannot open the claim he cannot
+    // photograph the evidence, and the claim is unresolvable by design.
+    expect((int) $claim->location_id)->toBe($this->warehouse->id)
+        ->and((int) $claim->claimant_location_id)->toBe($this->branch->id)
+        ->and($claim->isVisibleTo($this->jesse))->toBeTrue()
+        ->and($claim->isVisibleTo($this->wilfred))->toBeTrue();
+
+    $jesses = $this->wastages->attachPhoto(
+        $claim,
+        UploadedFile::fake()->image('mouldy.jpg'),
+        $this->jesse,
+        'Mould on the sacks',
+    );
+    $wilfreds = $this->wastages->attachPhoto(
+        $claim->fresh(),
+        UploadedFile::fake()->image('back-at-the-warehouse.jpg'),
+        $this->wilfred,
+    );
+
+    // Refusing the delivery IS raising the claim, so Jesse is the claimant and
+    // his photo is his own case. Wilfred, looking at the returned goods
+    // afterwards, is the one inspecting.
+    expect($jesses->stage)->toBe('declared')
+        ->and($wilfreds->stage)->toBe('inspection')
+        ->and($claim->fresh('photos')->photos)->toHaveCount(2);
+});
+
 it('marks a wholly refused consignment as rejected, not disputed', function () {
     $transfer = $this->transfers->create([
         'source_location_id' => $this->warehouse->id,

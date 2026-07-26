@@ -10,7 +10,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Lightweight reconciliation-cycle change signal. Carries scalars only —
+ * Lightweight reconciliation-cycle change signal. Carries scalars only -
  * listeners refetch the full cycle via the API. Broadcast to anyone who can view
  * the inventory catalog.
  */

@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * Denormalized balance cache keyed by (item_id, location_id). No auto-increment
  * id and only an updated_at timestamp. Writes go through MovementPostingEngine
  * via the query builder (composite-key upsert under row lock); this model is for
- * reads/relations only — do not call find() on it.
+ * reads/relations only - do not call find() on it.
  */
 class StockBalance extends Model
 {

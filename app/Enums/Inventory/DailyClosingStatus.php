@@ -8,7 +8,7 @@ namespace App\Enums\Inventory;
  *   open → completed
  *
  * A location opens a count for a business date (expected quantities snapshotted
- * from the ledger), enters the physically counted quantities, and completes it —
+ * from the ledger), enters the physically counted quantities, and completes it -
  * locking in the variance. Missed days are simply dates with no closing at all,
  * surfaced on the calendar/variance report.
  */

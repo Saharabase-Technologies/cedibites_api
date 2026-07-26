@@ -129,7 +129,7 @@ class TransferService
             throw new InventoryException("Only approved transfers can be sent (current status: {$transfer->status->value}).");
         }
 
-        // Dispatching is the SOURCE's act. The destination watches it arrive —
+        // Dispatching is the SOURCE's act. The destination watches it arrive -
         // a branch manager receiving from the mother kitchen has no business
         // declaring that the mother kitchen shipped.
         $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'send');
@@ -208,12 +208,12 @@ class TransferService
      * Three things can happen to each line, and the system has to tell them
      * apart because they have different owners:
      *
-     *   accepted — added to the destination, and now the destination's to answer
+     *   accepted - added to the destination, and now the destination's to answer
      *              for. Anything wrong with it from here is their wastage.
-     *   refused  — it turned up and it is going back on the lorry. Returned to
+     *   refused  - it turned up and it is going back on the lorry. Returned to
      *              the source immediately and raised as a wastage claim there,
      *              because the sender never stopped owning it.
-     *   missing  — it never turned up. Only this is a dispute; only this is
+     *   missing  - it never turned up. Only this is a dispute; only this is
      *              something the two ends actually disagree about.
      *
      * Refusing every line is the door being shut on the whole consignment, and
@@ -236,8 +236,8 @@ class TransferService
         // Separation of duties: whoever dispatched the stock cannot also sign for
         // its arrival. A short or wrong delivery is only caught if the receiving
         // end confirms it, and the sender confirming their own consignment makes
-        // the dispute path unreachable. Anyone else at the destination — branch
-        // manager or admin — can receive it.
+        // the dispute path unreachable. Anyone else at the destination - branch
+        // manager or admin - can receive it.
         if ($transfer->sent_by !== null && (int) $transfer->sent_by === (int) $actor->id) {
             throw new InventoryException(
                 'You sent this transfer, so you cannot also receive it. Someone at the destination must confirm it arrived.'
@@ -292,7 +292,7 @@ class TransferService
                     }
                     $note = trim((string) ($refusal['note'] ?? ''));
                     if ($reason->requiresNote() && $note === '') {
-                        throw new InventoryException('Choosing “Other” means saying what happened — add a note.');
+                        throw new InventoryException('Choosing "Other" means saying what happened - add a note.');
                     }
                     $refuseReason ??= $reason;
                     $refuseNote ??= ($note !== '' ? $note : null);
@@ -373,14 +373,14 @@ class TransferService
                 && $transfer->lines->every(fn ($l) => (float) $l->received_qty === 0.0);
 
             if ($totalMissing > 0) {
-                // Only a genuine disagreement — stock that neither end can
-                // account for — is a dispute.
+                // Only a genuine disagreement - stock that neither end can
+                // account for - is a dispute.
                 $transfer->status = TransferStatus::Disputed;
                 $transfer->save();
                 $transfer->dispute()->create([
                     'status' => 'open',
                     'raised_by' => $actor->id,
-                    'reason' => $disputeReason ?: 'Short receipt — less arrived than was sent.',
+                    'reason' => $disputeReason ?: 'Short receipt - less arrived than was sent.',
                     'discrepancy_qty' => round($totalMissing, 4),
                 ]);
             } elseif ($everythingRefused) {
@@ -412,9 +412,9 @@ class TransferService
 
     /**
      * Put stock on a shelf: rebuild the batch from the send snapshot so cost and
-     * expiry survive the journey, then post the movement. Used for both legs —
+     * expiry survive the journey, then post the movement. Used for both legs -
      * goods accepted at the destination and goods refused straight back to the
-     * source — because physically they are the same act.
+     * source - because physically they are the same act.
      */
     private function landStock(
         Transfer $transfer,
@@ -488,8 +488,8 @@ class TransferService
     /**
      * @param  bool  $sendCorrective  true spawns a corrective transfer for the
      *                                shortfall; false accepts it as a loss. The
-     *                                ledger is identical either way — the stock
-     *                                left the source and never arrived — so this
+     *                                ledger is identical either way - the stock
+     *                                left the source and never arrived - so this
      *                                only records which decision was taken.
      */
     public function resolveDispute(
@@ -507,7 +507,7 @@ class TransferService
             $writeOffLines = [];
             $shortfallQty = 0.0;
             foreach ($transfer->lines as $line) {
-                // Refused goods are not missing — they went back to the source
+                // Refused goods are not missing - they went back to the source
                 // and were accounted for there. Only what nobody can find is a
                 // shortfall.
                 $short = round(
@@ -543,8 +543,8 @@ class TransferService
             }
 
             // Deciding to stop chasing the shortfall is a decision to absorb it.
-            // The ledger already recorded the loss at the short receipt — the
-            // stock left the source and never arrived — so this classifies it
+            // The ledger already recorded the loss at the short receipt - the
+            // stock left the source and never arrived - so this classifies it
             // into the wastage report without moving anything. Attributed to the
             // source, which is the leg it went missing on.
             $writeOff = null;
@@ -562,7 +562,7 @@ class TransferService
                 $dispute->update([
                     'status' => 'resolved',
                     // Written off only when there was a real shortfall to write
-                    // off — a dispute raised over something other than quantity
+                    // off - a dispute raised over something other than quantity
                     // resolves as neither.
                     'resolution' => match (true) {
                         $corrective !== null => 'corrective',
@@ -634,7 +634,7 @@ class TransferService
      * A short delivery spawns a corrective transfer, which can itself be
      * received short and spawn another. Each row only knows its immediate
      * parent, so the detail screen could show one hop in each direction and no
-     * more — you could not see, from the middle of a chain, what originally went
+     * more - you could not see, from the middle of a chain, what originally went
      * wrong or how it finally ended.
      *
      * Walks up to the root, then down through every descendant.
@@ -678,7 +678,7 @@ class TransferService
     /**
      * Can a location cover this demand right now?
      *
-     * Public so a form can ask before anything is committed — the answer to
+     * Public so a form can ask before anything is committed - the answer to
      * "does the mother kitchen actually have this?" should be visible while the
      * request is being written, not sprung at submit time.
      *
@@ -687,7 +687,7 @@ class TransferService
      */
     public function checkAvailability(int $locationId, array $items): array
     {
-        // Aggregate demand per item — the same item may appear on several lines.
+        // Aggregate demand per item - the same item may appear on several lines.
         $demand = [];
         foreach ($items as $row) {
             $id = (int) $row['item_id'];

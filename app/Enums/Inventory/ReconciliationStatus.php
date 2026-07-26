@@ -7,11 +7,11 @@ namespace App\Enums\Inventory;
  *
  *   open → closed
  *
- * "The inventory management is basically like accounting — whatever comes in,
+ * "The inventory management is basically like accounting - whatever comes in,
  * whatever comes out must cancel out." A cycle opens with a system-quantity
  * snapshot, the warehouse manager counts everything physically, and posting the
  * adjustments cancels the variance out (cycle_adjustment movements bring the
- * ledger to the counted actual) and closes the cycle — "the system is reset to
+ * ledger to the counted actual) and closes the cycle - "the system is reset to
  * zero, another cycle begins." Manager-initiated, not calendar-enforced.
  */
 enum ReconciliationStatus: string

@@ -17,7 +17,7 @@ namespace App\Enums\Inventory;
  * `rejected` is the door being shut: the destination refuses the whole
  * consignment, and the stock goes straight back to the source rather than
  * entering the destination's books at all. That distinction decides who carries
- * the loss — refuse at the door and it stays the sender's; sign for it and it
+ * the loss - refuse at the door and it stays the sender's; sign for it and it
  * becomes yours to declare as wastage.
  */
 enum TransferStatus: string

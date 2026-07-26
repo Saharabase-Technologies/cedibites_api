@@ -16,8 +16,8 @@ class DailyClosingResource extends JsonResource
             ? $this->lines->whereNotNull('counted_qty')
             : collect();
 
-        // A blind count. While a closing is open the ledger's expectation — and
-        // therefore the variance, which gives it away — is withheld from
+        // A blind count. While a closing is open the ledger's expectation - and
+        // therefore the variance, which gives it away - is withheld from
         // everyone, so what gets typed in is what was actually on the shelf.
         // The founder's rule: "they don't get to see the expected." Everything
         // is revealed once the count is completed and can no longer be edited.
@@ -50,7 +50,7 @@ class DailyClosingResource extends JsonResource
                 'adjusted' => $line->adjustment_movement_id !== null,
             ])),
             'blind' => $blind,
-            // Summary — present whenever lines are loaded. The variance figures
+            // Summary - present whenever lines are loaded. The variance figures
             // stay hidden until the count is closed, for the same reason.
             'line_count' => $this->when($this->relationLoaded('lines'), fn () => $this->lines->count()),
             'counted_count' => $this->when($this->relationLoaded('lines'), fn () => $counted->count()),

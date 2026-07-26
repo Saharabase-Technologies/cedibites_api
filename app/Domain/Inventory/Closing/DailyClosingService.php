@@ -14,7 +14,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Mandatory end-of-day stock count — and the thing that makes tomorrow start
+ * Mandatory end-of-day stock count - and the thing that makes tomorrow start
  * where tonight finished.
  *
  * The founder's requirement, in his words: "if as of yesterday the branch had
@@ -22,7 +22,7 @@ use Illuminate\Support\Facades\DB;
  * five boxes." A count that merely observes a discrepancy cannot deliver that.
  * So completing a count POSTS the difference to the ledger as a
  * `count_adjustment`, and the closing balance becomes literally what was
- * counted. Tomorrow's opening stock is last night's counted actual — never a
+ * counted. Tomorrow's opening stock is last night's counted actual - never a
  * figure the ledger merely hoped for, and never yesterday's error carried
  * forward to be rediscovered tomorrow.
  *
@@ -37,8 +37,8 @@ use Illuminate\Support\Facades\DB;
  *   a figure from before the day's trading.
  *
  *   NAMED. Shortfalls can carry a reason, which files them in the wastage report
- *   under what actually happened. Reasons are optional by design — a day must
- *   always be able to close — so a shortfall with no reason stays visibly
+ *   under what actually happened. Reasons are optional by design - a day must
+ *   always be able to close - so a shortfall with no reason stays visibly
  *   unexplained rather than being quietly dressed up as something.
  */
 class DailyClosingService
@@ -51,7 +51,7 @@ class DailyClosingService
     /**
      * Open (or return the existing) closing for a location + business date.
      *
-     * The expected quantities written here are provisional — a working snapshot,
+     * The expected quantities written here are provisional - a working snapshot,
      * refreshed at completion. They are never shown to the person counting.
      */
     public function open(int $locationId, string $date, User $actor): DailyClosing
@@ -222,7 +222,7 @@ class DailyClosingService
             }
         }
 
-        // Classification only — the count adjustments above already moved the
+        // Classification only - the count adjustments above already moved the
         // stock. Posting here as well would write the same missing rice off
         // twice.
         $wastage = $this->wastage->classifyCountVariance(
@@ -288,7 +288,7 @@ class DailyClosingService
             throw new InventoryException("'{$reason}' is not a wastage reason.");
         }
         if ($parsed->requiresNote() && trim((string) $note) === '') {
-            throw new InventoryException('Choosing “Other” means saying what happened — add a note.');
+            throw new InventoryException('Choosing "Other" means saying what happened - add a note.');
         }
 
         return $parsed;

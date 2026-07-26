@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
  * Confines inventory reads to the locations a user is allowed to see.
  *
  * Implementers declare which columns tie the record to a location. A record is
- * visible when ANY of them falls inside the user's accessible set — a branch
+ * visible when ANY of them falls inside the user's accessible set - a branch
  * manager must see stock arriving as well as stock leaving, so a transfer is
  * visible from either end.
  */
@@ -25,7 +25,7 @@ trait ScopedToLocations
     /**
      * Restrict a query to records the given user may read.
      *
-     * A null user resolves to no rows rather than every row — these routes are
+     * A null user resolves to no rows rather than every row - these routes are
      * authenticated, but the scope must fail closed if that ever changes.
      */
     public function scopeVisibleTo(Builder $query, ?User $user): Builder

@@ -22,6 +22,7 @@ class WastageController extends Controller
     private const RELATIONS = [
         'location',
         'disposalLocation',
+        'claimantLocation',
         'returnTransfer',
         'lines.item.baseUnit',
         'lines.unit',
@@ -55,7 +56,7 @@ class WastageController extends Controller
 
     public function show(Request $request, Wastage $wastage): JsonResponse
     {
-        // 404 rather than 403 — an out-of-scope record should not be confirmed
+        // 404 rather than 403 - an out-of-scope record should not be confirmed
         // to exist.
         abort_unless($wastage->isVisibleTo($request->user()), 404);
 
@@ -94,7 +95,7 @@ class WastageController extends Controller
 
             return response()->success($this->fresh($wastage), match ($wastage->status->value) {
                 'pending_return' => 'Recorded. The goods must go back to the warehouse before this can be approved.',
-                'pending_approval' => 'Recorded — awaiting the warehouse manager’s approval.',
+                'pending_approval' => 'Recorded. Awaiting approval from the warehouse manager.',
                 default => 'Wastage recorded and written off.',
             });
         });
@@ -119,15 +120,15 @@ class WastageController extends Controller
             $updated = $this->service->reject($wastage, $request->user(), $data['reason']);
             $this->broadcast($updated, 'rejected');
 
-            return response()->success($this->fresh($updated), 'Wastage claim refused — nothing was written off.');
+            return response()->success($this->fresh($updated), 'Wastage claim refused - nothing was written off.');
         });
     }
 
     /**
      * Attach photo evidence. *"So show me the food that has gone bad."*
      *
-     * Open to both ends of the claim — the branch making its case and the
-     * warehouse inspecting the returned goods — because a disagreement about
+     * Open to both ends of the claim - the branch making its case and the
+     * warehouse inspecting the returned goods - because a disagreement about
      * whether food went bad needs both accounts on the record. The service
      * derives which side you are on; the client does not get to say.
      */

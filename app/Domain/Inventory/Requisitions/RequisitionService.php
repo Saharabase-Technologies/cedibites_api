@@ -7,12 +7,13 @@ use App\Domain\Inventory\Support\ReferenceGenerator;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Inventory\RequisitionStatus;
 use App\Models\Inventory\Item;
+use App\Models\Inventory\Location;
 use App\Models\Inventory\Requisition;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Requisition lifecycle — the "request layer" in front of a physical transfer.
+ * Requisition lifecycle - the "request layer" in front of a physical transfer.
  * A branch raises a multi-line request against the warehouse; on approval the
  * warehouse manager sets the granted quantities and a fulfilling transfer is
  * spawned (draft) via the TransferService. The requisition flips to `fulfilled`
@@ -34,6 +35,8 @@ class RequisitionService
             throw new InventoryException('The requesting and source locations must be different.');
         }
 
+        $this->assertMayRequestFor((int) $data['requesting_location_id'], $actor);
+
         return DB::transaction(function () use ($data, $actor) {
             $requisition = Requisition::create([
                 'reference' => $this->references->requisition(),
@@ -50,6 +53,45 @@ class RequisitionService
 
             return $requisition;
         });
+    }
+
+    /**
+     * A requisition is a BRANCH asking the warehouse to supply it. Two things
+     * follow, and neither was being enforced.
+     *
+     * You may only request for a location you actually work at. And that
+     * location must be a satellite kitchen: the warehouse is the source of
+     * supply, not a consumer of it, so the warehouse manager raising a
+     * requisition means the mother kitchen asking itself for stock it already
+     * holds. It would then approve its own request, which makes the whole
+     * request-and-approve split decorative.
+     *
+     * Enforced here rather than by taking the grant away, because RoleSeeder is
+     * additive: removing `inventory.requisition.create` from the seeder would
+     * not revoke it from anyone who already has it. The rule holds regardless of
+     * who holds what.
+     */
+    private function assertMayRequestFor(int $locationId, User $actor): void
+    {
+        $location = Location::find($locationId);
+        if ($location === null) {
+            throw new InventoryException('That location does not exist.');
+        }
+
+        if ($location->type !== 'satellite') {
+            throw new InventoryException(
+                "{$location->name} is a warehouse, and a warehouse supplies stock rather than requesting it. "
+                .'To move stock out of it, raise a transfer.'
+            );
+        }
+
+        // null = belongs to no kitchen (admin) and may act anywhere.
+        $operating = $actor->operatingLocationIds();
+        if ($operating !== null && ! in_array($locationId, array_map('intval', $operating), true)) {
+            throw new InventoryException(
+                "You do not work at {$location->name}, so you cannot raise a request for it."
+            );
+        }
     }
 
     /** Replace a draft requisition's lines + meta. Only drafts are editable. */
@@ -91,7 +133,7 @@ class RequisitionService
     {
         if ($requisition->status !== RequisitionStatus::Draft) {
             throw new InventoryException(
-                "Only draft requisitions can be deleted — {$requisition->reference} is {$requisition->status->value} and is part of the record."
+                "Only draft requisitions can be deleted - {$requisition->reference} is {$requisition->status->value} and is part of the record."
             );
         }
 
@@ -101,7 +143,7 @@ class RequisitionService
 
         DB::transaction(function () use ($requisition) {
             $requisition->lines()->delete();
-            $requisition->delete(); // soft delete — the reference stays spent
+            $requisition->delete(); // soft delete - the reference stays spent
         });
     }
 
@@ -129,7 +171,7 @@ class RequisitionService
         $this->assertStatus($requisition, RequisitionStatus::Submitted, 'approved');
 
         // Separation of duties. A branch manager holds both the create and the
-        // approve grant — the approve grant is there so they can fulfil requests
+        // approve grant - the approve grant is there so they can fulfil requests
         // from OTHER branches drawing on their stock, not so they can sign off
         // their own. Letting the requester approve makes the warehouse's control
         // over what leaves it decorative.
@@ -172,7 +214,7 @@ class RequisitionService
             $transfer->requisition_id = $requisition->id;
             $transfer->save();
 
-            // Approving the requisition IS the approval — the warehouse manager
+            // Approving the requisition IS the approval - the warehouse manager
             // has already decided, per line, what they are granting. Walking the
             // spawned transfer back through draft → submitted → approved would
             // ask them for the same decision three more times, so it is advanced

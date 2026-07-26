@@ -58,12 +58,12 @@ class TransferResource extends JsonResource
                 'written_off_qty' => (float) $this->dispute->written_off_qty,
                 'corrective_transfer_id' => $this->dispute->corrective_transfer_id,
             ] : null),
-            // The full corrective chain, oldest first — set by the show endpoint.
+            // The full corrective chain, oldest first - set by the show endpoint.
             'lineage' => $this->when(isset($this->lineage), fn () => $this->lineage),
             'created_by' => $this->whenLoaded('createdBy', fn () => $this->createdBy?->name),
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'sent_by' => $this->whenLoaded('sentBy', fn () => $this->sentBy?->name),
-            // Id too — names are not unique, and "did I send this?" gates the
+            // Id too - names are not unique, and "did I send this?" gates the
             // receive action.
             'sent_by_id' => $this->sent_by,
             'received_by' => $this->whenLoaded('receivedBy', fn () => $this->receivedBy?->name),

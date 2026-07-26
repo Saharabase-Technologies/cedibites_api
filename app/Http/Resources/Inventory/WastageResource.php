@@ -35,6 +35,14 @@ class WastageResource extends JsonResource
                 'name' => $this->disposalLocation->name,
                 'type' => $this->disposalLocation->type,
             ] : null),
+            // Who saw it happen. Differs from `location` only on a refused
+            // delivery, where the goods stay the sender's but the branch that
+            // turned them away is the one holding the evidence.
+            'claimant_location' => $this->whenLoaded('claimantLocation', fn () => $this->claimantLocation ? [
+                'id' => $this->claimantLocation->id,
+                'name' => $this->claimantLocation->name,
+                'type' => $this->claimantLocation->type,
+            ] : null),
 
             'total_value' => (float) $this->total_value,
             'threshold_amount' => $this->threshold_amount !== null ? (float) $this->threshold_amount : null,
@@ -71,7 +79,7 @@ class WastageResource extends JsonResource
             'line_count' => $this->when($this->relationLoaded('lines'), fn () => $this->lines->count()),
 
             // Evidence, both sides of it. Visible to whoever can see the claim,
-            // which is both ends of it — the branch that declared the loss and
+            // which is both ends of it - the branch that declared the loss and
             // the warehouse that has to answer for having supplied the goods.
             'photos' => $this->whenLoaded('photos', fn () => $this->photos->map(fn ($photo) => [
                 'id' => $photo->id,
@@ -89,7 +97,7 @@ class WastageResource extends JsonResource
             'accepts_evidence' => $this->status->acceptsEvidence(),
 
             /**
-             * Above the threshold the approver cannot sign off on nothing —
+             * Above the threshold the approver cannot sign off on nothing -
              * "show me the food that has gone bad". Surfaced so the UI can say
              * why the approve button is refused instead of only failing on POST.
              */

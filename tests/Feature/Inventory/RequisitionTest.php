@@ -40,6 +40,14 @@ beforeEach(function () {
     Employee::factory()->create(['user_id' => $this->receiver->id])
         ->branches()->attach($destBranch->id);
 
+    // A requisition is a BRANCH asking the warehouse to supply it, so it has to
+    // be raised by someone who works at that branch. `$this->actor` holds
+    // view_all_locations, which makes it a warehouse operator, and a warehouse
+    // supplies stock rather than requesting it.
+    $this->requester = User::factory()->create();
+    Employee::factory()->create(['user_id' => $this->requester->id])
+        ->branches()->attach($destBranch->id);
+
     $this->item = Item::factory()->create();
 
     // 100 on hand at the warehouse.
@@ -60,7 +68,7 @@ function draftRequisition($test, float $qty): Requisition
         'source_location_id' => $test->warehouse->id,
         'purpose' => 'supplementary',
         'items' => [['item_id' => $test->item->id, 'requested_qty' => $qty]],
-    ], $test->actor);
+    ], $test->requester);
 }
 
 /**

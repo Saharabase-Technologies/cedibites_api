@@ -87,7 +87,7 @@ class ReconciliationController extends Controller
         });
     }
 
-    /** Post the reconciliation — write cycle_adjustment movements and close it. */
+    /** Post the reconciliation - write cycle_adjustment movements and close it. */
     public function post(Request $request, ReconciliationCycle $reconciliation): JsonResponse
     {
         $data = $request->validate([
@@ -98,7 +98,7 @@ class ReconciliationController extends Controller
             $cycle = $this->service->post($reconciliation, $request->user(), $data['notes'] ?? null);
             $this->broadcast($cycle, 'posted');
 
-            return response()->success($this->fresh($cycle), 'Reconciliation posted — the books are balanced.');
+            return response()->success($this->fresh($cycle), 'Reconciliation posted - the books are balanced.');
         });
     }
 

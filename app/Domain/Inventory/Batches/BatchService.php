@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 class BatchService
 {
     /**
-     * Create a batch for a received lot — only for expiry-tracked items.
+     * Create a batch for a received lot - only for expiry-tracked items.
      */
     public function recordReceipt(
         Item $item,

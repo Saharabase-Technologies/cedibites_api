@@ -95,7 +95,7 @@ class MovementPostingEngine
 
         // Announce the balance change AFTER commit, so a listener that refetches
         // immediately cannot read the pre-movement balance. Idempotent replays
-        // return the original movement and re-announce harmlessly — the signal
+        // return the original movement and re-announce harmlessly - the signal
         // carries no state, it only tells screens to refetch.
         StockBroadcastEvent::dispatch(
             (int) $posted->item_id,

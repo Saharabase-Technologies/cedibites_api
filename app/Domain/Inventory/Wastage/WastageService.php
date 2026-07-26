@@ -23,7 +23,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Wastage — the named half of every loss.
+ * Wastage - the named half of every loss.
  *
  * Stock that leaves without being sold goes out one of two doors: this one,
  * where somebody says what happened, or the variance door, where nobody knows.
@@ -34,7 +34,7 @@ use Illuminate\Support\Facades\Storage;
  * TWO RULES HOLD THE WHOLE THING TOGETHER.
  *
  * 1. ONE MOVEMENT PER LOSS, EVER. A wastage either moves the stock or labels a
- *    loss the ledger already recorded — never both. A closing variance was
+ *    loss the ledger already recorded - never both. A closing variance was
  *    already corrected by its count adjustment; a transfer shortfall left the
  *    source at `send` and never arrived. Those records post nothing.
  *    `WastageOrigin::postsStock()` is the single place that decides.
@@ -47,12 +47,12 @@ use Illuminate\Support\Facades\Storage;
 class WastageService
 {
     /**
-     * The founder's ₵500 rule, measured — per his instruction — on the VALUE OF
+     * The founder's ₵500 rule, measured - per his instruction - on the VALUE OF
      * THE GOODS BEING DECLARED WASTED, totalled across the declaration. Above it
      * a branch cannot write stock off on its own word: the goods go back to the
      * warehouse that supplied them and the warehouse manager decides.
      *
-     * This is the DEFAULT. The live figure is admin-editable — read it through
+     * This is the DEFAULT. The live figure is admin-editable - read it through
      * threshold(), never this constant, or the portal's setting will appear to
      * save and change nothing.
      */
@@ -84,14 +84,14 @@ class WastageService
     // ── Declaring ─────────────────────────────────────────────────────────────
 
     /**
-     * Declare a wastage by hand — the everyday case, and the only origin where
+     * Declare a wastage by hand - the everyday case, and the only origin where
      * this record is what moves the stock.
      *
      * Under the threshold it self-approves and posts immediately. Over it, at a
      * branch, the goods must physically go back: a return transfer is raised
      * ready to send, and the write-off only posts once the warehouse manager has
      * the goods in front of him and signs. At the warehouse there is nobody above
-     * the manager, so it self-approves at any value — but the admin is alerted.
+     * the manager, so it self-approves at any value - but the admin is alerted.
      *
      * @param  array{location_id:int, notes?:string|null, lines:array<int,array{item_id:int, quantity:float, reason:string, reason_note?:string|null}>}  $data
      */
@@ -126,6 +126,7 @@ class WastageService
                 'reference' => $this->references->wastage(),
                 'location_id' => $locationId,
                 'disposal_location_id' => $disposalLocationId,
+                'claimant_location_id' => $locationId,
                 'origin' => WastageOrigin::Manual,
                 'status' => $needsReturn
                     ? WastageStatus::PendingReturn
@@ -175,7 +176,7 @@ class WastageService
     {
         if (! $wastage->status->acceptsEvidence()) {
             throw new InventoryException(
-                'This claim is already settled — its photos are the record of what was decided on, so nothing further can be added.'
+                'This claim is already settled - its photos are the record of what was decided on, so nothing further can be added.'
             );
         }
 
@@ -206,7 +207,7 @@ class WastageService
 
     /**
      * Remove a photo. Only the person who uploaded it, and only while the claim
-     * is live — neither side gets to delete the other's evidence, and nobody
+     * is live - neither side gets to delete the other's evidence, and nobody
      * gets to edit the record after a decision has been made on it.
      */
     public function detachPhoto(Wastage $wastage, WastagePhoto $photo, User $actor): void
@@ -215,7 +216,7 @@ class WastageService
             throw new InventoryException('That photo does not belong to this claim.');
         }
         if (! $wastage->status->acceptsEvidence()) {
-            throw new InventoryException('This claim is settled — its evidence can no longer be changed.');
+            throw new InventoryException('This claim is settled - its evidence can no longer be changed.');
         }
         if ((int) $photo->uploaded_by !== (int) $actor->id) {
             throw new InventoryException('Only whoever uploaded a photo can remove it.');
@@ -233,7 +234,7 @@ class WastageService
     /**
      * The warehouse manager, with the returned goods in front of him, agrees the
      * loss is real. This is where an over-threshold claim finally hits the
-     * ledger — at the disposal location, because the branch's stock already left
+     * ledger - at the disposal location, because the branch's stock already left
      * on the return transfer.
      */
     public function approve(Wastage $wastage, User $actor): Wastage
@@ -258,7 +259,7 @@ class WastageService
      *
      * The goods are not conjured back to the branch: if they came back on a
      * return transfer they are sitting in warehouse stock, which is exactly where
-     * the ledger already says they are. What changes is who carries the cost —
+     * the ledger already says they are. What changes is who carries the cost -
      * the claim failed, so the loss stays with whoever declared it and will
      * surface at their next count as an unexplained variance. That pressure is
      * the point of the whole mechanism.
@@ -268,7 +269,7 @@ class WastageService
         $this->assertDecidable($wastage, $actor);
 
         if (trim($reason) === '') {
-            throw new InventoryException('Say why the claim is refused — a bare rejection tells the branch nothing.');
+            throw new InventoryException('Say why the claim is refused - a bare rejection tells the branch nothing.');
         }
 
         $wastage->status = WastageStatus::Rejected;
@@ -293,7 +294,7 @@ class WastageService
 
         $return = $wastage->returnTransfer;
         if ($return !== null && ! in_array($return->status, [TransferStatus::Draft, TransferStatus::Approved, TransferStatus::Submitted], true)) {
-            throw new InventoryException('The goods are already on their way back — this claim has to be seen through.');
+            throw new InventoryException('The goods are already on their way back - this claim has to be seen through.');
         }
 
         return DB::transaction(function () use ($wastage, $actor, $return) {
@@ -342,7 +343,7 @@ class WastageService
      * solely to put those losses in the wastage report under a name.
      *
      * Only shortfalls are wastage. A line counted OVER what the ledger expected
-     * is not a loss and never appears here — it is stock found, and the founder's
+     * is not a loss and never appears here - it is stock found, and the founder's
      * own framing covers it: "when they have surplus, which they have to answer
      * to."
      *
@@ -383,6 +384,7 @@ class WastageService
             'reference' => $this->references->wastage(),
             'location_id' => $locationId,
             'disposal_location_id' => $locationId,
+            'claimant_location_id' => $locationId,
             'origin' => $origin,
             // Already reflected in the ledger and already explained. There is
             // nothing left to approve, so it is filed as settled.
@@ -415,7 +417,7 @@ class WastageService
      * The stock left the source at `send` and never arrived anywhere, so the
      * ledger recorded this loss the moment the short receipt was entered. What
      * was missing was any record that would let it show up in a wastage report,
-     * attributed to the leg it went missing on — this is that record, and it
+     * attributed to the leg it went missing on - this is that record, and it
      * moves nothing.
      *
      * @param  array<int,array{item_id:int, unit_id:int, quantity:float}>  $shortfalls
@@ -454,7 +456,7 @@ class WastageService
 
     /**
      * A consignment refused at the door. The stock went straight back to the
-     * source, so the goods are the sender's again — and the claim lands in the
+     * source, so the goods are the sender's again - and the claim lands in the
      * sender's queue for them to write off or put back on the shelf.
      *
      * Unlike the other classification helpers this one DOES post on approval:
@@ -498,6 +500,10 @@ class WastageService
             'reference' => $this->references->wastage(),
             'location_id' => $sourceId,
             'disposal_location_id' => $sourceId,
+            // The goods are the sender's, but the person who saw what was wrong
+            // with them works at the destination. Without this they cannot open
+            // the claim they just raised, let alone photograph the evidence.
+            'claimant_location_id' => (int) $transfer->destination_location_id,
             'origin' => WastageOrigin::DeliveryRejection,
             'status' => WastageStatus::PendingApproval,
             'total_value' => $totalValue,
@@ -526,7 +532,7 @@ class WastageService
      * Write the stock down. FEFO, so the oldest goods go first, and one movement
      * per source batch exactly as production and sales do.
      *
-     * Silently does nothing for classification-only origins — see rule 1 at the
+     * Silently does nothing for classification-only origins - see rule 1 at the
      * top of this class. That guard is load-bearing: without it, approving a
      * closing-variance record would deduct the same missing rice a second time.
      */
@@ -613,7 +619,7 @@ class WastageService
             }
             $note = isset($row['reason_note']) ? trim((string) $row['reason_note']) : '';
             if ($reason->requiresNote() && $note === '') {
-                throw new InventoryException("Choosing “Other” for {$item->name} means saying what happened — add a note.");
+                throw new InventoryException("Choosing 'Other' for {$item->name} means saying what happened - add a note.");
             }
 
             if ($checkOnHand) {
@@ -645,7 +651,7 @@ class WastageService
     /**
      * Raise the branch → warehouse transfer that carries the goods back for
      * inspection. Created ready to send, because the decision to return was
-     * taken the moment the claim was filed — there is nothing further to approve
+     * taken the moment the claim was filed - there is nothing further to approve
      * at the branch end.
      */
     private function raiseReturnTransfer(Wastage $wastage, User $actor): void
@@ -735,7 +741,7 @@ class WastageService
                 'status' => 'open',
                 'location_id' => $wastage->location_id,
                 'message' => sprintf(
-                    '%s: GHS %s of stock declared wasted — above the GHS %s threshold.',
+                    '%s: GHS %s of stock declared wasted - above the GHS %s threshold.',
                     $wastage->reference,
                     number_format((float) $wastage->total_value, 2),
                     number_format(self::threshold(), 2),
@@ -752,7 +758,7 @@ class WastageService
 
     /**
      * Nobody signs off their own claim. The whole point of the warehouse
-     * manager's approval is that a second pair of eyes has seen the goods —
+     * manager's approval is that a second pair of eyes has seen the goods -
      * which is worth nothing if the eyes belong to the person who filed it.
      */
     private function assertDecidable(Wastage $wastage, User $actor): void
@@ -782,7 +788,7 @@ class WastageService
      * Above the threshold a claim is real money written off on somebody's word,
      * so there has to be something to look at.
      *
-     * Two deliberate placements. It gates APPROVAL, not declaration — the branch
+     * Two deliberate placements. It gates APPROVAL, not declaration - the branch
      * should be able to raise the claim the moment it happens and photograph the
      * goods before the lorry leaves, and it is the approver, the one who has to
      * justify the decision, who must not sign off on nothing.
@@ -800,7 +806,7 @@ class WastageService
         if ($wastage->photos()->count() === 0) {
             throw new InventoryException(
                 'There is no photo of these goods. Ask whoever declared the loss to add one before you write off GHS '
-                .number_format((float) $wastage->total_value, 2).' of stock — or refuse the claim.'
+                .number_format((float) $wastage->total_value, 2).' of stock - or refuse the claim.'
             );
         }
     }

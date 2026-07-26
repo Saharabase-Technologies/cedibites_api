@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * Case-insensitive text search across database drivers.
  *
- * Production runs Postgres, where `LIKE` is case-SENSITIVE — so searching
+ * Production runs Postgres, where `LIKE` is case-SENSITIVE - so searching
  * "basma" found nothing while "Basma" found Basmati Rice, and typing a
  * reference as "req-260726" matched none of the uppercase REQ- rows. Every
  * search box in the portal had this.

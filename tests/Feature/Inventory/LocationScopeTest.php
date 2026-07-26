@@ -290,7 +290,17 @@ it('keeps the full catalog available so a branch can request what it lacks', fun
         ->and($onlyStocked)->not->toContain($notHeld->id);
 });
 
-it('still lets an unrestricted user raise a requisition for any branch', function () {
+/**
+ * This used to assert the opposite: that an unrestricted user could raise a
+ * requisition on any branch's behalf. The client rejected it outright - "the
+ * warehouse manager has no business making a requisition" - and he is right.
+ *
+ * A requisition is a branch asking the warehouse to supply it. The warehouse
+ * manager works the mother kitchen, which is the source of supply, and he is
+ * also the one who approves. Letting him raise the request too collapses the
+ * whole request-and-approve split into one desk.
+ */
+it('refuses to let the warehouse manager raise a requisition for a branch', function () {
     $this->wm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
     $item = Item::factory()->create();
 
@@ -300,6 +310,20 @@ it('still lets an unrestricted user raise a requisition for any branch', functio
             $item->id,
             $this->otherLocation->id,
         ))
-        ->assertSuccessful()
-        ->assertJsonPath('data.requesting_location.id', $this->otherLocation->id);
+        ->assertStatus(422)
+        ->assertJsonPath('message', 'You do not work at '.$this->otherLocation->name
+            .', so you cannot raise a request for it.');
+});
+
+it('refuses a requisition raised for a warehouse, which supplies rather than requests', function () {
+    $this->wm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
+    $item = Item::factory()->create();
+
+    $this->actingAs($this->wm)
+        ->postJson('/v1/inventory/requisitions', requisitionPayload(
+            $this->otherLocation->id,
+            $item->id,
+            $this->warehouse->id,
+        ))
+        ->assertStatus(422);
 });

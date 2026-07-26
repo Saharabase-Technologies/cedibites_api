@@ -56,12 +56,12 @@ class TransferController extends Controller
 
     public function show(Request $request, Transfer $transfer): JsonResponse
     {
-        // 404 rather than 403 — an out-of-scope transfer should not be
+        // 404 rather than 403 - an out-of-scope transfer should not be
         // confirmed to exist.
         abort_unless($transfer->isVisibleTo($request->user()), 404);
 
         $transfer->load(self::RELATIONS);
-        // Only on the detail view — the list has no use for it and it costs a
+        // Only on the detail view - the list has no use for it and it costs a
         // walk of the chain per row.
         $transfer->lineage = $this->service->lineage($transfer);
 
@@ -120,7 +120,7 @@ class TransferController extends Controller
         });
     }
 
-    /** submitted → approved (release authority — gated by transfer.send). */
+    /** submitted → approved (release authority - gated by transfer.send). */
     public function approve(Request $request, Transfer $transfer): JsonResponse
     {
         return $this->guard(function () use ($transfer, $request) {
@@ -177,7 +177,7 @@ class TransferController extends Controller
      * Three outcomes per line, because they are three different facts:
      * `received_qty` is accepted onto the destination's shelf, `refused_qty`
      * arrived and is going straight back to the sender, and whatever is left
-     * over never turned up — which is the only one anybody disagrees about.
+     * over never turned up - which is the only one anybody disagrees about.
      */
     public function receive(Request $request, Transfer $transfer): JsonResponse
     {
@@ -212,8 +212,8 @@ class TransferController extends Controller
             $this->broadcast($updated, $updated->status->value);
 
             return response()->success($this->fresh($updated), match ($updated->status->value) {
-                'rejected' => 'Delivery refused — the goods go back to the sender.',
-                'disputed' => 'Received short — a dispute has been opened.',
+                'rejected' => 'Delivery refused - the goods go back to the sender.',
+                'disputed' => 'Received short - a dispute has been opened.',
                 default => $refusals === []
                     ? 'Transfer received.'
                     : 'Received, with some goods refused and returned to the sender.',
@@ -243,8 +243,8 @@ class TransferController extends Controller
             return response()->success(
                 $this->fresh($updated),
                 $sendCorrective
-                    ? 'Dispute resolved — corrective transfer created.'
-                    : 'Dispute resolved — shortfall written off as a loss.',
+                    ? 'Dispute resolved - corrective transfer created.'
+                    : 'Dispute resolved - shortfall written off as a loss.',
             );
         });
     }
@@ -280,7 +280,7 @@ class TransferController extends Controller
         // it: receiving the last one flips it to `fulfilled`, and its detail
         // screen shows a live "fulfilling transfer" banner. Requisition screens
         // listen on their own channel and hear nothing from a transfer event, so
-        // without this they sit on a stale status until a hard refresh — which
+        // without this they sit on a stale status until a hard refresh - which
         // is exactly how an already-fulfilled requisition kept reading
         // "Approved".
         if ($transfer->requisition_id) {

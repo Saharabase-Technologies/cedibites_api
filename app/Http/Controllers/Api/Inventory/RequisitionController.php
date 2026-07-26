@@ -51,7 +51,7 @@ class RequisitionController extends Controller
 
     public function show(Request $request, Requisition $requisition): JsonResponse
     {
-        // 404 rather than 403 — an out-of-scope requisition, or someone else's
+        // 404 rather than 403 - an out-of-scope requisition, or someone else's
         // draft, should not be confirmed to exist.
         abort_unless($requisition->isVisibleTo($request->user()), 404);
         abort_if($requisition->isHiddenDraftFor($request->user()), 404);
@@ -116,7 +116,7 @@ class RequisitionController extends Controller
     {
         $ids = $actor->accessibleLocationIds();
 
-        // Unrestricted — they could mean any branch, so they must say which.
+        // Unrestricted - they could mean any branch, so they must say which.
         if ($ids === null) {
             if ($requested === null) {
                 throw new InventoryException('Choose the branch this requisition is for.');
@@ -147,7 +147,7 @@ class RequisitionController extends Controller
 
     public function update(Request $request, Requisition $requisition): JsonResponse
     {
-        // No `different:requesting_location_id` here — that column is never in an
+        // No `different:requesting_location_id` here - that column is never in an
         // update payload, so the rule always passed vacuously. The service
         // compares against the stored requesting location instead.
         $data = $request->validate([
@@ -185,7 +185,7 @@ class RequisitionController extends Controller
             'lines' => ['sometimes', 'array'],
             'lines.*.line_id' => ['required_with:lines', 'integer'],
             'lines.*.approved_qty' => ['required_with:lines', 'numeric', 'gte:0'],
-            // Proceed even though the source is short — same escape hatch the
+            // Proceed even though the source is short - same escape hatch the
             // transfer submit check has always had.
             'override_stock_check' => ['sometimes', 'boolean'],
         ]);
@@ -198,7 +198,7 @@ class RequisitionController extends Controller
             $this->broadcast($updated, 'approved');
 
             // Approving spawns a transfer. Announce it on the TRANSFER channel
-            // too, or the transfers screen never learns the new row exists —
+            // too, or the transfers screen never learns the new row exists -
             // a requisition event tells it nothing it listens for.
             $transfer = $updated->fulfillingTransfer;
             if ($transfer) {
@@ -210,7 +210,7 @@ class RequisitionController extends Controller
                 );
             }
 
-            return response()->success($this->fresh($updated), 'Requisition approved — the transfer is ready to send.');
+            return response()->success($this->fresh($updated), 'Requisition approved - the transfer is ready to send.');
         });
     }
 

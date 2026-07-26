@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
 /**
  * Records the mother kitchen consuming raw materials (production usage). Each
  * line posts a negative `production` movement into the warehouse ledger via the
- * posting engine, valued at the item's current weighted-average cost — the
+ * posting engine, valued at the item's current weighted-average cost - the
  * manual counterpart of the eventual BOM-driven auto-deduction on sale.
  */
 class ProductionService

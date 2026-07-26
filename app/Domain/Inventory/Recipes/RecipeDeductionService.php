@@ -107,7 +107,7 @@ class RecipeDeductionService
                     ]);
                 }
 
-                // The sale already happened — a negative balance is a signal, not a
+                // The sale already happened - a negative balance is a signal, not a
                 // blocker. Surface it for the warehouse team to reconcile: log it and
                 // raise a portal-visible alert (deduped per item+location while open).
                 $balance = DB::table('inventory_stock_balances')

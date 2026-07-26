@@ -45,7 +45,7 @@ class ReconciliationCycleResource extends JsonResource
                 'reason_label' => $line->reason?->label(),
                 'reason_note' => $line->reason_note,
             ])),
-            // Summary — present whenever lines are loaded (always, from index/show).
+            // Summary - present whenever lines are loaded (always, from index/show).
             'line_count' => $this->when($loaded, fn () => $this->lines->count()),
             'counted_count' => $this->when($loaded, fn () => $counted->count()),
             'variance_line_count' => $this->when($loaded, fn () => $counted->filter(fn ($l) => (float) $l->variance !== 0.0)->count()),

@@ -10,7 +10,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Lightweight PO change signal. Carries scalars only — listeners refetch the
+ * Lightweight PO change signal. Carries scalars only - listeners refetch the
  * full PO via the API. Broadcast to anyone who can view purchase orders.
  */
 class PurchaseOrderBroadcastEvent implements ShouldBroadcast

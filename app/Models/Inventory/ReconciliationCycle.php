@@ -51,7 +51,7 @@ class ReconciliationCycle extends Model
 
     /**
      * The classification record for this cycle's reasoned variances. It posts no
-     * stock — the cycle adjustments already brought the ledger to the count.
+     * stock - the cycle adjustments already brought the ledger to the count.
      */
     public function wastage(): BelongsTo
     {

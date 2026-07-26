@@ -46,7 +46,7 @@ class Alert extends Model
 
     /**
      * Raise (or refresh) the open negative-stock alert for an item at a location.
-     * A sale drove the balance below zero — the order already completed, so this
+     * A sale drove the balance below zero - the order already completed, so this
      * is a signal to reconcile, not a blocker. Deduped on (type, item, location,
      * open) so repeated overdraws update one alert rather than spamming new rows.
      */
@@ -61,7 +61,7 @@ class Alert extends Model
             ],
             [
                 'severity' => 'critical',
-                'message' => 'Sales have outrun recorded stock — balance is now '.rtrim(rtrim(number_format($balance, 4, '.', ''), '0'), '.').'. Receive or produce to reconcile.',
+                'message' => 'Sales have outrun recorded stock - balance is now '.rtrim(rtrim(number_format($balance, 4, '.', ''), '0'), '.').'. Receive or produce to reconcile.',
                 'reference_type' => $orderId !== null ? 'order' : null,
                 'reference_id' => $orderId,
                 'context' => ['balance' => $balance, 'order_id' => $orderId],

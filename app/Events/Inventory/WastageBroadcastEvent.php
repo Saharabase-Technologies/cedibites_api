@@ -10,7 +10,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Lightweight wastage change signal. Carries scalars only — listeners refetch.
+ * Lightweight wastage change signal. Carries scalars only - listeners refetch.
  * Matters most for the warehouse manager: a branch declaring a loss above the
  * threshold should land in his queue while he is looking at the screen, not
  * whenever he next reloads.

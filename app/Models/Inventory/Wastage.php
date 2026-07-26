@@ -21,6 +21,7 @@ class Wastage extends Model
         'reference',
         'location_id',
         'disposal_location_id',
+        'claimant_location_id',
         'origin',
         'status',
         'total_value',
@@ -48,7 +49,7 @@ class Wastage extends Model
     }
 
     /**
-     * Evidence, both sides of it — the claimant's photos and the approver's.
+     * Evidence, both sides of it - the claimant's photos and the approver's.
      * Oldest first so the argument reads in the order it happened.
      */
     public function photos(): HasMany
@@ -64,6 +65,12 @@ class Wastage extends Model
     public function disposalLocation(): BelongsTo
     {
         return $this->belongsTo(Location::class, 'disposal_location_id');
+    }
+
+    /** Whose staff saw the loss. See locationScopeColumns(). */
+    public function claimantLocation(): BelongsTo
+    {
+        return $this->belongsTo(Location::class, 'claimant_location_id');
     }
 
     public function returnTransfer(): BelongsTo
@@ -119,13 +126,19 @@ class Wastage extends Model
     }
 
     /**
-     * Visible from either end: the branch that declared the loss and the
-     * warehouse that has to inspect and sign for it both need to see the claim.
+     * Visible from every end that has something to say about it: the location
+     * carrying the loss, the one that will inspect and sign for it, and the one
+     * whose staff actually saw it happen.
+     *
+     * The third matters for a refused delivery, where the claim belongs to the
+     * sender but the only person who saw the spoiled goods works at the
+     * destination. Without it they cannot open the claim, and therefore cannot
+     * attach the photograph that only they can take.
      *
      * @return array<int, string>
      */
     protected function locationScopeColumns(): array
     {
-        return ['location_id', 'disposal_location_id'];
+        return ['location_id', 'disposal_location_id', 'claimant_location_id'];
     }
 }

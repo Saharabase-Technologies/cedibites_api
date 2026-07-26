@@ -12,13 +12,13 @@ use Illuminate\Queue\SerializesModels;
 /**
  * A stock balance moved.
  *
- * Fired from the movement posting engine — the single choke point every stock
- * change flows through — so one signal covers purchases, transfers, production,
+ * Fired from the movement posting engine - the single choke point every stock
+ * change flows through - so one signal covers purchases, transfers, production,
  * recipe deduction on a sale, reconciliation adjustments and wastage alike.
  * Screens that read balances rather than documents (items, dashboard, reports,
  * daily closing) have no document event to listen to; this is theirs.
  *
- * Scalars only — listeners refetch through the API, which re-applies the
+ * Scalars only - listeners refetch through the API, which re-applies the
  * caller's own location scope. Nothing here reveals a balance to someone who
  * could not already read it.
  */

@@ -75,7 +75,7 @@ class PurchaseController extends Controller
             return response()->error($e->getMessage(), 422);
         }
 
-        // A receipt advances the linked PO's status — signal listeners to refetch.
+        // A receipt advances the linked PO's status - signal listeners to refetch.
         if ($purchase->purchase_order_id) {
             $po = $purchase->purchaseOrder()->first();
             if ($po) {

@@ -12,7 +12,7 @@ use Illuminate\Http\Request;
  * IMS settings.
  *
  * The portal has had a wastage-threshold editor since the mock scaffold, wired
- * to an endpoint that never existed — it silently failed on every save and the
+ * to an endpoint that never existed - it silently failed on every save and the
  * figure it displayed was fiction. The threshold itself was a PHP constant.
  *
  * Rather than invent an `inventory_settings` table for one number, this rides on
@@ -21,7 +21,7 @@ use Illuminate\Http\Request;
  *
  * The threshold is a single business rule, not a per-location one. When per-
  * location thresholds are genuinely wanted, that is a schema change and a
- * product decision — not something to fake by pretending this endpoint scopes.
+ * product decision - not something to fake by pretending this endpoint scopes.
  */
 class InventorySettingController extends Controller
 {
@@ -60,7 +60,7 @@ class InventorySettingController extends Controller
 
     /**
      * Shaped to match the frontend's `InventorySettings`. `location_id` is null
-     * and stays null — the rule is global, and saying so is better than omitting
+     * and stays null - the rule is global, and saying so is better than omitting
      * the field and letting the client guess.
      */
     private function payload(): array

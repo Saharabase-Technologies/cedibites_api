@@ -101,7 +101,7 @@ class DailyClosingController extends Controller
         });
     }
 
-    /** Calendar of closing coverage for a location — flags missed days. */
+    /** Calendar of closing coverage for a location - flags missed days. */
     public function calendar(Request $request): JsonResponse
     {
         $data = $request->validate([

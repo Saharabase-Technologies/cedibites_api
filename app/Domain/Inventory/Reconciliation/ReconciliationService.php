@@ -13,13 +13,13 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Stock-take reconciliation — the loop the whole IMS builds toward. "Inventory is
+ * Stock-take reconciliation - the loop the whole IMS builds toward. "Inventory is
  * basically accounting: whatever comes in, whatever comes out must cancel out."
  *
  * A cycle opens with a system-quantity snapshot (the ledger's expectation); the
  * warehouse manager counts everything physically; posting the adjustments writes
  * a `cycle_adjustment` movement for every non-zero variance, bringing the ledger
- * to the counted actual — the variance is "cancelled out", the books reset to
+ * to the counted actual - the variance is "cancelled out", the books reset to
  * zero, and a new cycle can begin. Discrepancies whose value exceeds the location
  * threshold are flagged (the founder's red flag), but still reconciled.
  */
@@ -27,7 +27,7 @@ class ReconciliationService
 {
     /**
      * The variance-value threshold (GHS, the founder's ₵500 rule) is shared with
-     * wastage and read live from `WastageService::threshold()` at posting time —
+     * wastage and read live from `WastageService::threshold()` at posting time -
      * never captured as a constant. The admin can change it, and a stock-take
      * flagging against last month's figure is worse than not flagging at all.
      * Over-threshold lines are still reconciled; the flag drives attention, not
@@ -130,7 +130,7 @@ class ReconciliationService
     /**
      * Post the reconciliation: a `cycle_adjustment` movement for every non-zero
      * variance (bringing the ledger to the counted actual), then close the cycle.
-     * Requires every line to be counted — a reconciliation is a full physical count.
+     * Requires every line to be counted - a reconciliation is a full physical count.
      */
     public function post(ReconciliationCycle $cycle, User $actor, ?string $notes = null): ReconciliationCycle
     {
@@ -188,7 +188,7 @@ class ReconciliationService
                 }
             }
 
-            // Classification only — the cycle adjustments above already brought
+            // Classification only - the cycle adjustments above already brought
             // the ledger to the counted actual.
             $wastage = $this->wastage->classifyCountVariance(
                 locationId: (int) $cycle->location_id,
@@ -236,7 +236,7 @@ class ReconciliationService
             throw new InventoryException("'{$reason}' is not a wastage reason.");
         }
         if ($parsed->requiresNote() && trim((string) $note) === '') {
-            throw new InventoryException('Choosing “Other” means saying what happened — add a note.');
+            throw new InventoryException('Choosing "Other" means saying what happened - add a note.');
         }
 
         return $parsed;

@@ -33,7 +33,7 @@ class CatalogController extends Controller
     /**
      * Which locations an item's `stock_on_hand` should be summed over.
      *
-     * null means "every location" — the caller oversees them all and asked for
+     * null means "every location" - the caller oversees them all and asked for
      * no particular one.
      *
      * @return array<int,int>|null
@@ -46,7 +46,7 @@ class CatalogController extends Controller
             $asked = $request->integer('location_id');
 
             // Asking about a location outside your scope yields zero rather than
-            // an error — the figure is simply not yours to see.
+            // an error - the figure is simply not yours to see.
             return $accessible === null || in_array($asked, array_map('intval', $accessible), true)
                 ? [$asked]
                 : [];
@@ -72,7 +72,7 @@ class CatalogController extends Controller
                     : $q->whereIn('location_id', $scopeLocations)],
                 'quantity',
             )
-            // The catalog stays complete by default — a branch has to be able to
+            // The catalog stays complete by default - a branch has to be able to
             // request an item it does not hold yet. `in_stock_only` is for the
             // items screen, which is asking "what do I have?", not "what exists?".
             ->when($request->boolean('in_stock_only'), fn ($q) => $q->whereHas(
@@ -97,7 +97,7 @@ class CatalogController extends Controller
     public function item(Request $request, Item $item): JsonResponse
     {
         // Same scope as the list. Without this the list showed a branch manager
-        // their own 10 kg and the detail behind it showed the warehouse's — the
+        // their own 10 kg and the detail behind it showed the warehouse's - the
         // two disagreed about the same item on the same screen.
         $scope = $this->itemStockScope($request);
 
@@ -393,7 +393,7 @@ class CatalogController extends Controller
             'expiry_tracked' => ['sometimes', 'boolean'],
             'reorder_level' => ['nullable', 'numeric', 'min:0'],
             'min_threshold' => ['nullable', 'numeric', 'min:0'],
-            // Option A — buy-in-packs-of. Label + size travel as a pair.
+            // Option A - buy-in-packs-of. Label + size travel as a pair.
             'purchase_pack_label' => ['nullable', 'string', 'max:32', 'required_with:purchase_pack_size'],
             'purchase_pack_size' => ['nullable', 'numeric', 'gt:0', 'required_with:purchase_pack_label'],
         ]);
@@ -416,7 +416,7 @@ class CatalogController extends Controller
             'expiry_tracked' => ['sometimes', 'boolean'],
             'reorder_level' => ['nullable', 'numeric', 'min:0'],
             'min_threshold' => ['nullable', 'numeric', 'min:0'],
-            // Option A — buy-in-packs-of. Label + size travel as a pair.
+            // Option A - buy-in-packs-of. Label + size travel as a pair.
             'purchase_pack_label' => ['nullable', 'string', 'max:32', 'required_with:purchase_pack_size'],
             'purchase_pack_size' => ['nullable', 'numeric', 'gt:0', 'required_with:purchase_pack_label'],
             'is_active' => ['sometimes', 'boolean'],

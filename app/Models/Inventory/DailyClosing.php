@@ -34,7 +34,7 @@ class DailyClosing extends Model
 
     /**
      * The single classification record raised for this count's reasoned
-     * variances. It posts no stock — the count adjustments already did.
+     * variances. It posts no stock - the count adjustments already did.
      */
     public function wastage(): BelongsTo
     {

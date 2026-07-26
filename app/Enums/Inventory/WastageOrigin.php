@@ -3,7 +3,7 @@
 namespace App\Enums\Inventory;
 
 /**
- * Where a wastage claim came from — and, critically, whether it is the thing
+ * Where a wastage claim came from - and, critically, whether it is the thing
  * that moves the stock or merely the label on a loss the ledger has already
  * recorded.
  *
@@ -11,13 +11,13 @@ namespace App\Enums\Inventory;
  * chicken is the easiest way to make the whole ledger lie, so every origin
  * declares plainly whether it posts stock or only classifies.
  *
- *   Manual            — nothing has moved yet; approving posts the deduction.
- *   DeliveryRejection — refused at the door; the stock went back to the source,
+ *   Manual            - nothing has moved yet; approving posts the deduction.
+ *   DeliveryRejection - refused at the door; the stock went back to the source,
  *                       and approving writes it off where it now sits.
- *   DailyClosing      — the count adjustment already brought the ledger to the
+ *   DailyClosing      - the count adjustment already brought the ledger to the
  *                       counted actual. This record only says why.
- *   Reconciliation    — same, via the cycle adjustment.
- *   TransferShortfall — the stock left the source at `send` and never arrived,
+ *   Reconciliation    - same, via the cycle adjustment.
+ *   TransferShortfall - the stock left the source at `send` and never arrived,
  *                       so the loss was recorded at the short receipt. This
  *                       record only attributes it.
  */
