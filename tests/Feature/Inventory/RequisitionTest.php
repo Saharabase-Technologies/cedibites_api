@@ -8,6 +8,8 @@ use App\Enums\Inventory\TransferStatus;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Requisition;
+use App\Models\Branch;
+use App\Models\Employee;
 use App\Models\Inventory\Transfer;
 use App\Models\User;
 
@@ -18,11 +20,17 @@ beforeEach(function () {
     $this->actor = User::factory()->create();
     // Separation of duties: the requester may not approve their own request.
     $this->approver = User::factory()->create();
-    // Separation of duties: the sender may not sign for arrival, so the
-    // destination needs its own person.
-    $this->receiver = User::factory()->create();
+
     $this->warehouse = Location::factory()->warehouse()->create();
-    $this->branch = Location::factory()->satellite()->create();
+    $destBranch = Branch::factory()->create();
+    $this->branch = Location::factory()->satellite()->create(['branch_id' => $destBranch->id]);
+
+    // The sender may not sign for arrival, and each end accounts only for its
+    // own side — so the receiver has to actually be posted at the destination.
+    $this->receiver = User::factory()->create();
+    Employee::factory()->create(['user_id' => $this->receiver->id])
+        ->branches()->attach($destBranch->id);
+
     $this->item = Item::factory()->create();
 
     // 100 on hand at the warehouse.

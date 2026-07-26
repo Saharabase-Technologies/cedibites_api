@@ -177,6 +177,33 @@ class User extends Authenticatable
     }
 
     /**
+     * Where this user may physically act — receive stock into, dispatch it out of.
+     *
+     * Deliberately narrower than the READ scope. A warehouse manager oversees
+     * every location, but he works the mother kitchen: he accounts for what
+     * leaves it, and the branch accounts for what arrives. One person doing both
+     * ends of the same movement is how a short delivery goes unnoticed, so
+     * seeing a branch's stock does not entitle him to sign for its deliveries.
+     *
+     * null means "anywhere" — admins sit above the structure and belong to no
+     * particular kitchen, so they can act at either end when someone must.
+     *
+     * @return array<int, int>|null
+     */
+    public function operatingLocationIds(): ?array
+    {
+        if ($this->hasAnyRole(['admin', 'tech_admin'])) {
+            return null;
+        }
+
+        if ($this->can(Permission::InventoryViewAllLocations->value)) {
+            return Location::query()->where('type', 'warehouse')->pluck('id')->all();
+        }
+
+        return $this->accessibleLocationIds() ?? [];
+    }
+
+    /**
      * The satellite location this user implicitly acts for.
      *
      * A branch manager runs one branch, so screens that would otherwise ask

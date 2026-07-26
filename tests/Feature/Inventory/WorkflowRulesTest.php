@@ -9,6 +9,8 @@ use App\Models\Inventory\DisputeResolution;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Requisition;
+use App\Models\Branch;
+use App\Models\Employee;
 use App\Models\Inventory\Transfer;
 use App\Models\User;
 
@@ -26,9 +28,16 @@ beforeEach(function () {
     $this->actor = User::factory()->create();
     // Separation of duties: the requester may not approve their own request.
     $this->approver = User::factory()->create();
-    $this->receiver = User::factory()->create();
     $this->warehouse = Location::factory()->warehouse()->create();
-    $this->branch = Location::factory()->satellite()->create();
+    $destBranch = Branch::factory()->create();
+    $this->branch = Location::factory()->satellite()->create(['branch_id' => $destBranch->id]);
+
+    // The sender may not sign for arrival, and each end accounts only for its
+    // own side — so the receiver has to actually be posted at the destination.
+    $this->receiver = User::factory()->create();
+    Employee::factory()->create(['user_id' => $this->receiver->id])
+        ->branches()->attach($destBranch->id);
+
     $this->item = Item::factory()->create();
 
     $this->engine->post([
@@ -117,6 +126,37 @@ it('lets anyone else at the destination receive it', function () {
 
     expect($this->transfers->receive($transfer, $this->receiver)->status)
         ->toBe(TransferStatus::Received);
+});
+
+it('blocks a warehouse manager from receiving a delivery bound for a branch', function () {
+    $this->seed(\Database\Seeders\PermissionSeeder::class);
+
+    // Oversees every location, but works the mother kitchen. Fulfilling a
+    // branch's requisition is his job; signing for its arrival is not.
+    $wm = User::factory()->create();
+    $wm->givePermissionTo([
+        \App\Enums\Permission::ViewInventoryCatalog->value,
+        \App\Enums\Permission::InventoryViewAllLocations->value,
+    ]);
+
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
+    $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
+
+    expect(fn () => $this->transfers->receive($transfer, $wm))
+        ->toThrow(Exception::class, 'Only someone there can confirm it arrived');
+});
+
+it('lets an admin receive at either end, belonging to no kitchen', function () {
+    $this->seed(\Database\Seeders\PermissionSeeder::class);
+    \Spatie\Permission\Models\Role::findOrCreate('admin', 'api');
+
+    $admin = User::factory()->create();
+    $admin->assignRole('admin');
+
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
+    $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
+
+    expect($this->transfers->receive($transfer, $admin)->status)->toBe(TransferStatus::Received);
 });
 
 // ── Drafts are private and disposable ────────────────────────────────────────

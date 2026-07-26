@@ -210,6 +210,19 @@ class TransferService
             );
         }
 
+        // Each end accounts for its own side. Overseeing every location is not
+        // the same as working at one: a warehouse manager fulfilling a branch's
+        // requisition dispatches from the mother kitchen, and the branch signs
+        // for what arrives. Admins belong to no kitchen and may act at either end.
+        $operating = $actor->operatingLocationIds();
+        if ($operating !== null
+            && ! in_array((int) $transfer->destination_location_id, array_map('intval', $operating), true)) {
+            $where = $transfer->destinationLocation?->name ?? 'its destination';
+            throw new InventoryException(
+                "This transfer is going to {$where}. Only someone there can confirm it arrived."
+            );
+        }
+
         return DB::transaction(function () use ($transfer, $actor, $receivedQty, $disputeReason) {
             $destId = $transfer->destination_location_id;
             $totalDiscrepancy = 0.0;

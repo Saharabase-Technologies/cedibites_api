@@ -19,7 +19,17 @@ class EmployeeAuthResource extends JsonResource
         $role = $roles->first() ?? 'sales_staff';
 
         return [
+            // NOTE: `id` is the EMPLOYEE id and stays that way — existing screens
+            // depend on it. Anything comparing against an actor recorded on a
+            // document (requested_by, sent_by, …) must use `user_id`, which is
+            // what those columns actually hold.
             'id' => (string) $this->employee->id,
+            'user_id' => $this->id,
+            // Where this person may physically act: receive into, send out of.
+            // null means "anywhere" (admins). A warehouse manager oversees every
+            // location but works the warehouse, so this is narrower than the
+            // read scope on purpose.
+            'operating_location_ids' => $this->resource->operatingLocationIds(),
             'name' => $this->name,
             'email' => $this->email,
             'phone' => $this->phone,
