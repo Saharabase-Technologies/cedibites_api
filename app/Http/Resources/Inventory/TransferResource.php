@@ -44,10 +44,16 @@ class TransferResource extends JsonResource
             'dispute' => $this->whenLoaded('dispute', fn () => $this->dispute ? [
                 'id' => $this->dispute->id,
                 'status' => $this->dispute->status,
+                // 'corrective' | 'written_off' | null (resolved before the
+                // distinction existed, or nothing to write off)
+                'resolution' => $this->dispute->resolution,
                 'reason' => $this->dispute->reason,
                 'discrepancy_qty' => (float) $this->dispute->discrepancy_qty,
+                'written_off_qty' => (float) $this->dispute->written_off_qty,
                 'corrective_transfer_id' => $this->dispute->corrective_transfer_id,
             ] : null),
+            // The full corrective chain, oldest first — set by the show endpoint.
+            'lineage' => $this->when(isset($this->lineage), fn () => $this->lineage),
             'created_by' => $this->whenLoaded('createdBy', fn () => $this->createdBy?->name),
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'sent_by' => $this->whenLoaded('sentBy', fn () => $this->sentBy?->name),

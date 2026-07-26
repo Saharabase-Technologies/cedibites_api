@@ -218,6 +218,46 @@ it('offers a branch manager only their own location plus warehouses to pick from
         ->and($ids)->not->toContain($this->otherLocation->id);
 });
 
+it('reports a branch manager only their own stock, not the warehouse total', function () {
+    $item = Item::factory()->create();
+    $engine = app(\App\Domain\Inventory\Movements\Engines\MovementPostingEngine::class);
+
+    foreach ([[$this->warehouse->id, 100, 'w'], [$this->ownLocation->id, 7, 'o'], [$this->otherLocation->id, 55, 'x']] as [$loc, $qty, $k]) {
+        $engine->post([
+            'item_id' => $item->id, 'location_id' => $loc, 'quantity' => $qty,
+            'movement_type' => 'purchase', 'unit_cost_at_time' => 1.0,
+            'idempotency_key' => "seed-scope-{$k}",
+        ]);
+    }
+
+    $mine = collect($this->actingAs($this->bm)->getJson('/v1/inventory/items')->assertSuccessful()->json('data'))
+        ->firstWhere('id', $item->id);
+    $all = collect($this->actingAs($this->wm)->getJson('/v1/inventory/items')->assertSuccessful()->json('data'))
+        ->firstWhere('id', $item->id);
+
+    // 7 at their branch — not 162, and not the warehouse's 100.
+    expect((float) $mine['stock_on_hand'])->toBe(7.0)
+        ->and((float) $all['stock_on_hand'])->toBe(162.0);
+});
+
+it('keeps the full catalog available so a branch can request what it lacks', function () {
+    $held = Item::factory()->create();
+    $notHeld = Item::factory()->create();
+
+    app(\App\Domain\Inventory\Movements\Engines\MovementPostingEngine::class)->post([
+        'item_id' => $held->id, 'location_id' => $this->ownLocation->id, 'quantity' => 3,
+        'movement_type' => 'purchase', 'unit_cost_at_time' => 1.0, 'idempotency_key' => 'seed-held',
+    ]);
+
+    $all = collect($this->actingAs($this->bm)->getJson('/v1/inventory/items')->json('data'))->pluck('id');
+    $onlyStocked = collect($this->actingAs($this->bm)->getJson('/v1/inventory/items?in_stock_only=1')->json('data'))->pluck('id');
+
+    expect($all)->toContain($held->id)
+        ->and($all)->toContain($notHeld->id)      // requestable
+        ->and($onlyStocked)->toContain($held->id)
+        ->and($onlyStocked)->not->toContain($notHeld->id);
+});
+
 it('still lets an unrestricted user raise a requisition for any branch', function () {
     $this->wm->givePermissionTo(Permission::InventoryRequisitionCreate->value);
     $item = Item::factory()->create();

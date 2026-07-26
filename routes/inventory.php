@@ -148,6 +148,9 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
                 ->middleware('permission:inventory.requisition.create')->name('update');
             Route::post('{requisition}/submit', [RequisitionController::class, 'submit'])
                 ->middleware('permission:inventory.requisition.create')->name('submit');
+            // Drafts only, author only — enforced in the service.
+            Route::delete('{requisition}', [RequisitionController::class, 'destroy'])
+                ->middleware('permission:inventory.requisition.create')->name('destroy');
 
             // Warehouse manager decides — approving spawns the fulfilling transfer.
             Route::post('{requisition}/approve', [RequisitionController::class, 'approve'])
@@ -160,6 +163,10 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         Route::prefix('transfers')->name('transfers.')->group(function () {
             Route::get('/', [TransferController::class, 'index'])
                 ->middleware('permission:view_inventory_catalog')->name('index');
+            // Pre-flight "does the source actually have this?" — must be declared
+            // before {transfer} or the model binding swallows it.
+            Route::post('availability', [TransferController::class, 'availability'])
+                ->middleware('permission:view_inventory_catalog')->name('availability');
             Route::get('{transfer}', [TransferController::class, 'show'])
                 ->middleware('permission:view_inventory_catalog')->name('show');
 

@@ -199,6 +199,17 @@ class TransferService
             throw new InventoryException("Only sent transfers can be received (current status: {$transfer->status->value}).");
         }
 
+        // Separation of duties: whoever dispatched the stock cannot also sign for
+        // its arrival. A short or wrong delivery is only caught if the receiving
+        // end confirms it, and the sender confirming their own consignment makes
+        // the dispute path unreachable. Anyone else at the destination — branch
+        // manager or admin — can receive it.
+        if ($transfer->sent_by !== null && (int) $transfer->sent_by === (int) $actor->id) {
+            throw new InventoryException(
+                'You sent this transfer, so you cannot also receive it. Someone at the destination must confirm it arrived.'
+            );
+        }
+
         return DB::transaction(function () use ($transfer, $actor, $receivedQty, $disputeReason) {
             $destId = $transfer->destination_location_id;
             $totalDiscrepancy = 0.0;
@@ -310,23 +321,36 @@ class TransferService
      * shortfall (linked via parent_transfer_id) and resolves the dispute. The
      * original is never edited.
      */
-    public function resolveDispute(Transfer $transfer, User $actor, ?string $notes = null): Transfer
-    {
+    /**
+     * @param  bool  $sendCorrective  true spawns a corrective transfer for the
+     *                                shortfall; false accepts it as a loss. The
+     *                                ledger is identical either way — the stock
+     *                                left the source and never arrived — so this
+     *                                only records which decision was taken.
+     */
+    public function resolveDispute(
+        Transfer $transfer,
+        User $actor,
+        ?string $notes = null,
+        bool $sendCorrective = true,
+    ): Transfer {
         if ($transfer->status !== TransferStatus::Disputed) {
             throw new InventoryException("Only disputed transfers can be resolved (current status: {$transfer->status->value}).");
         }
 
-        return DB::transaction(function () use ($transfer, $actor, $notes) {
+        return DB::transaction(function () use ($transfer, $actor, $notes, $sendCorrective) {
             $shortfallLines = [];
+            $shortfallQty = 0.0;
             foreach ($transfer->lines as $line) {
                 $short = round((float) $line->sent_qty - (float) $line->received_qty, 4);
                 if ($short > 0) {
                     $shortfallLines[] = ['item_id' => (int) $line->item_id, 'requested_qty' => $short];
+                    $shortfallQty += $short;
                 }
             }
 
             $corrective = null;
-            if ($shortfallLines !== []) {
+            if ($shortfallLines !== [] && $sendCorrective) {
                 $corrective = Transfer::create([
                     'reference' => $this->references->transfer(),
                     'source_location_id' => $transfer->source_location_id,
@@ -346,6 +370,15 @@ class TransferService
             if ($dispute) {
                 $dispute->update([
                     'status' => 'resolved',
+                    // Written off only when there was a real shortfall to write
+                    // off — a dispute raised over something other than quantity
+                    // resolves as neither.
+                    'resolution' => match (true) {
+                        $corrective !== null => 'corrective',
+                        $shortfallQty > 0 => 'written_off',
+                        default => null,
+                    },
+                    'written_off_qty' => $corrective === null ? round($shortfallQty, 4) : 0,
                     'corrective_transfer_id' => $corrective?->id,
                     'resolved_by' => $actor->id,
                     'resolved_at' => now(),
@@ -404,24 +437,103 @@ class TransferService
         }, $items);
     }
 
+    /**
+     * The whole corrective chain a transfer belongs to, oldest first.
+     *
+     * A short delivery spawns a corrective transfer, which can itself be
+     * received short and spawn another. Each row only knows its immediate
+     * parent, so the detail screen could show one hop in each direction and no
+     * more — you could not see, from the middle of a chain, what originally went
+     * wrong or how it finally ended.
+     *
+     * Walks up to the root, then down through every descendant.
+     *
+     * @return array<int,array{id:int,reference:string,status:string,parent_transfer_id:int|null,depth:int,is_current:bool}>
+     */
+    public function lineage(Transfer $transfer): array
+    {
+        // Up to the root. Bounded in case a bad parent link ever forms a cycle.
+        $root = $transfer;
+        $guard = 0;
+        while ($root->parent_transfer_id !== null && $guard++ < 50) {
+            $parent = Transfer::find($root->parent_transfer_id);
+            if (! $parent) {
+                break;
+            }
+            $root = $parent;
+        }
+
+        $chain = [];
+        $walk = function (Transfer $node, int $depth) use (&$walk, &$chain, $transfer): void {
+            $chain[] = [
+                'id' => $node->id,
+                'reference' => $node->reference,
+                'status' => $node->status->value,
+                'parent_transfer_id' => $node->parent_transfer_id,
+                'depth' => $depth,
+                'is_current' => $node->id === $transfer->id,
+            ];
+
+            Transfer::where('parent_transfer_id', $node->id)
+                ->orderBy('id')
+                ->get()
+                ->each(fn (Transfer $child) => $walk($child, $depth + 1));
+        };
+        $walk($root, 0);
+
+        return $chain;
+    }
+
+    /**
+     * Can a location cover this demand right now?
+     *
+     * Public so a form can ask before anything is committed — the answer to
+     * "does the mother kitchen actually have this?" should be visible while the
+     * request is being written, not sprung at submit time.
+     *
+     * @param  array<int,array{item_id:int|string,qty:float|string}>  $items
+     * @return array<int,array{item_id:int,name:string,required:float,available:float,sufficient:bool,shortfall:float}>
+     */
+    public function checkAvailability(int $locationId, array $items): array
+    {
+        // Aggregate demand per item — the same item may appear on several lines.
+        $demand = [];
+        foreach ($items as $row) {
+            $id = (int) $row['item_id'];
+            $demand[$id] = ($demand[$id] ?? 0) + (float) $row['qty'];
+        }
+
+        $names = Item::whereIn('id', array_keys($demand))->pluck('name', 'id');
+
+        $out = [];
+        foreach ($demand as $itemId => $needed) {
+            $needed = round($needed, 4);
+            $available = $this->onHand($itemId, $locationId);
+            $out[] = [
+                'item_id' => $itemId,
+                'name' => $names[$itemId] ?? "item {$itemId}",
+                'required' => $needed,
+                'available' => $available,
+                'sufficient' => $needed <= $available,
+                'shortfall' => $needed > $available ? round($needed - $available, 4) : 0.0,
+            ];
+        }
+
+        return $out;
+    }
+
     /** @return array<int,string> human-readable deficit messages, empty if all covered */
     private function sourceDeficits(Transfer $transfer): array
     {
-        $deficits = [];
-        // Aggregate demand per item (a transfer can list an item on multiple lines).
-        $demand = [];
-        foreach ($transfer->lines as $line) {
-            $demand[(int) $line->item_id] = ($demand[(int) $line->item_id] ?? 0) + (float) $line->requested_qty;
-        }
-        foreach ($demand as $itemId => $needed) {
-            $available = $this->onHand($itemId, $transfer->source_location_id);
-            if (round($needed, 4) > $available) {
-                $name = Item::whereKey($itemId)->value('name') ?? "item {$itemId}";
-                $deficits[] = "{$name} (need {$needed}, have {$available})";
-            }
-        }
+        $items = $transfer->lines
+            ->map(fn ($line) => ['item_id' => (int) $line->item_id, 'qty' => (float) $line->requested_qty])
+            ->all();
 
-        return $deficits;
+        return collect($this->checkAvailability((int) $transfer->source_location_id, $items))
+            ->reject(fn (array $row) => $row['sufficient'])
+            ->map(fn (array $row) => "{$row['name']} (need {$row['required']}, have {$row['available']})")
+            ->values()
+            ->all();
     }
 
     private function onHand(int $itemId, int $locationId): float

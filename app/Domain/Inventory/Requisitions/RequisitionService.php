@@ -80,6 +80,31 @@ class RequisitionService
         });
     }
 
+    /**
+     * Discard a draft.
+     *
+     * Only drafts, and only the author's own: once submitted, a requisition is a
+     * record of a request that was actually made and someone may have acted on,
+     * so it is kept even when rejected. A draft is unfinished thinking.
+     */
+    public function delete(Requisition $requisition, User $actor): void
+    {
+        if ($requisition->status !== RequisitionStatus::Draft) {
+            throw new InventoryException(
+                "Only draft requisitions can be deleted — {$requisition->reference} is {$requisition->status->value} and is part of the record."
+            );
+        }
+
+        if ((int) $requisition->requested_by !== (int) $actor->id) {
+            throw new InventoryException('Only the person who started this draft can delete it.');
+        }
+
+        DB::transaction(function () use ($requisition) {
+            $requisition->lines()->delete();
+            $requisition->delete(); // soft delete — the reference stays spent
+        });
+    }
+
     /** draft → submitted. */
     public function submit(Requisition $requisition, User $actor): Requisition
     {
@@ -99,7 +124,7 @@ class RequisitionService
      *
      * @param  array<int,float>  $approvedQty  line_id => granted qty
      */
-    public function approve(Requisition $requisition, User $actor, array $approvedQty = []): Requisition
+    public function approve(Requisition $requisition, User $actor, array $approvedQty = [], bool $override = false): Requisition
     {
         $this->assertStatus($requisition, RequisitionStatus::Submitted, 'approved');
 
@@ -107,7 +132,7 @@ class RequisitionService
             throw new InventoryException('A source location is required before a requisition can be approved.');
         }
 
-        return DB::transaction(function () use ($requisition, $actor, $approvedQty) {
+        return DB::transaction(function () use ($requisition, $actor, $approvedQty, $override) {
             $transferItems = [];
             foreach ($requisition->lines as $line) {
                 $granted = round((float) ($approvedQty[$line->id] ?? $line->requested_qty), 4);
@@ -135,6 +160,17 @@ class RequisitionService
             ], $actor);
             $transfer->requisition_id = $requisition->id;
             $transfer->save();
+
+            // Approving the requisition IS the approval — the warehouse manager
+            // has already decided, per line, what they are granting. Walking the
+            // spawned transfer back through draft → submitted → approved would
+            // ask them for the same decision three more times, so it is advanced
+            // here and lands ready to send. The stock check that normally guards
+            // submit still runs; `$override` is the same escape hatch it always
+            // was, for the case where the count is known to be behind reality.
+            $transfer->load('lines');
+            $transfer = $this->transfers->submit($transfer, $actor, $override);
+            $transfer = $this->transfers->approve($transfer, $actor);
 
             $requisition->status = RequisitionStatus::Approved;
             $requisition->approved_by = $actor->id;

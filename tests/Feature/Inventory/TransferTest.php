@@ -13,6 +13,9 @@ beforeEach(function () {
     $this->engine = app(MovementPostingEngine::class);
     $this->service = app(TransferService::class);
     $this->actor = User::factory()->create();
+    // Separation of duties: the sender may not sign for arrival, so the
+    // destination needs its own person.
+    $this->receiver = User::factory()->create();
     $this->warehouse = Location::factory()->warehouse()->create();
     $this->branch = Location::factory()->satellite()->create();
     $this->item = Item::factory()->create();
@@ -59,7 +62,7 @@ it('moves stock warehouse → branch across the full lifecycle', function () {
         ->and(balanceAt($this->item->id, $this->warehouse->id))->toBe(70.0) // 100 - 30 left source
         ->and(balanceAt($this->item->id, $this->branch->id))->toBe(0.0);     // not yet arrived
 
-    $t = $this->service->receive($t, $this->actor);
+    $t = $this->service->receive($t, $this->receiver);
     expect($t->fresh()->status)->toBe(TransferStatus::Received)
         ->and(balanceAt($this->item->id, $this->branch->id))->toBe(30.0);    // arrived at branch
 });
@@ -71,7 +74,7 @@ it('routes a short receipt to disputed and spawns a corrective transfer', functi
     $t = $this->service->send($t, $this->actor);
 
     $lineId = $t->lines()->first()->id;
-    $t = $this->service->receive($t, $this->actor, [$lineId => 25]); // 5 short
+    $t = $this->service->receive($t, $this->receiver, [$lineId => 25]); // 5 short
 
     expect($t->fresh()->status)->toBe(TransferStatus::Disputed)
         ->and(balanceAt($this->item->id, $this->branch->id))->toBe(25.0)

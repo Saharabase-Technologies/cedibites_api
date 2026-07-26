@@ -13,9 +13,11 @@ class DisputeResolution extends Model
     protected $fillable = [
         'transfer_id',
         'status',
+        'resolution',
         'raised_by',
         'reason',
         'discrepancy_qty',
+        'written_off_qty',
         'corrective_transfer_id',
         'resolved_by',
         'resolved_at',
@@ -46,6 +48,7 @@ class DisputeResolution extends Model
     {
         return [
             'discrepancy_qty' => 'decimal:4',
+            'written_off_qty' => 'decimal:4',
             'resolved_at' => 'datetime',
         ];
     }

@@ -34,6 +34,7 @@ class RequisitionController extends Controller
         $requisitions = Requisition::query()
             ->with(self::RELATIONS)
             ->visibleTo($request->user())
+            ->visibleDrafts($request->user())
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('requesting_location_id'), fn ($q) => $q->where('requesting_location_id', $request->integer('requesting_location_id')))
             ->when($request->filled('source_location_id'), fn ($q) => $q->where('source_location_id', $request->integer('source_location_id')))
@@ -47,11 +48,27 @@ class RequisitionController extends Controller
 
     public function show(Request $request, Requisition $requisition): JsonResponse
     {
-        // 404 rather than 403 — an out-of-scope requisition should not be
-        // confirmed to exist.
+        // 404 rather than 403 — an out-of-scope requisition, or someone else's
+        // draft, should not be confirmed to exist.
         abort_unless($requisition->isVisibleTo($request->user()), 404);
+        abort_if($requisition->isHiddenDraftFor($request->user()), 404);
 
         return response()->success(new RequisitionResource($requisition->load(self::RELATIONS)));
+    }
+
+    /** Discard a draft. Only drafts, and only the author's own. */
+    public function destroy(Request $request, Requisition $requisition): JsonResponse
+    {
+        abort_unless($requisition->isVisibleTo($request->user()), 404);
+        abort_if($requisition->isHiddenDraftFor($request->user()), 404);
+
+        return $this->guard(function () use ($requisition, $request) {
+            $reference = $requisition->reference;
+            $this->service->delete($requisition, $request->user());
+            $this->broadcast($requisition, 'deleted');
+
+            return response()->success(null, "{$reference} deleted.");
+        });
     }
 
     public function store(Request $request): JsonResponse
@@ -165,12 +182,16 @@ class RequisitionController extends Controller
             'lines' => ['sometimes', 'array'],
             'lines.*.line_id' => ['required_with:lines', 'integer'],
             'lines.*.approved_qty' => ['required_with:lines', 'numeric', 'gte:0'],
+            // Proceed even though the source is short — same escape hatch the
+            // transfer submit check has always had.
+            'override_stock_check' => ['sometimes', 'boolean'],
         ]);
         $approvedQty = collect($request->input('lines', []))
             ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['approved_qty']])->all();
+        $override = $request->boolean('override_stock_check');
 
-        return $this->guard(function () use ($requisition, $request, $approvedQty) {
-            $updated = $this->service->approve($requisition, $request->user(), $approvedQty);
+        return $this->guard(function () use ($requisition, $request, $approvedQty, $override) {
+            $updated = $this->service->approve($requisition, $request->user(), $approvedQty, $override);
             $this->broadcast($updated, 'approved');
 
             // Approving spawns a transfer. Announce it on the TRANSFER channel
@@ -186,7 +207,7 @@ class RequisitionController extends Controller
                 );
             }
 
-            return response()->success($this->fresh($updated), 'Requisition approved — fulfilling transfer created.');
+            return response()->success($this->fresh($updated), 'Requisition approved — the transfer is ready to send.');
         });
     }
 

@@ -27,11 +27,57 @@ use Illuminate\Validation\Rule;
  */
 class CatalogController extends Controller
 {
+    /**
+     * Which locations an item's `stock_on_hand` should be summed over.
+     *
+     * null means "every location" — the caller oversees them all and asked for
+     * no particular one.
+     *
+     * @return array<int,int>|null
+     */
+    private function itemStockScope(Request $request): ?array
+    {
+        $accessible = $request->user()?->accessibleLocationIds();
+
+        if ($request->filled('location_id')) {
+            $asked = $request->integer('location_id');
+
+            // Asking about a location outside your scope yields zero rather than
+            // an error — the figure is simply not yours to see.
+            return $accessible === null || in_array($asked, array_map('intval', $accessible), true)
+                ? [$asked]
+                : [];
+        }
+
+        return $accessible;
+    }
+
     public function items(Request $request): JsonResponse
     {
+        // Whose stock is this figure? `stock_on_hand` summed every location, so a
+        // branch manager saw the mother kitchen's holdings added to their own and
+        // read it as theirs. Narrow it to the locations the viewer actually runs,
+        // or to one they explicitly asked for. Users who oversee every location
+        // (warehouse manager, admin) still get the company-wide total.
+        $scopeLocations = $this->itemStockScope($request);
+
         $items = Item::query()
             ->with(['category', 'baseUnit', 'defaultSupplier'])
-            ->withSum('stockBalances as stock_on_hand', 'quantity')
+            ->withSum(
+                ['stockBalances as stock_on_hand' => fn ($q) => $scopeLocations === null
+                    ? $q
+                    : $q->whereIn('location_id', $scopeLocations)],
+                'quantity',
+            )
+            // The catalog stays complete by default — a branch has to be able to
+            // request an item it does not hold yet. `in_stock_only` is for the
+            // items screen, which is asking "what do I have?", not "what exists?".
+            ->when($request->boolean('in_stock_only'), fn ($q) => $q->whereHas(
+                'stockBalances',
+                fn ($b) => $b
+                    ->when($scopeLocations !== null, fn ($s) => $s->whereIn('location_id', $scopeLocations))
+                    ->where('quantity', '>', 0),
+            ))
             ->when($request->filled('category_id'), fn ($q) => $q->where('category_id', $request->integer('category_id')))
             ->when($request->filled('storage_type'), fn ($q) => $q->where('storage_type', $request->string('storage_type')))
             ->when($request->has('is_active'), fn ($q) => $q->where('is_active', $request->boolean('is_active')))

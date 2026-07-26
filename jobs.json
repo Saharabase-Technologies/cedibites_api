@@ -1,0 +1,65 @@
+{
+  "total_count": 1,
+  "jobs": [
+    {
+      "id": 89729447104,
+      "run_id": 30177840190,
+      "workflow_name": "Deploy Cedibites API",
+      "head_branch": "master",
+      "run_url": "https://api.github.com/repos/Saharabase-Technologies/cedibites_api/actions/runs/30177840190",
+      "run_attempt": 1,
+      "node_id": "CR_kwDORUFMgM8AAAAU5Eq0wA",
+      "head_sha": "8f37a304f10259c663a8906bd4dcb348af0340ec",
+      "url": "https://api.github.com/repos/Saharabase-Technologies/cedibites_api/actions/jobs/89729447104",
+      "html_url": "https://github.com/Saharabase-Technologies/cedibites_api/actions/runs/30177840190/job/89729447104",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-07-25T22:34:46Z",
+      "started_at": "2026-07-25T22:34:48Z",
+      "completed_at": "2026-07-25T22:35:27Z",
+      "name": "deploy",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-07-25T22:34:49Z",
+          "completed_at": "2026-07-25T22:34:49Z"
+        },
+        {
+          "name": "Build appleboy/ssh-action@v1.0.0",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-07-25T22:34:49Z",
+          "completed_at": "2026-07-25T22:34:56Z"
+        },
+        {
+          "name": "Deploy to server",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 3,
+          "started_at": "2026-07-25T22:34:56Z",
+          "completed_at": "2026-07-25T22:35:26Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-07-25T22:35:26Z",
+          "completed_at": "2026-07-25T22:35:26Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/Saharabase-Technologies/cedibites_api/check-runs/89729447104",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000000465,
+      "runner_name": "GitHub Actions 1000000465",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}
