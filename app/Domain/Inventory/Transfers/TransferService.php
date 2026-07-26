@@ -390,14 +390,28 @@ class TransferService
                 $transfer->reject_reason = $disputeReason ?: $refuseNote;
                 $transfer->reject_reason_code = $refuseReason?->value;
                 $transfer->save();
+
+                // The lorry came and everything on it went back. That is still a
+                // finished delivery, so the request closes rather than sitting in
+                // the branch's queue looking like it is still on its way.
+                $this->fulfilRequisition($transfer, RequisitionStatus::FulfilledShort);
             } else {
                 $transfer->status = TransferStatus::Received;
                 $transfer->save();
-                // A part-refused delivery has not met the request, so the
-                // requisition behind it stays open for a corrective run.
-                if ($totalRefused <= 0) {
-                    $this->fulfilRequisition($transfer);
-                }
+
+                // A part-refused delivery arrived and was not all kept. It closes
+                // SHORT rather than fulfilled: calling it fulfilled overstates
+                // what reached the branch in every report that counts fulfilment.
+                //
+                // It used to be left `approved` "for a corrective run" - but
+                // nothing ever performed that run, so it stranded permanently.
+                // A refusal does not oblige a replacement; the goods went back,
+                // the loss is on the wastage claim, and the branch asks again if
+                // it still needs them.
+                $this->fulfilRequisition(
+                    $transfer,
+                    $totalRefused > 0 ? RequisitionStatus::FulfilledShort : RequisitionStatus::Fulfilled,
+                );
             }
 
             // The return leg of a wastage claim arriving back at the warehouse
@@ -461,21 +475,33 @@ class TransferService
     }
 
     /**
-     * Flip a linked requisition to `fulfilled` once its transfer is received in
-     * full. The single coupling point between the transfer and requisition flows.
+     * Close a linked requisition once its transfer has been dealt with. The
+     * single coupling point between the transfer and requisition flows.
+     *
+     * `$status` says which ending: `Fulfilled` when everything asked for was
+     * delivered and kept, `FulfilledShort` when the delivery happened but some
+     * or all of it was refused at the door.
+     *
+     * Deliberately NOT called on the disputed path. A dispute spawns a corrective
+     * transfer carrying the same `requisition_id`, so the request genuinely is
+     * still open and closes when that corrective arrives.
      */
-    private function fulfilRequisition(Transfer $transfer): void
-    {
+    private function fulfilRequisition(
+        Transfer $transfer,
+        RequisitionStatus $status = RequisitionStatus::Fulfilled,
+    ): void {
         if (! $transfer->requisition_id) {
             return;
         }
 
+        // Guarded on `approved` so a corrective transfer landing after the
+        // original cannot reopen or downgrade a requisition already closed.
         $requisition = Requisition::whereKey($transfer->requisition_id)
             ->where('status', RequisitionStatus::Approved->value)
             ->first();
 
         $requisition?->update([
-            'status' => RequisitionStatus::Fulfilled,
+            'status' => $status,
             'fulfilled_at' => now(),
         ]);
     }

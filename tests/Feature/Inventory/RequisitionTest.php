@@ -5,15 +5,16 @@ use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Inventory\RequisitionStatus;
 use App\Enums\Inventory\TransferStatus;
+use App\Enums\Inventory\WastageReason;
 use App\Enums\Permission;
-use Database\Seeders\PermissionSeeder;
+use App\Models\Branch;
+use App\Models\Employee;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Requisition;
-use App\Models\Branch;
-use App\Models\Employee;
 use App\Models\Inventory\Transfer;
 use App\Models\User;
+use Database\Seeders\PermissionSeeder;
 
 beforeEach(function () {
     // VIEW_ALL_FOR_TESTS: outbound acts (submit/approve/send) are gated to the
@@ -157,6 +158,110 @@ it('keeps the requisition unfulfilled after a disputed receipt until the correct
     fulfilTransfer($this, $corrective);
 
     expect($r->fresh()->status)->toBe(RequisitionStatus::Fulfilled);
+});
+
+/*
+ * A refused delivery closes the request SHORT.
+ *
+ * This used to strand: the receive path deliberately withheld fulfilment when
+ * anything was refused, "for a corrective run" - but nothing ever performed that
+ * run, so the requisition sat on `approved` forever, reading as still-on-its-way
+ * long after the lorry had been and gone. Two live requisitions on production
+ * were already in that state.
+ *
+ * The delivery happened. What went back is on the wastage claim. If the branch
+ * still needs the goods it asks again - a refusal is not an automatic obligation
+ * on the warehouse to send more.
+ */
+it('closes the requisition short when part of the delivery is refused at the door', function () {
+    $r = draftRequisition($this, 30);
+    $r = $this->requisitions->submit($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
+
+    $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
+    $lineId = $transfer->lines()->first()->id;
+
+    // 22 kept, 8 turned away. Nothing is missing, so this is not a dispute.
+    $transfer = $this->transfers->receive(
+        $transfer,
+        $this->receiver,
+        [$lineId => 22],
+        null,
+        [$lineId => ['qty' => 8, 'reason' => WastageReason::Spoiled->value]],
+    );
+
+    expect($transfer->fresh()->status)->toBe(TransferStatus::Received)
+        ->and($r->fresh()->status)->toBe(RequisitionStatus::FulfilledShort)
+        // Terminal: it must stop showing up as an open request.
+        ->and($r->fresh()->status->isTerminal())->toBeTrue()
+        ->and($r->fresh()->status->isDelivered())->toBeTrue()
+        ->and($r->fresh()->fulfilled_at)->not->toBeNull();
+});
+
+it('closes the requisition short when the whole consignment is turned away', function () {
+    $r = draftRequisition($this, 12);
+    $r = $this->requisitions->submit($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
+
+    $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
+    $lineId = $transfer->lines()->first()->id;
+
+    $transfer = $this->transfers->receive(
+        $transfer,
+        $this->receiver,
+        [$lineId => 0],
+        'The whole lot is off.',
+        [$lineId => ['qty' => 12, 'reason' => WastageReason::Spoiled->value]],
+    );
+
+    // The transfer is rejected outright, but the REQUEST is still finished -
+    // leaving it open would put a phantom delivery in the branch's queue.
+    expect($transfer->fresh()->status)->toBe(TransferStatus::Rejected)
+        ->and($r->fresh()->status)->toBe(RequisitionStatus::FulfilledShort);
+});
+
+it('still says plainly fulfilled when the branch keeps everything', function () {
+    $r = draftRequisition($this, 15);
+    $r = $this->requisitions->submit($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
+
+    fulfilTransfer($this, Transfer::find($r->fulfilling_transfer_id));
+
+    // The short status must not leak into the clean path.
+    expect($r->fresh()->status)->toBe(RequisitionStatus::Fulfilled);
+});
+
+it('does not let a corrective transfer downgrade a requisition already closed', function () {
+    $r = draftRequisition($this, 30);
+    $r = $this->requisitions->submit($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
+
+    $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
+    $lineId = $transfer->lines()->first()->id;
+    $transfer = $this->transfers->receive($transfer, $this->receiver, [$lineId => 20]); // 10 short
+
+    // A dispute leaves it open, because a corrective IS coming.
+    expect($r->fresh()->status)->toBe(RequisitionStatus::Approved);
+
+    $this->transfers->resolveDispute($transfer, $this->actor, 'short');
+    $corrective = Transfer::where('parent_transfer_id', $transfer->id)->first();
+
+    // The corrective is itself part-refused. It closes short, and a second
+    // receipt afterwards must not move it again - `fulfilRequisition` is guarded
+    // on `approved` precisely so a late arrival cannot rewrite the ending.
+    $corrective = $this->transfers->submit($corrective, $this->actor);
+    $corrective = $this->transfers->approve($corrective->fresh(), $this->actor);
+    $corrective = $this->transfers->send($corrective->fresh('lines'), $this->actor);
+    $cLineId = $corrective->lines()->first()->id;
+    $this->transfers->receive(
+        $corrective,
+        $this->receiver,
+        [$cLineId => 8],
+        null,
+        [$cLineId => ['qty' => 2, 'reason' => WastageReason::Spoiled->value]],
+    );
+
+    expect($r->fresh()->status)->toBe(RequisitionStatus::FulfilledShort);
 });
 
 it('blocks approval when no line is granted a positive quantity', function () {
