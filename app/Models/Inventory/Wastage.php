@@ -57,6 +57,44 @@ class Wastage extends Model
         return $this->hasMany(WastagePhoto::class, 'wastage_id')->oldest('id');
     }
 
+    /**
+     * Nobody but the recorder ever ruled on this claim - it posted itself.
+     *
+     * Under the threshold, or anywhere in a warehouse, `record()` approves on
+     * the spot. A genuine approval is always somebody else (self-approval is
+     * refused), so the two ids matching means no second person has looked.
+     */
+    public function selfApproved(): bool
+    {
+        return $this->status === WastageStatus::Approved
+            && $this->approved_by !== null
+            && (int) $this->approved_by === (int) $this->recorded_by;
+    }
+
+    /**
+     * May evidence still be attached or removed?
+     *
+     * The status rule alone was wrong, and wrong for the common case. A ₵60 loss
+     * at the mother kitchen self-approves the instant it is recorded, so it was
+     * `approved` - and therefore closed to evidence - before anyone could
+     * photograph anything. "Save and use phone" refused outright, and photos
+     * picked on the record form were attached in a loop that swallowed the
+     * failure, so they vanished without a word.
+     *
+     * What the lock actually protects (see the photos migration) is a claim that
+     * was DECIDED: "the photo set is the record of what the decision was made
+     * on, and letting either side bolt pictures onto a closed argument would
+     * destroy that." A self-approved claim has no argument and no decision -
+     * nobody ruled on it. There is nothing there to protect.
+     *
+     * So: open claims, plus claims that only ever approved themselves. A claim
+     * an approver actually signed or refused stays locked, exactly as before.
+     */
+    public function acceptsEvidence(): bool
+    {
+        return $this->status->acceptsEvidence() || $this->selfApproved();
+    }
+
     public function location(): BelongsTo
     {
         return $this->belongsTo(Location::class, 'location_id');

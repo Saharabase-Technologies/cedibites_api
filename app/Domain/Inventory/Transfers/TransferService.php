@@ -84,7 +84,25 @@ class TransferService
     public function submit(Transfer $transfer, User $actor, bool $override = false): Transfer
     {
         $this->assertStatus($transfer, TransferStatus::Draft, 'submitted');
-        $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'submit');
+
+        /*
+         * Submitting is a REQUEST, not a dispatch. Nothing leaves anyone's
+         * shelf; it asks the source to approve and send.
+         *
+         * So whoever raised the draft may also submit it, wherever they work.
+         * The case this exists for: the warehouse manager brokering stock
+         * between two branches - Ashaiman has a surplus and Test Branch needs
+         * it, and they are closer to each other than either is to the mother
+         * kitchen. He raises it, and it has to be able to reach Ashaiman's
+         * queue. Without this it sat in draft forever, because he does not work
+         * at Ashaiman and nobody there had any reason to look for it.
+         *
+         * Approve and send stay bound to the source (see below) - those are the
+         * acts that move stock and declare goods physically gone.
+         */
+        if ((int) $transfer->created_by !== (int) $actor->id) {
+            $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'submit');
+        }
 
         return DB::transaction(function () use ($transfer, $actor, $override) {
             $deficits = $this->sourceDeficits($transfer);
@@ -129,9 +147,12 @@ class TransferService
             throw new InventoryException("Only approved transfers can be sent (current status: {$transfer->status->value}).");
         }
 
-        // Dispatching is the SOURCE's act. The destination watches it arrive -
-        // a branch manager receiving from the mother kitchen has no business
-        // declaring that the mother kitchen shipped.
+        // Dispatching is the SOURCE's act, and stays that way even for a
+        // transfer somebody else raised. Sending deducts the source's stock and
+        // declares the goods physically left; if that could be done from
+        // another site, a transfer could be marked sent while nothing had moved,
+        // and the destination would discover it with no way to tell a lost
+        // delivery from one that was never loaded.
         $this->assertOperatesAt($actor, (int) $transfer->source_location_id, $transfer->sourceLocation?->name, 'send');
 
         return DB::transaction(function () use ($transfer, $actor, $sentQty) {

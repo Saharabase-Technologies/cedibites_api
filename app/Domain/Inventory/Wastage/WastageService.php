@@ -175,7 +175,7 @@ class WastageService
      */
     public function attachPhoto(Wastage $wastage, $file, User $actor, ?string $caption = null): WastagePhoto
     {
-        if (! $wastage->status->acceptsEvidence()) {
+        if (! $wastage->acceptsEvidence()) {
             throw new InventoryException(
                 'This claim is already settled - its photos are the record of what was decided on, so nothing further can be added.'
             );
@@ -233,7 +233,7 @@ class WastageService
         if ((int) $photo->wastage_id !== (int) $wastage->id) {
             throw new InventoryException('That photo does not belong to this claim.');
         }
-        if (! $wastage->status->acceptsEvidence()) {
+        if (! $wastage->acceptsEvidence()) {
             throw new InventoryException('This claim is settled - its evidence can no longer be changed.');
         }
         if ((int) $photo->uploaded_by !== (int) $actor->id) {

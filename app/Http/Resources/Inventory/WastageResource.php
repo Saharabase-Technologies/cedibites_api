@@ -113,7 +113,7 @@ class WastageResource extends JsonResource
 
             // Evidence can only be added while the claim is live; afterwards the
             // photo set is the record of what the decision was made on.
-            'accepts_evidence' => $this->status->acceptsEvidence(),
+            'accepts_evidence' => $this->resource->acceptsEvidence(),
 
             /**
              * Above the threshold the approver cannot sign off on nothing -

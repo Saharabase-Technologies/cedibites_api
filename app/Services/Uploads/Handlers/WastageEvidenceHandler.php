@@ -37,7 +37,7 @@ class WastageEvidenceHandler implements UploadSessionHandler
     public function canIssue(Model $target, User $actor): bool
     {
         return $target instanceof Wastage
-            && $target->status->acceptsEvidence()
+            && $target->acceptsEvidence()
             && $target->isVisibleTo($actor);
     }
 
@@ -86,7 +86,7 @@ class WastageEvidenceHandler implements UploadSessionHandler
         // Re-checked here, not just at issue time: a claim can be approved in
         // the minutes between the QR appearing and the phone uploading, and the
         // photo set has to stay exactly what the decision was made on.
-        if (! $wastage->status->acceptsEvidence()) {
+        if (! $wastage->acceptsEvidence()) {
             throw new UploadSessionException(
                 'This claim has been settled since the code was scanned, so nothing further can be added to it.'
             );

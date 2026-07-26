@@ -61,6 +61,11 @@ class TransferResource extends JsonResource
             // The full corrective chain, oldest first - set by the show endpoint.
             'lineage' => $this->when(isset($this->lineage), fn () => $this->lineage),
             'created_by' => $this->whenLoaded('createdBy', fn () => $this->createdBy?->name),
+            // Id as well as the name: a draft belongs to whoever raised it, so
+            // the screen has to know whether the viewer is that person. The
+            // warehouse manager brokering a branch-to-branch move works at
+            // neither end and would otherwise be locked out of his own draft.
+            'created_by_id' => $this->created_by,
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'sent_by' => $this->whenLoaded('sentBy', fn () => $this->sentBy?->name),
             // Id too - names are not unique, and "did I send this?" gates the

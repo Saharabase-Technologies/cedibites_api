@@ -1,16 +1,17 @@
 <?php
 
+use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
 use App\Domain\Inventory\Transfers\TransferService;
 use App\Enums\Inventory\TransferStatus;
 use App\Enums\Permission;
-use Database\Seeders\PermissionSeeder;
+use App\Models\Branch;
+use App\Models\Employee;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\Transfer;
-use App\Models\Branch;
-use App\Models\Employee;
 use App\Models\User;
+use Database\Seeders\PermissionSeeder;
 use Illuminate\Support\Facades\DB;
 
 beforeEach(function () {
@@ -120,4 +121,90 @@ it('lets an admin override the source-stock check', function () {
 
     expect($t->status)->toBe(TransferStatus::Submitted)
         ->and($t->source_validation_overridden_by)->toBe($this->actor->id);
+});
+
+/*
+ * ── The warehouse manager brokering between two branches ─────────────────────
+ *
+ * Ashaiman has a surplus and Test Branch needs it, and they are nearer each
+ * other than either is to the mother kitchen. So the warehouse manager raises
+ * the transfer - but he works at neither end, and `operatingLocationIds()`
+ * returns warehouses only for him. The draft sat in limbo: he could not submit
+ * it, and nobody at Ashaiman had reason to go looking for it.
+ *
+ * Submitting moves no stock, so the creator may do it from anywhere. Approve and
+ * send stay with the source, because those declare goods physically gone.
+ */
+it('lets the warehouse manager get a branch-to-branch draft into the source queue', function () {
+    $branchB = Location::factory()->satellite()->create(['branch_id' => Branch::factory()->create()->id]);
+    $branchC = Location::factory()->satellite()->create(['branch_id' => Branch::factory()->create()->id]);
+
+    app(MovementPostingEngine::class)->post([
+        'item_id' => $this->item->id, 'location_id' => $branchB->id, 'quantity' => 50,
+        'movement_type' => 'purchase', 'unit_cost_at_time' => 3.0,
+        'idempotency_key' => 'broker-seed',
+    ]);
+
+    // The warehouse manager: sees everywhere, but operates only at warehouses.
+    $wm = User::factory()->create();
+    $wm->givePermissionTo(Permission::InventoryViewAllLocations->value);
+    expect($wm->operatingLocationIds())->not->toContain($branchB->id);
+
+    $transfer = $this->service->create([
+        'source_location_id' => $branchB->id,
+        'destination_location_id' => $branchC->id,
+        'items' => [['item_id' => $this->item->id, 'requested_qty' => 10]],
+    ], $wm);
+
+    // He raised it, so he can send it on its way to Ashaiman's queue.
+    $transfer = $this->service->submit($transfer, $wm);
+    expect($transfer->status)->toBe(TransferStatus::Submitted);
+
+    // But dispatching is still the source's. He cannot approve it...
+    expect(fn () => $this->service->approve($transfer->fresh(), $wm))
+        ->toThrow(InventoryException::class, 'only someone there can approve it');
+
+    // ...the manager at branch B can, and can send.
+    $bManager = User::factory()->create();
+    Employee::factory()->create(['user_id' => $bManager->id])
+        ->branches()->attach($branchB->branch_id);
+
+    $transfer = $this->service->approve($transfer->fresh(), $bManager);
+    $transfer = $this->service->send($transfer->fresh('lines'), $bManager);
+
+    expect($transfer->status)->toBe(TransferStatus::Sent)
+        ->and(balanceAt($this->item->id, $branchB->id))->toBe(40.0);
+});
+
+it('will not let the warehouse manager declare that a branch shipped', function () {
+    $branchB = Location::factory()->satellite()->create(['branch_id' => Branch::factory()->create()->id]);
+    $branchC = Location::factory()->satellite()->create(['branch_id' => Branch::factory()->create()->id]);
+
+    app(MovementPostingEngine::class)->post([
+        'item_id' => $this->item->id, 'location_id' => $branchB->id, 'quantity' => 50,
+        'movement_type' => 'purchase', 'unit_cost_at_time' => 3.0,
+        'idempotency_key' => 'broker-seed-2',
+    ]);
+
+    $wm = User::factory()->create();
+    $wm->givePermissionTo(Permission::InventoryViewAllLocations->value);
+
+    $transfer = $this->service->create([
+        'source_location_id' => $branchB->id,
+        'destination_location_id' => $branchC->id,
+        'items' => [['item_id' => $this->item->id, 'requested_qty' => 10]],
+    ], $wm);
+    $transfer = $this->service->submit($transfer, $wm);
+
+    $bManager = User::factory()->create();
+    Employee::factory()->create(['user_id' => $bManager->id])
+        ->branches()->attach($branchB->branch_id);
+    $transfer = $this->service->approve($transfer->fresh(), $bManager);
+
+    // Marking it sent from the mother kitchen would say goods left a building
+    // he is not standing in. Stock must not move on that say-so.
+    expect(fn () => $this->service->send($transfer->fresh('lines'), $wm))
+        ->toThrow(InventoryException::class, 'only someone there can send it');
+
+    expect(balanceAt($this->item->id, $branchB->id))->toBe(50.0);
 });

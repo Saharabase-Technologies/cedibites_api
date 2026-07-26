@@ -133,11 +133,15 @@ it('never stores the raw token, only its hash', function () {
 it('refuses to draw a code for a claim that is already settled', function () {
     actingAs($this->jesse, 'sanctum');
 
-    // A small loss self-approves on the spot, so it is settled the moment it exists.
-    $wastage = app(WastageService::class)->record([
-        'location_id' => $this->branch->id,
-        'lines' => [['item_id' => $this->rice->id, 'quantity' => 2, 'reason' => WastageReason::Burnt->value]],
-    ], $this->jesse);
+    /*
+     * A claim that has been DECIDED. This used to use a small self-approving
+     * loss, which is what hid the real bug: under the threshold, and anywhere in
+     * a warehouse, a claim approves itself the instant it is recorded, so
+     * "Save and use phone" refused every ordinary write-off. Withdrawing the
+     * claim settles it with an actual decision behind it.
+     */
+    $wastage = openClaim($this->jesse, $this->branch, $this->chicken);
+    $this->wastages->cancel($wastage->fresh(), $this->jesse);
 
     postJson('/v1/upload-sessions', [
         'target_type' => 'wastage',

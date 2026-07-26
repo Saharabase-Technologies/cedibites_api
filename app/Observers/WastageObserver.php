@@ -30,7 +30,7 @@ class WastageObserver
             return;
         }
 
-        if ($wastage->status->acceptsEvidence()) {
+        if ($wastage->acceptsEvidence()) {
             return;
         }
 

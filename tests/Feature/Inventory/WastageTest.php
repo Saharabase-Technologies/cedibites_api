@@ -187,13 +187,30 @@ it('lets it through once there is a photo, and keeps both sides of the argument'
 it('keeps the evidence intact once the claim is settled', function () {
     Storage::fake('public');
 
-    // Small claim — self-approves immediately, so it is already settled.
+    /*
+     * This used to use a small self-approving claim as its example of
+     * "settled", which is what let the real bug through: a ₵60 loss at the
+     * mother kitchen was locked to evidence the instant it was recorded, so
+     * nobody could ever photograph it. The lock is about a claim an APPROVER
+     * ruled on, so that is what it now tests.
+     */
     $wastage = $this->wastages->record([
         'location_id' => $this->branch->id,
-        'lines' => [['item_id' => $this->rice->id, 'quantity' => 2, 'reason' => WastageReason::Burnt->value]],
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
     ], $this->jesse);
 
-    expect(fn () => $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('late.jpg'), $this->jesse))
+    $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+
+    $return = Transfer::find($wastage->return_transfer_id);
+    $this->transfers->send($return->fresh('lines'), $this->jesse);
+    $this->transfers->receive($return->fresh('lines'), $this->wilfred);
+    $this->wastages->approve($wastage->fresh(), $this->wilfred);
+
+    $settled = $wastage->fresh();
+    expect($settled->selfApproved())->toBeFalse()
+        ->and($settled->acceptsEvidence())->toBeFalse();
+
+    expect(fn () => $this->wastages->attachPhoto($settled, UploadedFile::fake()->image('late.jpg'), $this->jesse))
         ->toThrow(InventoryException::class, 'already settled');
 });
 
@@ -712,4 +729,37 @@ it('takes the renditions with it when a photo is removed', function () {
     Storage::disk('public')->assertMissing($original);
     Storage::disk('public')->assertMissing($thumb);
     Storage::disk('public')->assertMissing($display);
+});
+
+/*
+ * ── Evidence on a claim that approved itself ─────────────────────────────────
+ *
+ * Reported from the field: recording a ₵60 loss at the mother kitchen and
+ * pressing "Save and use phone" answered "This record can no longer take
+ * photos". Under the threshold, and anywhere in a warehouse, `record()` approves
+ * on the spot - so the claim was `approved`, and therefore locked to evidence,
+ * before anyone could photograph anything.
+ *
+ * The lock exists to stop pictures being bolted onto a DECIDED argument. A claim
+ * nobody ruled on has no argument to protect.
+ */
+it('lets a self-approved claim still take the photographs of what was thrown away', function () {
+    Storage::fake('public');
+
+    // ₵4 of rice at a branch: under the threshold, so it writes itself off.
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->rice->id, 'quantity' => 2, 'reason' => WastageReason::Burnt->value]],
+    ], $this->jesse);
+
+    expect($wastage->status)->toBe(WastageStatus::Approved)
+        ->and($wastage->selfApproved())->toBeTrue()
+        ->and($wastage->acceptsEvidence())->toBeTrue();
+
+    $photo = $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('burnt.jpg'), $this->jesse);
+    expect($photo->stage)->toBe('declared');
+
+    // And the phone route agrees - this is the exact call that was refusing.
+    expect(app(App\Services\Uploads\Handlers\WastageEvidenceHandler::class)
+        ->canIssue($wastage->fresh(), $this->jesse))->toBeTrue();
 });
