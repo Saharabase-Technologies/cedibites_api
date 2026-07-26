@@ -24,6 +24,8 @@ beforeEach(function () {
     $this->transfers = app(TransferService::class);
 
     $this->actor = User::factory()->create();
+    // Separation of duties: the requester may not approve their own request.
+    $this->approver = User::factory()->create();
     $this->receiver = User::factory()->create();
     $this->warehouse = Location::factory()->warehouse()->create();
     $this->branch = Location::factory()->satellite()->create();
@@ -53,7 +55,7 @@ function submittedRequisition($test, float $qty = 20, ?User $author = null): Req
 // ── Approval should not be given four times ──────────────────────────────────
 
 it('lands the spawned transfer ready to send, not back in draft', function () {
-    $r = $this->requisitions->approve(submittedRequisition($this), $this->actor);
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
     $transfer = Transfer::find($r->fulfilling_transfer_id);
 
     expect($transfer->status)->toBe(TransferStatus::Approved)
@@ -66,20 +68,43 @@ it('lands the spawned transfer ready to send, not back in draft', function () {
 
 it('refuses to approve a requisition the warehouse cannot cover', function () {
     // 500 requested against 100 on hand.
-    expect(fn () => $this->requisitions->approve(submittedRequisition($this, 500), $this->actor))
+    expect(fn () => $this->requisitions->approve(submittedRequisition($this, 500), $this->approver))
         ->toThrow(Exception::class, 'Source stock is short');
 });
 
 it('lets an override push an approval through a short source', function () {
-    $r = $this->requisitions->approve(submittedRequisition($this, 500), $this->actor, [], override: true);
+    $r = $this->requisitions->approve(submittedRequisition($this, 500), $this->approver, [], override: true);
 
     expect(Transfer::find($r->fulfilling_transfer_id)->status)->toBe(TransferStatus::Approved);
+});
+
+// ── The requester may not approve their own request ──────────────────────────
+
+it('blocks a manager from approving a requisition they raised', function () {
+    // A branch manager holds both grants: create, and approve (so they can serve
+    // other branches drawing on their stock). Not so they can serve themselves.
+    $r = submittedRequisition($this, 20, $this->actor);
+
+    expect(fn () => $this->requisitions->approve($r, $this->actor))
+        ->toThrow(Exception::class, 'you cannot also approve it');
+});
+
+it('lets someone at the fulfilling location approve it', function () {
+    $r = $this->requisitions->approve(submittedRequisition($this, 20, $this->actor), $this->approver);
+
+    expect($r->status)->toBe(RequisitionStatus::Approved);
+});
+
+it('still lets the requester withdraw their own request by rejecting it', function () {
+    $r = $this->requisitions->reject(submittedRequisition($this, 20, $this->actor), $this->actor, 'changed my mind');
+
+    expect($r->status)->toBe(RequisitionStatus::Rejected);
 });
 
 // ── Whoever sends may not also receive ───────────────────────────────────────
 
 it('blocks the sender from receiving their own transfer', function () {
-    $r = $this->requisitions->approve(submittedRequisition($this), $this->actor);
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
     $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
 
     expect(fn () => $this->transfers->receive($transfer, $this->actor))
@@ -87,7 +112,7 @@ it('blocks the sender from receiving their own transfer', function () {
 });
 
 it('lets anyone else at the destination receive it', function () {
-    $r = $this->requisitions->approve(submittedRequisition($this), $this->actor);
+    $r = $this->requisitions->approve(submittedRequisition($this), $this->approver);
     $transfer = $this->transfers->send(Transfer::find($r->fulfilling_transfer_id), $this->actor);
 
     expect($this->transfers->receive($transfer, $this->receiver)->status)
@@ -147,7 +172,7 @@ it('hides a draft from everyone but its author, and shows it once submitted', fu
 /** Drive a requisition to a short receipt, leaving the transfer disputed. */
 function disputedTransfer($test, float $requested, float $received): Transfer
 {
-    $r = $test->requisitions->approve(submittedRequisition($test, $requested), $test->actor);
+    $r = $test->requisitions->approve(submittedRequisition($test, $requested), $test->approver);
     $transfer = $test->transfers->send(Transfer::find($r->fulfilling_transfer_id), $test->actor);
     $lineId = $transfer->lines()->first()->id;
 

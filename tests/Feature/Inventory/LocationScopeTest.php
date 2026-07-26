@@ -240,6 +240,38 @@ it('reports a branch manager only their own stock, not the warehouse total', fun
         ->and((float) $all['stock_on_hand'])->toBe(162.0);
 });
 
+it('shows the same scoped figure on the item detail as on the list', function () {
+    $item = Item::factory()->create();
+    $engine = app(\App\Domain\Inventory\Movements\Engines\MovementPostingEngine::class);
+
+    foreach ([[$this->warehouse->id, 100, 'dw'], [$this->ownLocation->id, 10, 'do']] as [$loc, $qty, $k]) {
+        $engine->post([
+            'item_id' => $item->id, 'location_id' => $loc, 'quantity' => $qty,
+            'movement_type' => 'purchase', 'unit_cost_at_time' => 1.0,
+            'idempotency_key' => "seed-detail-{$k}",
+        ]);
+    }
+
+    // The list said 10; opening the item used to show the warehouse's 100.
+    $detail = $this->actingAs($this->bm)
+        ->getJson("/v1/inventory/items/{$item->id}")
+        ->assertSuccessful()
+        ->json('data');
+
+    expect((float) $detail['stock_on_hand'])->toBe(10.0);
+
+    // The movement ledger behind it is scoped too — a running balance built from
+    // warehouse movements would be nonsense at a branch.
+    $movements = $this->actingAs($this->bm)
+        ->getJson("/v1/inventory/items/{$item->id}/movements")
+        ->assertSuccessful()
+        ->json('data');
+
+    expect((float) $movements['item']['stock_on_hand'])->toBe(10.0)
+        ->and(collect($movements['movements'])->pluck('location.id')->unique()->all())
+        ->toBe([$this->ownLocation->id]);
+});
+
 it('keeps the full catalog available so a branch can request what it lacks', function () {
     $held = Item::factory()->create();
     $notHeld = Item::factory()->create();

@@ -57,6 +57,9 @@ class TransferResource extends JsonResource
             'created_by' => $this->whenLoaded('createdBy', fn () => $this->createdBy?->name),
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'sent_by' => $this->whenLoaded('sentBy', fn () => $this->sentBy?->name),
+            // Id too — names are not unique, and "did I send this?" gates the
+            // receive action.
+            'sent_by_id' => $this->sent_by,
             'received_by' => $this->whenLoaded('receivedBy', fn () => $this->receivedBy?->name),
             'cancelled_by' => $this->whenLoaded('cancelledBy', fn () => $this->cancelledBy?->name),
             'cancel_reason' => $this->cancel_reason,

@@ -128,6 +128,17 @@ class RequisitionService
     {
         $this->assertStatus($requisition, RequisitionStatus::Submitted, 'approved');
 
+        // Separation of duties. A branch manager holds both the create and the
+        // approve grant — the approve grant is there so they can fulfil requests
+        // from OTHER branches drawing on their stock, not so they can sign off
+        // their own. Letting the requester approve makes the warehouse's control
+        // over what leaves it decorative.
+        if ((int) $requisition->requested_by === (int) $actor->id) {
+            throw new InventoryException(
+                'You raised this requisition, so you cannot also approve it. It needs someone at the fulfilling location.'
+            );
+        }
+
         if (! $requisition->source_location_id) {
             throw new InventoryException('A source location is required before a requisition can be approved.');
         }

@@ -46,6 +46,9 @@ class RequisitionResource extends JsonResource
                 'status' => $this->fulfillingTransfer->status->value,
             ] : null),
             'requested_by' => $this->whenLoaded('requestedBy', fn () => $this->requestedBy?->name),
+            // Id as well as name: names are not unique (this deployment has two
+            // Sarahs) and the UI has to decide "did I raise this?" reliably.
+            'requested_by_id' => $this->requested_by,
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
             'rejection_reason' => $this->rejection_reason,
             'submitted_at' => optional($this->submitted_at)->toIso8601String(),

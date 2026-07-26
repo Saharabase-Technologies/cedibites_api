@@ -16,6 +16,8 @@ beforeEach(function () {
     $this->requisitions = app(RequisitionService::class);
     $this->transfers = app(TransferService::class);
     $this->actor = User::factory()->create();
+    // Separation of duties: the requester may not approve their own request.
+    $this->approver = User::factory()->create();
     // Separation of duties: the sender may not sign for arrival, so the
     // destination needs its own person.
     $this->receiver = User::factory()->create();
@@ -70,7 +72,7 @@ it('approves a requisition, spawns a fulfilling transfer, and auto-fulfils on re
     $r = $this->requisitions->submit($r, $this->actor);
     expect($r->status)->toBe(RequisitionStatus::Submitted);
 
-    $r = $this->requisitions->approve($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
     expect($r->status)->toBe(RequisitionStatus::Approved)
         ->and($r->fulfilling_transfer_id)->not->toBeNull();
 
@@ -93,7 +95,7 @@ it('trims the granted quantity and transfers only what was approved', function (
     $r = $this->requisitions->submit($r, $this->actor);
     $lineId = $r->lines()->first()->id;
 
-    $r = $this->requisitions->approve($r, $this->actor, [$lineId => 25]);
+    $r = $this->requisitions->approve($r, $this->approver, [$lineId => 25]);
 
     $transfer = Transfer::find($r->fulfilling_transfer_id);
     expect((float) $r->lines()->first()->approved_qty)->toBe(25.0)
@@ -113,7 +115,7 @@ it('rejects a submitted requisition with a reason and spawns no transfer', funct
 it('keeps the requisition unfulfilled after a disputed receipt until the corrective arrives', function () {
     $r = draftRequisition($this, 30);
     $r = $this->requisitions->submit($r, $this->actor);
-    $r = $this->requisitions->approve($r, $this->actor);
+    $r = $this->requisitions->approve($r, $this->approver);
     $transfer = Transfer::find($r->fulfilling_transfer_id);
 
     $transfer = $this->transfers->send($transfer, $this->actor);
@@ -137,6 +139,6 @@ it('blocks approval when no line is granted a positive quantity', function () {
     $r = $this->requisitions->submit($r, $this->actor);
     $lineId = $r->lines()->first()->id;
 
-    expect(fn () => $this->requisitions->approve($r, $this->actor, [$lineId => 0]))
+    expect(fn () => $this->requisitions->approve($r, $this->approver, [$lineId => 0]))
         ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class);
 });

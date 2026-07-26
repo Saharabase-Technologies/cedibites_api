@@ -91,10 +91,18 @@ class CatalogController extends Controller
         return response()->success(ItemResource::collection($items));
     }
 
-    public function item(Item $item): JsonResponse
+    public function item(Request $request, Item $item): JsonResponse
     {
+        // Same scope as the list. Without this the list showed a branch manager
+        // their own 10 kg and the detail behind it showed the warehouse's — the
+        // two disagreed about the same item on the same screen.
+        $scope = $this->itemStockScope($request);
+
         $item->load(['category', 'baseUnit', 'defaultSupplier'])
-            ->loadSum('stockBalances as stock_on_hand', 'quantity');
+            ->loadSum(
+                ['stockBalances as stock_on_hand' => fn ($q) => $scope === null ? $q : $q->whereIn('location_id', $scope)],
+                'quantity',
+            );
 
         return response()->success(new ItemResource($item));
     }
@@ -105,13 +113,22 @@ class CatalogController extends Controller
      * and the distinct suppliers that have supplied it. Powers the item detail
      * drill-down (e.g. "bought 70 L, then +20 L when it dropped to 30 L").
      */
-    public function itemMovements(Item $item): JsonResponse
+    public function itemMovements(Request $request, Item $item): JsonResponse
     {
+        // Scope the whole page, not just the headline figure: a branch manager
+        // reading a ledger of warehouse movements with a running balance that is
+        // not theirs is worse than showing nothing.
+        $scope = $this->itemStockScope($request);
+
         $item->load(['category', 'baseUnit', 'defaultSupplier'])
-            ->loadSum('stockBalances as stock_on_hand', 'quantity');
+            ->loadSum(
+                ['stockBalances as stock_on_hand' => fn ($q) => $scope === null ? $q : $q->whereIn('location_id', $scope)],
+                'quantity',
+            );
 
         $movements = StockMovement::query()
             ->where('item_id', $item->id)
+            ->when($scope !== null, fn ($q) => $q->whereIn('location_id', $scope))
             ->with(['location:id,name', 'user:id,name'])
             ->orderBy('occurred_at')
             ->orderBy('id')
@@ -196,6 +213,7 @@ class CatalogController extends Controller
         // Open FEFO batches (expiry-tracked items), soonest expiry first.
         $batches = \App\Models\Inventory\Batch::query()
             ->where('item_id', $item->id)
+            ->when($scope !== null, fn ($q) => $q->whereIn('location_id', $scope))
             ->where('remaining_qty', '>', 0)
             ->orderByRaw('expiry_date IS NULL')
             ->orderBy('expiry_date')
