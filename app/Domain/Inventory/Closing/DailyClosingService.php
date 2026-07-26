@@ -9,6 +9,7 @@ use App\Enums\Inventory\DailyClosingStatus;
 use App\Enums\Inventory\WastageOrigin;
 use App\Enums\Inventory\WastageReason;
 use App\Models\Inventory\DailyClosing;
+use App\Models\Inventory\StockMovement;
 use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -54,33 +55,69 @@ class DailyClosingService
      * The expected quantities written here are provisional - a working snapshot,
      * refreshed at completion. They are never shown to the person counting.
      */
+    /**
+     * Which day the business is currently on.
+     *
+     * Branches trade into the evening and count up afterwards, so the working
+     * day does not end at midnight. Before the cutoff hour (03:00 by default)
+     * the business day is still yesterday's - a manager counting at half past
+     * midnight is closing the day they actually worked.
+     *
+     * Ghana is UTC+0 all year and `app.timezone` is UTC, so there is no offset
+     * arithmetic hiding here. That would not hold elsewhere.
+     */
+    public static function currentBusinessDate(?Carbon $at = null): string
+    {
+        $now = $at ? $at->copy() : Carbon::now();
+        $cutoff = (int) config('inventory.business_day_cutoff_hour', 3);
+
+        return $now->hour < $cutoff
+            ? $now->subDay()->toDateString()
+            : $now->toDateString();
+    }
+
+    /**
+     * The instant a business day ends: the cutoff on the following morning.
+     *
+     * Used both to timestamp the closing adjustment and to ask whether anything
+     * has moved since the day was over.
+     */
+    public static function businessDayEndsAt(string $businessDate): Carbon
+    {
+        $cutoff = (int) config('inventory.business_day_cutoff_hour', 3);
+
+        return Carbon::parse($businessDate)->addDay()->startOfDay()->addHours($cutoff);
+    }
+
     public function open(int $locationId, string $date, User $actor): DailyClosing
     {
         $businessDate = Carbon::parse($date)->toDateString();
-        $today = Carbon::today()->toDateString();
+        $current = self::currentBusinessDate();
 
         /*
-         * A count may only be opened for TODAY.
+         * A count may only be opened for the CURRENT BUSINESS DAY.
          *
-         * Future is obviously nonsense - there is nothing on the shelf yet to
-         * count. The past is the subtler half and the reason this exists: a
-         * closing snapshots `expected_qty` from the ledger AS IT IS NOW, not as
-         * it stood on the date written at the top. Opening a count for last
-         * Tuesday therefore compares Tuesday's physical shelf against today's
-         * expected figures and calls the whole week's legitimate movements a
-         * variance. Worse, `count_adjustment` then posts that difference to make
-         * the books agree with it, so a back-dated count actively corrupts the
-         * chain that lets each morning open where the night before closed.
+         * Not the current calendar day - see `currentBusinessDate()`. A branch
+         * that trades into the evening and counts up afterwards can run past
+         * midnight, and being told the date has changed underneath them is how
+         * a count gets abandoned.
+         *
+         * Everything else is refused, and the reason is worth stating: a closing
+         * measures against the ledger AS IT STANDS AT COMPLETION. Counting last
+         * Tuesday's shelf today would read the whole week's legitimate movements
+         * as variance, and `count_adjustment` would then post that difference to
+         * make the books agree with it - corrupting the very chain that lets
+         * each morning open where the night before closed.
          *
          * A day that was genuinely missed stays missed. The coverage strip shows
          * it in red, which is the honest record; reconciliation is the tool for
          * fixing a drift after the fact.
          */
-        if ($businessDate !== $today) {
+        if ($businessDate !== $current) {
             throw new InventoryException(
-                Carbon::parse($businessDate)->isFuture()
-                    ? 'A count can only be opened for today - there is nothing on the shelf yet to count for a future date.'
-                    : 'A count can only be opened for today. Expected quantities come from the ledger as it stands now, so a back-dated count would read every movement since as a discrepancy. Use a reconciliation to correct an earlier drift.'
+                Carbon::parse($businessDate)->gt(Carbon::parse($current))
+                    ? 'A count can only be opened for the current business day - there is nothing on the shelf yet to count for a later one.'
+                    : "A count can only be opened for the current business day ({$current}). Expected quantities are measured against the ledger as it stands now, so a back-dated count would read every movement since as a discrepancy. Use a reconciliation to correct an earlier drift."
             );
         }
 
@@ -188,6 +225,36 @@ class DailyClosingService
         $locationId = (int) $closing->location_id;
         $closing->loadMissing('lines');
 
+        $businessDate = Carbon::parse($closing->business_date)->toDateString();
+
+        /*
+         * The safety net under the after-midnight window.
+         *
+         * Closing yesterday at 01:00 is safe only because nothing moves
+         * overnight. If something HAS moved - a night production run, an early
+         * delivery, an emergency transfer - then the shelf that was counted and
+         * the ledger being measured against it are describing different moments,
+         * and posting the difference would silently adjust that movement away.
+         * A received delivery would simply vanish.
+         *
+         * Only checked when closing a day that is already over. A same-day count
+         * is measured against a live ledger by design, and trading during the
+         * count is the normal case, not an anomaly.
+         */
+        if ($businessDate !== self::currentBusinessDate()) {
+            $movedSince = StockMovement::where('location_id', $locationId)
+                ->where('occurred_at', '>=', self::businessDayEndsAt($businessDate))
+                ->exists();
+
+            if ($movedSince) {
+                throw new InventoryException(
+                    'Stock has moved at this location since that day ended, so the count can no longer be '
+                    .'settled against it - completing it now would cancel out whatever moved. Open a count for '
+                    .'the current business day instead, and use a reconciliation to correct the earlier drift.'
+                );
+            }
+        }
+
         // Re-read the ledger now, not as it stood when the count was opened.
         $balances = DB::table('inventory_stock_balances')
             ->where('location_id', $locationId)
@@ -224,7 +291,15 @@ class DailyClosingService
                     'unit_cost_at_time' => $unitCost,
                     'user_id' => $actor->id,
                     'idempotency_key' => "count_adjustment:closing:{$closing->id}:item:{$line->item_id}",
-                    'occurred_at' => now(),
+                    // Dated to the day being closed, not the wall clock. A count
+                    // finished at 00:30 belongs to the day it counted - stamping
+                    // it `now()` would file the adjustment under tomorrow and
+                    // leave every movement-by-date report disagreeing with the
+                    // closings list by one day.
+                    'occurred_at' => min(
+                        Carbon::parse($businessDate)->endOfDay(),
+                        Carbon::now(),
+                    ),
                 ]);
                 $line->adjustment_movement_id = $movement->id;
             }

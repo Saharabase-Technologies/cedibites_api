@@ -114,11 +114,11 @@ it('rejects opening a closing for a future date', function () {
  * Two open counts for past dates were sitting on production when this was found.
  */
 it('rejects opening a closing for a past date, not just a future one', function () {
-    expect(fn () => $this->service->open($this->location->id, now()->subDay()->toDateString(), $this->actor))
-        ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'only be opened for today');
+    expect(fn () => $this->service->open($this->location->id, now()->subDays(3)->toDateString(), $this->actor))
+        ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'current business day');
 });
 
-it('still opens todays count, and re-opening it returns the same one', function () {
+it('still opens the current business day, and re-opening returns the same one', function () {
     $first = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
     $again = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
 
@@ -136,4 +136,108 @@ it('defaults the business date to today when the client sends none', function ()
         ->postJson('/v1/inventory/daily-closings', ['location_id' => $this->location->id])
         ->assertSuccessful()
         ->assertJsonPath('data.business_date', now()->toDateString());
+});
+
+/*
+ * ── The business day runs past midnight ──────────────────────────────────────
+ *
+ * Branches trade into the evening and count up afterwards. Told at 00:30 that
+ * "the date has changed, you can no longer close today", a manager either gives
+ * up or back-dates it - and back-dating is the thing that corrupts the ledger.
+ * So the day rolls at 03:00, not at midnight.
+ *
+ * Ghana is UTC+0 all year and `app.timezone` is UTC, so none of this is hiding
+ * an offset bug. It would elsewhere.
+ */
+it('still calls it yesterday at one in the morning', function () {
+    $businessDay = now()->toDateString();
+
+    // Half past midnight, the night after trading.
+    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+
+    expect(DailyClosingService::currentBusinessDate())->toBe($businessDay);
+
+    // And the count for the day just worked can still be opened.
+    $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
+    expect($closing->business_date->toDateString())->toBe($businessDay);
+});
+
+it('has rolled over by the time the next morning starts', function () {
+    $businessDay = now()->toDateString();
+
+    $this->travelTo(now()->addDay()->startOfDay()->addHours(9));
+
+    expect(DailyClosingService::currentBusinessDate())->toBe(now()->toDateString())
+        ->and(DailyClosingService::currentBusinessDate())->not->toBe($businessDay);
+
+    // Yesterday is now genuinely closed to new counts.
+    expect(fn () => $this->service->open($this->location->id, $businessDay, $this->actor))
+        ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'current business day');
+});
+
+/*
+ * The safety net under that window.
+ *
+ * Closing yesterday at 01:00 is only safe because nothing moves overnight. If
+ * something HAS moved, the shelf that was counted and the ledger being measured
+ * against it describe different moments, and posting the difference would
+ * silently cancel the movement out - a received delivery would simply vanish.
+ */
+it('refuses to settle a finished day once stock has moved since', function () {
+    $businessDay = now()->toDateString();
+    $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
+    $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty])->all();
+
+    // Next morning, after the day rolled - and a delivery has landed.
+    $this->travelTo(now()->addDay()->startOfDay()->addHours(9));
+    $this->engine->post([
+        'item_id' => $this->itemA->id,
+        'location_id' => $this->location->id,
+        'quantity' => 12,
+        'movement_type' => 'transfer_in',
+        'unit_cost_at_time' => 2.0,
+        'idempotency_key' => 'morning-delivery',
+    ]);
+
+    expect(fn () => $this->service->saveCounts($closing->fresh(), $counts, complete: true, actor: $this->actor))
+        ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'no longer be settled');
+
+    // And critically, the delivery is still on the shelf.
+    expect((float) DB::table('inventory_stock_balances')
+        ->where('location_id', $this->location->id)
+        ->where('item_id', $this->itemA->id)
+        ->value('quantity'))->toBe(52.0);
+});
+
+it('settles a finished day happily when nothing has moved', function () {
+    $businessDay = now()->toDateString();
+    $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
+    $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty - 1])->all();
+
+    // 01:00, the small hours of the same working night. Nothing has moved.
+    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+
+    $closing = $this->service->saveCounts($closing->fresh(), $counts, complete: true, actor: $this->actor);
+    expect($closing->status)->toBe(DailyClosingStatus::Completed);
+});
+
+/*
+ * A count finished at 00:30 belongs to the day it counted. Stamping the
+ * adjustment `now()` would file it under tomorrow and leave every
+ * movement-by-date report disagreeing with the closings list by one day.
+ */
+it('dates the closing adjustment to the day being counted, not the wall clock', function () {
+    $businessDay = now()->toDateString();
+    $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
+    $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty - 3])->all();
+
+    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+    $this->service->saveCounts($closing->fresh(), $counts, complete: true, actor: $this->actor);
+
+    $adjustment = App\Models\Inventory\StockMovement::where('movement_type', 'count_adjustment')
+        ->where('location_id', $this->location->id)
+        ->first();
+
+    expect($adjustment)->not->toBeNull()
+        ->and($adjustment->occurred_at->toDateString())->toBe($businessDay);
 });

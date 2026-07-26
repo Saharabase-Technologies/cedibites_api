@@ -53,9 +53,9 @@ class DailyClosingController extends Controller
     public function store(Request $request): JsonResponse
     {
         // The date is no longer the client's to choose - a count is always for
-        // today (see DailyClosingService::open). Still accepted so an older
-        // client gets the service's explanation rather than a silent surprise,
-        // but it defaults to today and the service is the authority.
+        // the current BUSINESS day, which before 03:00 is still yesterday's.
+        // Still accepted so an older client gets the service's explanation
+        // rather than a silent surprise, but the service is the authority.
         $data = $request->validate([
             'location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
             'business_date' => ['sometimes', 'date'],
@@ -64,7 +64,7 @@ class DailyClosingController extends Controller
         return $this->guard(function () use ($data, $request) {
             $closing = $this->service->open(
                 $data['location_id'],
-                $data['business_date'] ?? now()->toDateString(),
+                $data['business_date'] ?? DailyClosingService::currentBusinessDate(),
                 $request->user(),
             );
 
@@ -120,7 +120,14 @@ class DailyClosingController extends Controller
 
         $days = $this->service->calendar($data['location_id'], $data['from'], $data['to']);
 
-        return response()->success($days);
+        // The screen must not work this out for itself. `new Date()` in the
+        // browser is the DEVICE's clock and timezone - a laptop left on the
+        // wrong zone, or simply used at 02:50, would disagree with the server
+        // about which day is being counted. The server owns the answer.
+        return response()->success([
+            'business_date' => DailyClosingService::currentBusinessDate(),
+            'days' => $days,
+        ]);
     }
 
     private function fresh(DailyClosing $closing): DailyClosingResource
