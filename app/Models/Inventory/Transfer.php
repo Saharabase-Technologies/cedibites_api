@@ -24,19 +24,24 @@ class Transfer extends Model
         'status',
         'parent_transfer_id',
         'requisition_id',
+        'wastage_id',
         'source_validation_overridden_by',
         'notes',
         'created_by',
         'approved_by',
         'sent_by',
         'received_by',
+        'rejected_by',
         'cancelled_by',
         'submitted_at',
         'approved_at',
         'sent_at',
         'received_at',
+        'rejected_at',
         'cancelled_at',
         'cancel_reason',
+        'reject_reason',
+        'reject_reason_code',
     ];
 
     public function lines(): HasMany
@@ -89,9 +94,20 @@ class Transfer extends Model
         return $this->belongsTo(User::class, 'received_by');
     }
 
+    public function rejectedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
+    }
+
     public function cancelledBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'cancelled_by');
+    }
+
+    /** Set when this transfer is the return leg of a wastage claim. */
+    public function wastage(): BelongsTo
+    {
+        return $this->belongsTo(Wastage::class, 'wastage_id');
     }
 
     protected function casts(): array
@@ -102,6 +118,7 @@ class Transfer extends Model
             'approved_at' => 'datetime',
             'sent_at' => 'datetime',
             'received_at' => 'datetime',
+            'rejected_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
     }

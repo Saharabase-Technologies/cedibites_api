@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Inventory\CatalogController;
 use App\Http\Controllers\Api\Inventory\DailyClosingController;
+use App\Http\Controllers\Api\Inventory\InventorySettingController;
 use App\Http\Controllers\Api\Inventory\ProductionController;
 use App\Http\Controllers\Api\Inventory\ProductionRunController;
 use App\Http\Controllers\Api\Inventory\PurchaseController;
@@ -11,6 +12,7 @@ use App\Http\Controllers\Api\Inventory\ReconciliationController;
 use App\Http\Controllers\Api\Inventory\ReportController;
 use App\Http\Controllers\Api\Inventory\RequisitionController;
 use App\Http\Controllers\Api\Inventory\TransferController;
+use App\Http\Controllers\Api\Inventory\WastageController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -223,6 +225,54 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
             // Posting writes cycle_adjustment movements — the adjust authority.
             Route::post('{reconciliation}/post', [ReconciliationController::class, 'post'])
                 ->middleware('permission:inventory.reconciliation.adjust')->name('post');
+        });
+
+        // ── Wastage (the named half of every loss) ───────────────────────────
+        Route::prefix('wastages')->name('wastages.')->group(function () {
+            Route::get('/', [WastageController::class, 'index'])
+                ->middleware('permission:view_inventory_catalog')->name('index');
+            // Reason vocabulary — must precede the {wastage} wildcard.
+            Route::get('reasons', [WastageController::class, 'reasons'])
+                ->middleware('permission:view_inventory_catalog')->name('reasons');
+            Route::get('{wastage}', [WastageController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+
+            // Branch managers and the warehouse manager both declare losses.
+            Route::post('/', [WastageController::class, 'store'])
+                ->middleware('permission:inventory.wastage.record')->name('store');
+            Route::post('{wastage}/cancel', [WastageController::class, 'cancel'])
+                ->middleware('permission:inventory.wastage.record')->name('cancel');
+
+            // Evidence. Deliberately gated on view rather than on record or
+            // approve: a disagreement about whether food went bad needs BOTH
+            // accounts on the record, and the approver inspecting returned goods
+            // does not hold `wastage.record`.
+            Route::post('{wastage}/photos', [WastageController::class, 'storePhoto'])
+                ->middleware('permission:view_inventory_catalog')->name('photos.store');
+            Route::delete('{wastage}/photos/{photo}', [WastageController::class, 'destroyPhoto'])
+                ->middleware('permission:view_inventory_catalog')->name('photos.destroy');
+
+            // Signing off somebody else's loss is the warehouse manager's.
+            Route::post('{wastage}/approve', [WastageController::class, 'approve'])
+                ->middleware('permission:inventory.wastage.approve')->name('approve');
+            Route::post('{wastage}/reject', [WastageController::class, 'reject'])
+                ->middleware('permission:inventory.wastage.approve')->name('reject');
+        });
+
+        // ── IMS settings ─────────────────────────────────────────────────────
+        // The wastage threshold. Everyone reads it — the record form has to warn
+        // before you cross it — but only `inventory.settings.manage` moves it,
+        // which is Admin-only by design.
+        //
+        // NOT `manage_settings`: branch managers hold that one, and the whole
+        // point of the threshold is that it decides when a branch manager's own
+        // losses stop being self-approvable. Letting them raise it would hand
+        // them the key to their own approval gate.
+        Route::prefix('settings')->name('settings.')->group(function () {
+            Route::get('/', [InventorySettingController::class, 'show'])
+                ->middleware('permission:view_inventory_catalog')->name('show');
+            Route::put('/', [InventorySettingController::class, 'update'])
+                ->middleware('permission:inventory.settings.manage')->name('update');
         });
 
         // ── Reports ──────────────────────────────────────────────────────────

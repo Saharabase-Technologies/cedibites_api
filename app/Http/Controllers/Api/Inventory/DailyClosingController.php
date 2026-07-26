@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Api\Inventory;
 
 use App\Domain\Inventory\Closing\DailyClosingService;
 use App\Domain\Inventory\Exceptions\InventoryException;
+use App\Enums\Inventory\WastageReason;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\DailyClosingResource;
 use App\Models\Inventory\DailyClosing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class DailyClosingController extends Controller
 {
@@ -18,6 +20,7 @@ class DailyClosingController extends Controller
         'lines.unit',
         'openedBy',
         'completedBy',
+        'wastage',
     ];
 
     public function __construct(
@@ -61,17 +64,30 @@ class DailyClosingController extends Controller
         });
     }
 
-    /** Record counted quantities and optionally complete the closing. */
+    /**
+     * Record counted quantities and optionally complete the closing.
+     *
+     * A shortfall may carry a reason, which files it in the wastage report under
+     * what actually happened. Optional on purpose: a day must always be able to
+     * close, so an unexplained shortfall stays visibly unexplained rather than
+     * blocking the count or being dressed up as something it is not.
+     */
     public function update(Request $request, DailyClosing $dailyClosing): JsonResponse
     {
         $request->validate([
             'lines' => ['required', 'array', 'min:1'],
             'lines.*.line_id' => ['required', 'integer'],
             'lines.*.counted_qty' => ['required', 'numeric', 'gte:0'],
+            'lines.*.reason' => ['sometimes', 'nullable', 'string', Rule::enum(WastageReason::class)],
+            'lines.*.reason_note' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'complete' => ['sometimes', 'boolean'],
         ]);
         $counts = collect($request->input('lines', []))
-            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['counted_qty']])->all();
+            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => [
+                'counted_qty' => (float) $l['counted_qty'],
+                'reason' => $l['reason'] ?? null,
+                'reason_note' => $l['reason_note'] ?? null,
+            ]])->all();
 
         return $this->guard(function () use ($dailyClosing, $counts, $request) {
             $closing = $this->service->saveCounts(

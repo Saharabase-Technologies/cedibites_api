@@ -41,6 +41,9 @@ class ReconciliationCycleResource extends JsonResource
                 'variance_value' => $line->variance_value !== null ? (float) $line->variance_value : null,
                 'over_threshold' => (bool) $line->over_threshold,
                 'adjusted' => $line->adjustment_movement_id !== null,
+                'reason' => $line->reason?->value,
+                'reason_label' => $line->reason?->label(),
+                'reason_note' => $line->reason_note,
             ])),
             // Summary — present whenever lines are loaded (always, from index/show).
             'line_count' => $this->when($loaded, fn () => $this->lines->count()),

@@ -39,6 +39,12 @@ class TransferResource extends JsonResource
                 'requested_qty' => (float) $line->requested_qty,
                 'sent_qty' => $line->sent_qty !== null ? (float) $line->sent_qty : null,
                 'received_qty' => $line->received_qty !== null ? (float) $line->received_qty : null,
+                // Arrived and turned away. Distinct from anything missing: these
+                // went back to the sender rather than vanishing.
+                'refused_qty' => $line->refused_qty !== null ? (float) $line->refused_qty : null,
+                'refuse_reason' => $line->refuse_reason?->value,
+                'refuse_reason_label' => $line->refuse_reason?->label(),
+                'refuse_note' => $line->refuse_note,
                 'unit_cost_at_time' => $line->unit_cost_at_time !== null ? (float) $line->unit_cost_at_time : null,
             ])),
             'dispute' => $this->whenLoaded('dispute', fn () => $this->dispute ? [
@@ -61,12 +67,23 @@ class TransferResource extends JsonResource
             // receive action.
             'sent_by_id' => $this->sent_by,
             'received_by' => $this->whenLoaded('receivedBy', fn () => $this->receivedBy?->name),
+            'rejected_by' => $this->whenLoaded('rejectedBy', fn () => $this->rejectedBy?->name),
+            'reject_reason' => $this->reject_reason,
+            'reject_reason_code' => $this->reject_reason_code,
             'cancelled_by' => $this->whenLoaded('cancelledBy', fn () => $this->cancelledBy?->name),
             'cancel_reason' => $this->cancel_reason,
+            // Set when this transfer is the return leg carrying goods declared
+            // bad back to the warehouse for inspection.
+            'wastage' => $this->whenLoaded('wastage', fn () => $this->wastage ? [
+                'id' => $this->wastage->id,
+                'reference' => $this->wastage->reference,
+                'status' => $this->wastage->status->value,
+            ] : null),
             'submitted_at' => optional($this->submitted_at)->toIso8601String(),
             'approved_at' => optional($this->approved_at)->toIso8601String(),
             'sent_at' => optional($this->sent_at)->toIso8601String(),
             'received_at' => optional($this->received_at)->toIso8601String(),
+            'rejected_at' => optional($this->rejected_at)->toIso8601String(),
             'cancelled_at' => optional($this->cancelled_at)->toIso8601String(),
             'created_at' => optional($this->created_at)->toIso8601String(),
         ];

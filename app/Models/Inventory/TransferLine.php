@@ -2,6 +2,7 @@
 
 namespace App\Models\Inventory;
 
+use App\Enums\Inventory\WastageReason;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -16,6 +17,9 @@ class TransferLine extends Model
         'requested_qty',
         'sent_qty',
         'received_qty',
+        'refused_qty',
+        'refuse_reason',
+        'refuse_note',
         'unit_cost_at_time',
         'sent_allocations',
     ];
@@ -41,6 +45,8 @@ class TransferLine extends Model
             'requested_qty' => 'decimal:4',
             'sent_qty' => 'decimal:4',
             'received_qty' => 'decimal:4',
+            'refused_qty' => 'decimal:4',
+            'refuse_reason' => WastageReason::class,
             'unit_cost_at_time' => 'decimal:4',
             'sent_allocations' => 'array',
         ];

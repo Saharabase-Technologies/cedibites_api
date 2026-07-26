@@ -19,6 +19,7 @@ class ReconciliationCycle extends Model
     protected $fillable = [
         'location_id',
         'status',
+        'wastage_id',
         'notes',
         'net_variance_value',
         'threshold_amount',
@@ -46,6 +47,15 @@ class ReconciliationCycle extends Model
     public function closedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'closed_by');
+    }
+
+    /**
+     * The classification record for this cycle's reasoned variances. It posts no
+     * stock — the cycle adjustments already brought the ledger to the count.
+     */
+    public function wastage(): BelongsTo
+    {
+        return $this->belongsTo(Wastage::class, 'wastage_id');
     }
 
     protected function casts(): array

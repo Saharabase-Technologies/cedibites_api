@@ -2,6 +2,7 @@
 
 namespace App\Models\Inventory;
 
+use App\Enums\Inventory\WastageReason;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -16,6 +17,9 @@ class DailyClosingLine extends Model
         'expected_qty',
         'counted_qty',
         'variance',
+        'reason',
+        'reason_note',
+        'adjustment_movement_id',
     ];
 
     public function dailyClosing(): BelongsTo
@@ -39,6 +43,7 @@ class DailyClosingLine extends Model
             'expected_qty' => 'decimal:4',
             'counted_qty' => 'decimal:4',
             'variance' => 'decimal:4',
+            'reason' => WastageReason::class,
         ];
     }
 }

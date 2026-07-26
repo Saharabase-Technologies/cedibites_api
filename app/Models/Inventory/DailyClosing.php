@@ -20,6 +20,7 @@ class DailyClosing extends Model
         'location_id',
         'business_date',
         'status',
+        'wastage_id',
         'notes',
         'opened_by',
         'completed_by',
@@ -29,6 +30,15 @@ class DailyClosing extends Model
     public function lines(): HasMany
     {
         return $this->hasMany(DailyClosingLine::class, 'daily_closing_id');
+    }
+
+    /**
+     * The single classification record raised for this count's reasoned
+     * variances. It posts no stock — the count adjustments already did.
+     */
+    public function wastage(): BelongsTo
+    {
+        return $this->belongsTo(Wastage::class, 'wastage_id');
     }
 
     public function location(): BelongsTo

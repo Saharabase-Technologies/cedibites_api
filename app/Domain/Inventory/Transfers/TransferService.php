@@ -6,8 +6,10 @@ use App\Domain\Inventory\Batches\BatchService;
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
 use App\Domain\Inventory\Support\ReferenceGenerator;
+use App\Domain\Inventory\Wastage\WastageService;
 use App\Enums\Inventory\RequisitionStatus;
 use App\Enums\Inventory\TransferStatus;
+use App\Enums\Inventory\WastageReason;
 use App\Models\Inventory\Batch;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Requisition;
@@ -200,8 +202,33 @@ class TransferService
      *
      * @param  array<int,float>  $receivedQty  line_id => qty (defaults to sent_qty)
      */
-    public function receive(Transfer $transfer, User $actor, array $receivedQty = [], ?string $disputeReason = null): Transfer
-    {
+    /**
+     * sent → received / rejected / disputed.
+     *
+     * Three things can happen to each line, and the system has to tell them
+     * apart because they have different owners:
+     *
+     *   accepted — added to the destination, and now the destination's to answer
+     *              for. Anything wrong with it from here is their wastage.
+     *   refused  — it turned up and it is going back on the lorry. Returned to
+     *              the source immediately and raised as a wastage claim there,
+     *              because the sender never stopped owning it.
+     *   missing  — it never turned up. Only this is a dispute; only this is
+     *              something the two ends actually disagree about.
+     *
+     * Refusing every line is the door being shut on the whole consignment, and
+     * lands the transfer in `rejected`.
+     *
+     * @param  array<int,float>  $receivedQty  line_id => accepted qty (defaults to everything sent)
+     * @param  array<int,array{qty:float, reason?:string|null, note?:string|null}>  $refusals  line_id => refusal
+     */
+    public function receive(
+        Transfer $transfer,
+        User $actor,
+        array $receivedQty = [],
+        ?string $disputeReason = null,
+        array $refusals = [],
+    ): Transfer {
         if (! $transfer->status->canReceive()) {
             throw new InventoryException("Only sent transfers can be received (current status: {$transfer->status->value}).");
         }
@@ -230,90 +257,207 @@ class TransferService
             );
         }
 
-        return DB::transaction(function () use ($transfer, $actor, $receivedQty, $disputeReason) {
-            $destId = $transfer->destination_location_id;
-            $totalDiscrepancy = 0.0;
+        return DB::transaction(function () use ($transfer, $actor, $receivedQty, $disputeReason, $refusals) {
+            $destId = (int) $transfer->destination_location_id;
+            $sourceId = (int) $transfer->source_location_id;
+            $totalMissing = 0.0;
+            $totalRefused = 0.0;
+            $refusedLines = [];
+            $refuseReason = null;
+            $refuseNote = null;
 
             foreach ($transfer->lines as $line) {
                 $sent = (float) $line->sent_qty;
                 $qty = round((float) ($receivedQty[$line->id] ?? $sent), 4);
-                if ($qty < 0) {
-                    throw new InventoryException('Received quantity cannot be negative.');
+
+                $refusal = $refusals[$line->id] ?? null;
+                $refused = round((float) ($refusal['qty'] ?? 0), 4);
+
+                if ($qty < 0 || $refused < 0) {
+                    throw new InventoryException('Quantities cannot be negative.');
                 }
-                if ($qty > $sent) {
-                    throw new InventoryException('Received quantity cannot exceed what was sent.');
+                if (round($qty + $refused, 4) > $sent) {
+                    $name = Item::whereKey($line->item_id)->value('name') ?? "item {$line->item_id}";
+                    throw new InventoryException(
+                        "More {$name} accounted for than was sent: {$sent} sent, {$qty} accepted plus {$refused} refused."
+                    );
+                }
+
+                $reason = null;
+                if ($refused > 0) {
+                    $reason = WastageReason::tryFrom((string) ($refusal['reason'] ?? ''));
+                    if ($reason === null) {
+                        $name = Item::whereKey($line->item_id)->value('name') ?? "item {$line->item_id}";
+                        throw new InventoryException("Say what is wrong with the {$name} you are sending back.");
+                    }
+                    $note = trim((string) ($refusal['note'] ?? ''));
+                    if ($reason->requiresNote() && $note === '') {
+                        throw new InventoryException('Choosing “Other” means saying what happened — add a note.');
+                    }
+                    $refuseReason ??= $reason;
+                    $refuseNote ??= ($note !== '' ? $note : null);
                 }
 
                 $tracked = (bool) Item::whereKey($line->item_id)->value('expiry_tracked');
-                $outstanding = $qty;
+
+                // Walk the send allocation once, filling the accepted quantity
+                // first and the refused quantity from what is left. Each parcel
+                // keeps the cost and expiry it was sent with, whichever way it
+                // ends up going.
+                $toAccept = $qty;
+                $toRefuse = $refused;
                 $i = 0;
                 foreach (($line->sent_allocations ?? []) as $alloc) {
-                    if ($outstanding <= 0) {
-                        break;
-                    }
-                    $take = round(min((float) $alloc['qty'], $outstanding), 4);
-                    if ($take <= 0) {
-                        continue;
-                    }
+                    $available = (float) $alloc['qty'];
                     $cost = (float) ($alloc['unit_cost'] ?? $line->unit_cost_at_time);
 
-                    $destBatchId = null;
-                    if ($tracked) {
-                        $destBatchId = Batch::create([
-                            'item_id' => $line->item_id,
-                            'location_id' => $destId,
-                            'purchase_item_id' => null,
-                            'received_qty' => $take,
-                            'remaining_qty' => $take,
-                            'unit_cost' => $cost,
-                            'expiry_date' => $alloc['expiry_date'] ?? null,
-                            'received_at' => now(),
-                        ])->id;
+                    if ($toAccept > 0 && $available > 0) {
+                        $take = round(min($available, $toAccept), 4);
+                        $this->landStock($transfer, $line, $destId, $take, $cost, $alloc['expiry_date'] ?? null, $tracked, $actor, "transfer_in:{$transfer->id}:line:{$line->id}:i:{$i}");
+                        $toAccept = round($toAccept - $take, 4);
+                        $available = round($available - $take, 4);
+                        $i++;
                     }
 
-                    $this->posting->post([
-                        'item_id' => $line->item_id,
-                        'location_id' => $destId,
-                        'quantity' => $take,
-                        'movement_type' => 'transfer_in',
-                        'reference_type' => 'inventory_transfer',
-                        'reference_id' => $transfer->id,
-                        'batch_id' => $destBatchId,
-                        'unit_cost_at_time' => $cost,
-                        'user_id' => $actor->id,
-                        'idempotency_key' => "transfer_in:{$transfer->id}:line:{$line->id}:i:{$i}",
-                        'occurred_at' => now(),
-                    ]);
+                    if ($toRefuse > 0 && $available > 0) {
+                        $give = round(min($available, $toRefuse), 4);
+                        // Straight back to where it came from. The source's
+                        // ledger is made whole; whether the goods are then
+                        // binned is the source's own wastage decision.
+                        $this->landStock($transfer, $line, $sourceId, $give, $cost, $alloc['expiry_date'] ?? null, $tracked, $actor, "transfer_return:{$transfer->id}:line:{$line->id}:i:{$i}");
+                        $toRefuse = round($toRefuse - $give, 4);
+                        $i++;
+                    }
 
-                    $outstanding = round($outstanding - $take, 4);
-                    $i++;
+                    if ($toAccept <= 0 && $toRefuse <= 0) {
+                        break;
+                    }
                 }
 
                 $line->received_qty = $qty;
+                $line->refused_qty = $refused > 0 ? $refused : null;
+                $line->refuse_reason = $reason?->value;
+                $line->refuse_note = $refused > 0 ? ($refusal['note'] ?? null) : null;
                 $line->save();
-                $totalDiscrepancy += round($sent - $qty, 4);
+
+                if ($refused > 0) {
+                    $refusedLines[] = [
+                        'item_id' => (int) $line->item_id,
+                        'unit_id' => (int) $line->unit_id,
+                        'quantity' => $refused,
+                    ];
+                }
+
+                $totalRefused += $refused;
+                $totalMissing += round($sent - $qty - $refused, 4);
             }
 
             $transfer->received_by = $actor->id;
             $transfer->received_at = now();
 
-            if ($totalDiscrepancy > 0) {
+            // Refused goods go back to the sender's shelf and land in the
+            // sender's queue: they decide whether to write them off. Raised
+            // before the status is settled so the claim exists even when the
+            // same delivery also has something missing.
+            if ($refusedLines !== []) {
+                app(WastageService::class)->raiseFromDeliveryRejection(
+                    $transfer,
+                    $refusedLines,
+                    $refuseReason ?? WastageReason::DamagedInTransit,
+                    $refuseNote,
+                    $actor,
+                );
+            }
+
+            $everythingRefused = $totalRefused > 0 && $totalMissing <= 0
+                && $transfer->lines->every(fn ($l) => (float) $l->received_qty === 0.0);
+
+            if ($totalMissing > 0) {
+                // Only a genuine disagreement — stock that neither end can
+                // account for — is a dispute.
                 $transfer->status = TransferStatus::Disputed;
                 $transfer->save();
                 $transfer->dispute()->create([
                     'status' => 'open',
                     'raised_by' => $actor->id,
-                    'reason' => $disputeReason ?: 'Short receipt — received less than was sent.',
-                    'discrepancy_qty' => round($totalDiscrepancy, 4),
+                    'reason' => $disputeReason ?: 'Short receipt — less arrived than was sent.',
+                    'discrepancy_qty' => round($totalMissing, 4),
                 ]);
+            } elseif ($everythingRefused) {
+                $transfer->status = TransferStatus::Rejected;
+                $transfer->rejected_by = $actor->id;
+                $transfer->rejected_at = now();
+                $transfer->reject_reason = $disputeReason ?: $refuseNote;
+                $transfer->reject_reason_code = $refuseReason?->value;
+                $transfer->save();
             } else {
                 $transfer->status = TransferStatus::Received;
                 $transfer->save();
-                $this->fulfilRequisition($transfer);
+                // A part-refused delivery has not met the request, so the
+                // requisition behind it stays open for a corrective run.
+                if ($totalRefused <= 0) {
+                    $this->fulfilRequisition($transfer);
+                }
+            }
+
+            // The return leg of a wastage claim arriving back at the warehouse
+            // puts the goods in front of the manager who has to sign for them.
+            if ($transfer->wastage_id !== null && $transfer->status === TransferStatus::Received) {
+                app(WastageService::class)->onReturnReceived($transfer);
             }
 
             return $transfer;
         });
+    }
+
+    /**
+     * Put stock on a shelf: rebuild the batch from the send snapshot so cost and
+     * expiry survive the journey, then post the movement. Used for both legs —
+     * goods accepted at the destination and goods refused straight back to the
+     * source — because physically they are the same act.
+     */
+    private function landStock(
+        Transfer $transfer,
+        $line,
+        int $locationId,
+        float $qty,
+        float $cost,
+        ?string $expiryDate,
+        bool $tracked,
+        User $actor,
+        string $idempotencyKey,
+    ): void {
+        if ($qty <= 0) {
+            return;
+        }
+
+        $batchId = null;
+        if ($tracked) {
+            $batchId = Batch::create([
+                'item_id' => $line->item_id,
+                'location_id' => $locationId,
+                'purchase_item_id' => null,
+                'received_qty' => $qty,
+                'remaining_qty' => $qty,
+                'unit_cost' => $cost,
+                'expiry_date' => $expiryDate,
+                'received_at' => now(),
+            ])->id;
+        }
+
+        $this->posting->post([
+            'item_id' => $line->item_id,
+            'location_id' => $locationId,
+            'quantity' => $qty,
+            'movement_type' => 'transfer_in',
+            'reference_type' => 'inventory_transfer',
+            'reference_id' => $transfer->id,
+            'batch_id' => $batchId,
+            'unit_cost_at_time' => $cost,
+            'user_id' => $actor->id,
+            'idempotency_key' => $idempotencyKey,
+            'occurred_at' => now(),
+        ]);
     }
 
     /**
@@ -360,11 +504,23 @@ class TransferService
 
         return DB::transaction(function () use ($transfer, $actor, $notes, $sendCorrective) {
             $shortfallLines = [];
+            $writeOffLines = [];
             $shortfallQty = 0.0;
             foreach ($transfer->lines as $line) {
-                $short = round((float) $line->sent_qty - (float) $line->received_qty, 4);
+                // Refused goods are not missing — they went back to the source
+                // and were accounted for there. Only what nobody can find is a
+                // shortfall.
+                $short = round(
+                    (float) $line->sent_qty - (float) $line->received_qty - (float) ($line->refused_qty ?? 0),
+                    4,
+                );
                 if ($short > 0) {
                     $shortfallLines[] = ['item_id' => (int) $line->item_id, 'requested_qty' => $short];
+                    $writeOffLines[] = [
+                        'item_id' => (int) $line->item_id,
+                        'unit_id' => (int) $line->unit_id,
+                        'quantity' => $short,
+                    ];
                     $shortfallQty += $short;
                 }
             }
@@ -384,6 +540,21 @@ class TransferService
                     'created_by' => $actor->id,
                 ]);
                 $corrective->lines()->createMany($this->buildLines($shortfallLines));
+            }
+
+            // Deciding to stop chasing the shortfall is a decision to absorb it.
+            // The ledger already recorded the loss at the short receipt — the
+            // stock left the source and never arrived — so this classifies it
+            // into the wastage report without moving anything. Attributed to the
+            // source, which is the leg it went missing on.
+            $writeOff = null;
+            if ($writeOffLines !== [] && ! $sendCorrective) {
+                $writeOff = app(WastageService::class)->classifyTransferShortfall(
+                    $transfer,
+                    $writeOffLines,
+                    $actor,
+                    $notes,
+                );
             }
 
             $dispute = $transfer->dispute()->where('status', 'open')->first();

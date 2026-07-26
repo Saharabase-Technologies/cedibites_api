@@ -2,6 +2,7 @@
 
 namespace App\Models\Inventory;
 
+use App\Enums\Inventory\WastageReason;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -20,6 +21,8 @@ class ReconciliationLine extends Model
         'variance_value',
         'over_threshold',
         'adjustment_movement_id',
+        'reason',
+        'reason_note',
     ];
 
     public function cycle(): BelongsTo
@@ -46,6 +49,7 @@ class ReconciliationLine extends Model
             'unit_cost' => 'decimal:4',
             'variance_value' => 'decimal:4',
             'over_threshold' => 'boolean',
+            'reason' => WastageReason::class,
         ];
     }
 }

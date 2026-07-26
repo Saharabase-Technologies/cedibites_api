@@ -35,6 +35,13 @@ Broadcast::channel('inventory.reconciliations', function ($user) {
     return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
 });
 
+// IMS wastage live updates — same visibility rule as transfers. The listener
+// refetches through the API, which re-applies the caller's location scope, so a
+// branch never learns about another branch's losses from the signal alone.
+Broadcast::channel('inventory.wastages', function ($user) {
+    return $user->can(\App\Enums\Permission::ViewInventoryCatalog->value);
+});
+
 // IMS stock-balance changes. Screens that read balances rather than documents
 // (items, dashboard, reports, daily closing) have no document event to follow;
 // this is theirs. The signal is scalars only and listeners refetch through the

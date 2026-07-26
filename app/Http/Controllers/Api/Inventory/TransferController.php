@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Inventory;
 
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Transfers\TransferService;
+use App\Enums\Inventory\WastageReason;
 use App\Enums\Permission;
 use App\Events\Inventory\RequisitionBroadcastEvent;
 use App\Events\Inventory\TransferBroadcastEvent;
@@ -13,6 +14,7 @@ use App\Http\Resources\Inventory\TransferResource;
 use App\Models\Inventory\Transfer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class TransferController extends Controller
 {
@@ -28,7 +30,9 @@ class TransferController extends Controller
         'approvedBy',
         'sentBy',
         'receivedBy',
+        'rejectedBy',
         'cancelledBy',
+        'wastage',
     ];
 
     public function __construct(
@@ -167,23 +171,53 @@ class TransferController extends Controller
         ]);
     }
 
-    /** sent → received | disputed (adds to destination, FEFO batches rebuilt). */
+    /**
+     * sent → received | rejected | disputed.
+     *
+     * Three outcomes per line, because they are three different facts:
+     * `received_qty` is accepted onto the destination's shelf, `refused_qty`
+     * arrived and is going straight back to the sender, and whatever is left
+     * over never turned up — which is the only one anybody disagrees about.
+     */
     public function receive(Request $request, Transfer $transfer): JsonResponse
     {
         $request->validate([
             'lines' => ['sometimes', 'array'],
             'lines.*.line_id' => ['required_with:lines', 'integer'],
             'lines.*.received_qty' => ['required_with:lines', 'numeric', 'gte:0'],
+            'lines.*.refused_qty' => ['sometimes', 'nullable', 'numeric', 'gte:0'],
+            'lines.*.refuse_reason' => ['required_with:lines.*.refused_qty', 'nullable', 'string', Rule::enum(WastageReason::class)],
+            'lines.*.refuse_note' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'dispute_reason' => ['nullable', 'string', 'max:1000'],
         ]);
-        $receivedQty = collect($request->input('lines', []))
-            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['received_qty']])->all();
 
-        return $this->guard(function () use ($transfer, $request, $receivedQty) {
-            $updated = $this->service->receive($transfer, $request->user(), $receivedQty, $request->input('dispute_reason'));
+        $rows = collect($request->input('lines', []));
+        $receivedQty = $rows->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['received_qty']])->all();
+        $refusals = $rows
+            ->filter(fn ($l) => (float) ($l['refused_qty'] ?? 0) > 0)
+            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => [
+                'qty' => (float) $l['refused_qty'],
+                'reason' => $l['refuse_reason'] ?? null,
+                'note' => $l['refuse_note'] ?? null,
+            ]])->all();
+
+        return $this->guard(function () use ($transfer, $request, $receivedQty, $refusals) {
+            $updated = $this->service->receive(
+                $transfer,
+                $request->user(),
+                $receivedQty,
+                $request->input('dispute_reason'),
+                $refusals,
+            );
             $this->broadcast($updated, $updated->status->value);
 
-            return response()->success($this->fresh($updated), 'Transfer received.');
+            return response()->success($this->fresh($updated), match ($updated->status->value) {
+                'rejected' => 'Delivery refused — the goods go back to the sender.',
+                'disputed' => 'Received short — a dispute has been opened.',
+                default => $refusals === []
+                    ? 'Transfer received.'
+                    : 'Received, with some goods refused and returned to the sender.',
+            });
         });
     }
 

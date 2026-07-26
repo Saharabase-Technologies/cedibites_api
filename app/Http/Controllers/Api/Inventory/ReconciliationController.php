@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api\Inventory;
 
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Reconciliation\ReconciliationService;
+use App\Enums\Inventory\WastageReason;
 use App\Events\Inventory\ReconciliationBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\ReconciliationCycleResource;
 use App\Models\Inventory\ReconciliationCycle;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ReconciliationController extends Controller
 {
@@ -67,9 +69,15 @@ class ReconciliationController extends Controller
             'lines' => ['required', 'array', 'min:1'],
             'lines.*.line_id' => ['required', 'integer'],
             'lines.*.counted_qty' => ['required', 'numeric', 'gte:0'],
+            'lines.*.reason' => ['sometimes', 'nullable', 'string', Rule::enum(WastageReason::class)],
+            'lines.*.reason_note' => ['sometimes', 'nullable', 'string', 'max:1000'],
         ]);
         $counts = collect($request->input('lines', []))
-            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => (float) $l['counted_qty']])->all();
+            ->mapWithKeys(fn ($l) => [(int) $l['line_id'] => [
+                'counted_qty' => (float) $l['counted_qty'],
+                'reason' => $l['reason'] ?? null,
+                'reason_note' => $l['reason_note'] ?? null,
+            ]])->all();
 
         return $this->guard(function () use ($reconciliation, $counts) {
             $cycle = $this->service->saveCounts($reconciliation, $counts);

@@ -4,7 +4,10 @@ namespace App\Domain\Inventory\Reconciliation;
 
 use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
+use App\Domain\Inventory\Wastage\WastageService;
 use App\Enums\Inventory\ReconciliationStatus;
+use App\Enums\Inventory\WastageOrigin;
+use App\Enums\Inventory\WastageReason;
 use App\Models\Inventory\ReconciliationCycle;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -23,15 +26,16 @@ use Illuminate\Support\Facades\DB;
 class ReconciliationService
 {
     /**
-     * Variance-value threshold (GHS): a counted discrepancy worth more than this
-     * is flagged as a red flag for the warehouse manager (the founder's ₵500
-     * rule). Still reconciled — the flag drives attention, not a block. A future
-     * per-location IMS settings table can override this.
+     * The variance-value threshold (GHS, the founder's ₵500 rule) is shared with
+     * wastage and read live from `WastageService::threshold()` at posting time —
+     * never captured as a constant. The admin can change it, and a stock-take
+     * flagging against last month's figure is worse than not flagging at all.
+     * Over-threshold lines are still reconciled; the flag drives attention, not
+     * a block.
      */
-    private const VARIANCE_THRESHOLD = 500.0;
-
     public function __construct(
         private readonly MovementPostingEngine $posting,
+        private readonly WastageService $wastage,
     ) {}
 
     /**
@@ -76,10 +80,15 @@ class ReconciliationService
     }
 
     /**
-     * Record physical counts. `$counts` is line_id => counted qty; only supplied
-     * lines are touched. Variance + variance value are recomputed per line.
+     * Record physical counts. `$counts` is line_id => counted qty, or a shape
+     * carrying the reason alongside it; only supplied lines are touched.
+     * Variance + variance value are recomputed per line.
      *
-     * @param  array<int,float>  $counts
+     * A reason belongs here for the same reason it belongs on a daily count: a
+     * stock-take that produces "200 expected, 190 counted" and stops has told
+     * nobody anything they can act on.
+     *
+     * @param  array<int,array{counted_qty?:float, reason?:string|null, reason_note?:string|null}|float>  $counts
      */
     public function saveCounts(ReconciliationCycle $cycle, array $counts): ReconciliationCycle
     {
@@ -92,11 +101,25 @@ class ReconciliationService
                 if (! array_key_exists($line->id, $counts)) {
                     continue;
                 }
-                $counted = round((float) $counts[$line->id], 4);
-                if ($counted < 0) {
-                    throw new InventoryException('Counted quantities cannot be negative.');
+
+                $entry = $counts[$line->id];
+                $entry = is_array($entry) ? $entry : ['counted_qty' => $entry];
+
+                if (array_key_exists('counted_qty', $entry) && $entry['counted_qty'] !== null) {
+                    $counted = round((float) $entry['counted_qty'], 4);
+                    if ($counted < 0) {
+                        throw new InventoryException('Counted quantities cannot be negative.');
+                    }
+                    $this->applyCount($line, $counted);
                 }
-                $this->applyCount($line, $counted);
+
+                if (array_key_exists('reason', $entry)) {
+                    $line->reason = $this->validateReason($entry['reason'], $entry['reason_note'] ?? null);
+                    $line->reason_note = $line->reason !== null
+                        ? (trim((string) ($entry['reason_note'] ?? '')) ?: null)
+                        : null;
+                }
+
                 $line->save();
             }
 
@@ -121,8 +144,9 @@ class ReconciliationService
                 throw new InventoryException("Count every item before posting ({$uncounted} still uncounted).");
             }
 
-            $threshold = self::VARIANCE_THRESHOLD;
+            $threshold = WastageService::threshold();
             $netVarianceValue = 0.0;
+            $reasoned = [];
 
             foreach ($cycle->lines as $line) {
                 // Recompute defensively from the persisted count.
@@ -149,7 +173,33 @@ class ReconciliationService
                 $line->over_threshold = abs($varianceValue) > $threshold;
                 $line->save();
                 $netVarianceValue += $varianceValue;
+
+                // Only shortfalls are losses; stock found is a different
+                // conversation. Explained ones go into the wastage report.
+                if ($variance < 0 && $line->reason !== null) {
+                    $reasoned[] = [
+                        'item_id' => (int) $line->item_id,
+                        'unit_id' => (int) $line->unit_id,
+                        'quantity' => abs($variance),
+                        'unit_cost' => $line->unit_cost !== null ? (float) $line->unit_cost : null,
+                        'reason' => $line->reason->value,
+                        'reason_note' => $line->reason_note,
+                    ];
+                }
             }
+
+            // Classification only — the cycle adjustments above already brought
+            // the ledger to the counted actual.
+            $wastage = $this->wastage->classifyCountVariance(
+                locationId: (int) $cycle->location_id,
+                lines: $reasoned,
+                origin: WastageOrigin::Reconciliation,
+                sourceType: 'inventory_reconciliation',
+                sourceId: (int) $cycle->id,
+                actor: $actor,
+                notes: 'Explained shortfalls from stock-take.',
+            );
+            $cycle->wastage_id = $wastage?->id;
 
             $cycle->status = ReconciliationStatus::Closed;
             $cycle->closed_by = $actor->id;
@@ -173,6 +223,23 @@ class ReconciliationService
         $variance = round($counted - (float) $line->system_qty, 4);
         $line->variance = $variance;
         $line->variance_value = round($variance * (float) ($line->unit_cost ?? 0), 4);
+    }
+
+    private function validateReason(?string $reason, ?string $note): ?WastageReason
+    {
+        if ($reason === null || trim($reason) === '') {
+            return null;
+        }
+
+        $parsed = WastageReason::tryFrom($reason);
+        if ($parsed === null) {
+            throw new InventoryException("'{$reason}' is not a wastage reason.");
+        }
+        if ($parsed->requiresNote() && trim((string) $note) === '') {
+            throw new InventoryException('Choosing “Other” means saying what happened — add a note.');
+        }
+
+        return $parsed;
     }
 
     private function assertOpen(ReconciliationCycle $cycle): void

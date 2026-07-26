@@ -39,6 +39,11 @@ class ReferenceGenerator
         return $this->next('inventory_requisitions', 'REQ');
     }
 
+    public function wastage(): string
+    {
+        return $this->next('inventory_wastages', 'WST');
+    }
+
     private function next(string $table, string $prefix): string
     {
         $date = now()->format('ymd');
