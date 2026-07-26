@@ -53,7 +53,12 @@ class TransferController extends Controller
         // confirmed to exist.
         abort_unless($transfer->isVisibleTo($request->user()), 404);
 
-        return response()->success(new TransferResource($transfer->load(self::RELATIONS)));
+        $transfer->load(self::RELATIONS);
+        // Only on the detail view — the list has no use for it and it costs a
+        // walk of the chain per row.
+        $transfer->lineage = $this->service->lineage($transfer);
+
+        return response()->success(new TransferResource($transfer));
     }
 
     public function store(Request $request): JsonResponse
@@ -138,6 +143,27 @@ class TransferController extends Controller
         });
     }
 
+    /**
+     * Can a location cover this demand? Answers the question while a
+     * requisition or transfer is still being written, rather than at submit.
+     */
+    public function availability(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.item_id' => ['required', 'integer'],
+            'items.*.qty' => ['required', 'numeric', 'gte:0'],
+        ]);
+
+        $rows = $this->service->checkAvailability((int) $data['location_id'], $data['items']);
+
+        return response()->success([
+            'sufficient' => collect($rows)->every(fn (array $r) => $r['sufficient']),
+            'lines' => $rows,
+        ]);
+    }
+
     /** sent → received | disputed (adds to destination, FEFO batches rebuilt). */
     public function receive(Request $request, Transfer $transfer): JsonResponse
     {
@@ -161,13 +187,28 @@ class TransferController extends Controller
     /** disputed → closed_disputed (spawns a corrective transfer for the shortfall). */
     public function resolveDispute(Request $request, Transfer $transfer): JsonResponse
     {
-        $request->validate(['notes' => ['nullable', 'string', 'max:1000']]);
+        $request->validate([
+            'notes' => ['nullable', 'string', 'max:1000'],
+            // Default true keeps the historical behaviour for existing callers.
+            'send_corrective' => ['sometimes', 'boolean'],
+        ]);
+        $sendCorrective = $request->boolean('send_corrective', true);
 
-        return $this->guard(function () use ($transfer, $request) {
-            $updated = $this->service->resolveDispute($transfer, $request->user(), $request->input('notes'));
+        return $this->guard(function () use ($transfer, $request, $sendCorrective) {
+            $updated = $this->service->resolveDispute(
+                $transfer,
+                $request->user(),
+                $request->input('notes'),
+                $sendCorrective,
+            );
             $this->broadcast($updated, 'resolved');
 
-            return response()->success($this->fresh($updated), 'Dispute resolved — corrective transfer created.');
+            return response()->success(
+                $this->fresh($updated),
+                $sendCorrective
+                    ? 'Dispute resolved — corrective transfer created.'
+                    : 'Dispute resolved — shortfall written off as a loss.',
+            );
         });
     }
 

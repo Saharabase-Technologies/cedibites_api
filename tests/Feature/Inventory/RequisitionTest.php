@@ -16,6 +16,9 @@ beforeEach(function () {
     $this->requisitions = app(RequisitionService::class);
     $this->transfers = app(TransferService::class);
     $this->actor = User::factory()->create();
+    // Separation of duties: the sender may not sign for arrival, so the
+    // destination needs its own person.
+    $this->receiver = User::factory()->create();
     $this->warehouse = Location::factory()->warehouse()->create();
     $this->branch = Location::factory()->satellite()->create();
     $this->item = Item::factory()->create();
@@ -41,14 +44,23 @@ function draftRequisition($test, float $qty): Requisition
     ], $test->actor);
 }
 
-/** Drive a spawned transfer all the way to received. */
+/**
+ * Drive a spawned transfer all the way to received. It arrives already
+ * approved — approving the requisition is the approval — so it goes straight
+ * to send.
+ */
 function fulfilTransfer($test, Transfer $transfer): Transfer
 {
-    $transfer = $test->transfers->submit($transfer, $test->actor);
-    $transfer = $test->transfers->approve($transfer, $test->actor);
+    // A requisition-spawned transfer arrives approved; a corrective one spawned
+    // by a dispute still starts as a draft.
+    if ($transfer->status === TransferStatus::Draft) {
+        $transfer = $test->transfers->submit($transfer, $test->actor);
+        $transfer = $test->transfers->approve($transfer, $test->actor);
+    }
+
     $transfer = $test->transfers->send($transfer, $test->actor);
 
-    return $test->transfers->receive($transfer, $test->actor);
+    return $test->transfers->receive($transfer, $test->receiver);
 }
 
 it('approves a requisition, spawns a fulfilling transfer, and auto-fulfils on receipt', function () {
@@ -64,7 +76,8 @@ it('approves a requisition, spawns a fulfilling transfer, and auto-fulfils on re
 
     $transfer = Transfer::find($r->fulfilling_transfer_id);
     expect($transfer->requisition_id)->toBe($r->id)
-        ->and($transfer->status)->toBe(TransferStatus::Draft)
+        // Ready to send — approving the requisition already approved it.
+        ->and($transfer->status)->toBe(TransferStatus::Approved)
         ->and($transfer->source_location_id)->toBe($this->warehouse->id)
         ->and($transfer->destination_location_id)->toBe($this->branch->id)
         ->and((float) $transfer->lines()->first()->requested_qty)->toBe(20.0);
@@ -103,11 +116,9 @@ it('keeps the requisition unfulfilled after a disputed receipt until the correct
     $r = $this->requisitions->approve($r, $this->actor);
     $transfer = Transfer::find($r->fulfilling_transfer_id);
 
-    $transfer = $this->transfers->submit($transfer, $this->actor);
-    $transfer = $this->transfers->approve($transfer, $this->actor);
     $transfer = $this->transfers->send($transfer, $this->actor);
     $lineId = $transfer->lines()->first()->id;
-    $transfer = $this->transfers->receive($transfer, $this->actor, [$lineId => 20]); // 10 short
+    $transfer = $this->transfers->receive($transfer, $this->receiver, [$lineId => 20]); // 10 short
 
     expect($transfer->fresh()->status)->toBe(TransferStatus::Disputed)
         ->and($r->fresh()->status)->toBe(RequisitionStatus::Approved); // not yet fulfilled
