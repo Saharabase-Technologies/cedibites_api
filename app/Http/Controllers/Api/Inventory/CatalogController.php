@@ -16,8 +16,10 @@ use App\Models\Inventory\PurchaseItem;
 use App\Models\Inventory\StockMovement;
 use App\Models\Inventory\Supplier;
 use App\Models\Inventory\Unit;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -55,6 +57,54 @@ class CatalogController extends Controller
         return $accessible;
     }
 
+    /**
+     * The cost per unit an item would actually be valued at, for the locations
+     * in scope.
+     *
+     * There are TWO `weighted_avg_cost` columns and only one of them is true.
+     * `inventory_stock_balances.weighted_avg_cost` is maintained by
+     * MovementPostingEngine on every movement and is what the domain values
+     * against - WastageService, TransferService, ReconciliationService and
+     * DailyClosingService all read the BALANCE. `inventory_items.weighted_avg_cost`
+     * is only ever written by PurchaseService, so any item whose stock arrived by
+     * transfer, production or adjustment still sits at its default of 0.
+     *
+     * The resource was serving the item column, so the wastage form valued
+     * transferred goods at GHS 0.00 - and, worse, decided from that figure that
+     * the loss was under the threshold and would "be written off immediately",
+     * when the server was about to price it properly and demand a return.
+     *
+     * A value-weighted mean rather than a plain average: two locations holding
+     * 1 kg at 10 and 99 kg at 20 average to 19.90, not 15.
+     */
+    private function scopedUnitCost(?array $scopeLocations): Builder
+    {
+        return DB::table('inventory_stock_balances')
+            // NULLIF guards the zero-stock case: no quantity means no divisor,
+            // and the resource falls back to the item's last known cost.
+            ->selectRaw('SUM(quantity * weighted_avg_cost) * 1.0 / NULLIF(SUM(quantity), 0)')
+            ->whereColumn('item_id', 'inventory_items.id')
+            ->when($scopeLocations !== null, fn ($q) => $q->whereIn('location_id', $scopeLocations));
+    }
+
+    /**
+     * The same figure as `scopedUnitCost()`, for one already-loaded item. The
+     * correlated subquery cannot be used here because there is no outer query
+     * to correlate against.
+     *
+     * @param  array<int,int>|null  $scopeLocations
+     */
+    private function unitCostForItem(Item $item, ?array $scopeLocations): ?float
+    {
+        $cost = DB::table('inventory_stock_balances')
+            ->where('item_id', $item->id)
+            ->when($scopeLocations !== null, fn ($q) => $q->whereIn('location_id', $scopeLocations))
+            ->selectRaw('SUM(quantity * weighted_avg_cost) * 1.0 / NULLIF(SUM(quantity), 0) as c')
+            ->value('c');
+
+        return $cost !== null ? (float) $cost : null;
+    }
+
     public function items(Request $request): JsonResponse
     {
         // Whose stock is this figure? `stock_on_hand` summed every location, so a
@@ -66,6 +116,7 @@ class CatalogController extends Controller
 
         $items = Item::query()
             ->with(['category', 'baseUnit', 'defaultSupplier'])
+            ->addSelect(['scoped_unit_cost' => $this->scopedUnitCost($scopeLocations)])
             ->withSum(
                 ['stockBalances as stock_on_hand' => fn ($q) => $scopeLocations === null
                     ? $q
@@ -107,6 +158,10 @@ class CatalogController extends Controller
                 'quantity',
             );
 
+        // Same true cost as the list, or the detail contradicts the row that
+        // opened it.
+        $item->scoped_unit_cost = $this->unitCostForItem($item, $scope);
+
         return response()->success(new ItemResource($item));
     }
 
@@ -128,6 +183,10 @@ class CatalogController extends Controller
                 ['stockBalances as stock_on_hand' => fn ($q) => $scope === null ? $q : $q->whereIn('location_id', $scope)],
                 'quantity',
             );
+
+        // Same true cost as the list, or the detail contradicts the row that
+        // opened it.
+        $item->scoped_unit_cost = $this->unitCostForItem($item, $scope);
 
         $movements = StockMovement::query()
             ->where('item_id', $item->id)

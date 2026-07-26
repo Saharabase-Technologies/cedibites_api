@@ -100,3 +100,40 @@ it('rejects opening a closing for a future date', function () {
     expect(fn () => $this->service->open($this->location->id, now()->addDay()->toDateString(), $this->actor))
         ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class);
 });
+
+/*
+ * The past is the half that actually bites.
+ *
+ * A closing snapshots `expected_qty` from the ledger AS IT STANDS NOW, not as it
+ * stood on the date at the top of the sheet. So opening a count for last Tuesday
+ * compares Tuesday's physical shelf against today's expected figures and reads
+ * the whole week's legitimate movements as variance - and then `count_adjustment`
+ * posts that difference to make the books agree with it, corrupting the chain
+ * that lets each morning open where the night before closed.
+ *
+ * Two open counts for past dates were sitting on production when this was found.
+ */
+it('rejects opening a closing for a past date, not just a future one', function () {
+    expect(fn () => $this->service->open($this->location->id, now()->subDay()->toDateString(), $this->actor))
+        ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'only be opened for today');
+});
+
+it('still opens todays count, and re-opening it returns the same one', function () {
+    $first = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $again = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+
+    expect($again->id)->toBe($first->id);
+});
+
+it('defaults the business date to today when the client sends none', function () {
+    // The rest of this file drives the service directly; this one has to go over
+    // HTTP, because the point is that `business_date` is no longer required in
+    // the request now that the screen has stopped asking for it.
+    $this->seed(Database\Seeders\PermissionSeeder::class);
+    $this->actor->givePermissionTo(App\Enums\Permission::InventoryDailyClosingEnter->value);
+
+    $this->actingAs($this->actor, 'sanctum')
+        ->postJson('/v1/inventory/daily-closings', ['location_id' => $this->location->id])
+        ->assertSuccessful()
+        ->assertJsonPath('data.business_date', now()->toDateString());
+});

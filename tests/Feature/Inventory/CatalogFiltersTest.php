@@ -105,3 +105,90 @@ it('combines filters rather than letting the last one win', function () {
         // Same search, wrong category → nothing.
         ->and(itemNames($this, '?search=rice&storage_type=frozen'))->toBe([]);
 });
+
+/*
+ * What an item is actually worth.
+ *
+ * There are two `weighted_avg_cost` columns. The BALANCE one is maintained by
+ * MovementPostingEngine on every movement and is what WastageService,
+ * TransferService and the closing all value against. The ITEM one is only ever
+ * written by PurchaseService, so anything that arrived by transfer, production
+ * or adjustment sits at its default of 0.
+ *
+ * The resource served the item column, so the wastage form priced transferred
+ * goods at GHS 0.00 - and then told the user the loss was under the threshold
+ * and would be written off on the spot, while the server was about to value it
+ * properly and demand a return to the warehouse.
+ */
+it('values an item from the stock it actually holds, not the stale item column', function () {
+    $branch = Location::factory()->satellite()->create();
+
+    // Goods arriving by transfer: the balance learns the cost, the item row
+    // never does. This is the exact shape of the production bug - Parboiled Rice
+    // and Chicken Drumsticks both sat at item cost 0 with real balances.
+    app(MovementPostingEngine::class)->post([
+        'item_id' => $this->chicken->id, 'location_id' => $branch->id, 'quantity' => 10,
+        'movement_type' => 'transfer_in', 'unit_cost_at_time' => 42.0,
+        'idempotency_key' => 'cost-transfer-in',
+    ]);
+
+    // Poison the stale column with a figure that is not merely absent but
+    // WRONG, so passing this cannot be an accident of both happening to be 0.
+    $this->chicken->update(['weighted_avg_cost' => 999.0]);
+
+    $body = $this->actingAs($this->user)
+        ->getJson("/v1/inventory/items?location_id={$branch->id}")
+        ->assertSuccessful()->json('data');
+
+    $chicken = collect($body)->firstWhere('name', 'Chicken Drumsticks');
+    // Cast: a whole number serialises to JSON as `42`, not `42.0`.
+    expect((float) $chicken['weighted_avg_cost'])->toBe(42.0);
+});
+
+it('weights the average by quantity when several locations are in scope', function () {
+    $branch = Location::factory()->satellite()->create();
+
+    // 25 kg at 10 in the warehouse (seeded), 75 kg at 20 at the branch.
+    app(MovementPostingEngine::class)->post([
+        'item_id' => $this->rice->id, 'location_id' => $branch->id, 'quantity' => 75,
+        'movement_type' => 'transfer_in', 'unit_cost_at_time' => 20.0,
+        'idempotency_key' => 'cost-weighting',
+    ]);
+
+    $body = $this->actingAs($this->user)->getJson('/v1/inventory/items')
+        ->assertSuccessful()->json('data');
+
+    // (25x10 + 75x20) / 100 = 17.50. A plain mean would say 15.
+    expect(collect($body)->firstWhere('name', 'Basmati Rice')['weighted_avg_cost'])->toBe(17.5);
+});
+
+it('falls back to the last known item cost when nothing is held anywhere', function () {
+    $this->retired->update(['weighted_avg_cost' => 8.25]);
+
+    $body = $this->actingAs($this->user)->getJson('/v1/inventory/items?is_active=0')
+        ->assertSuccessful()->json('data');
+
+    // No balances at all - a last known price beats reporting nothing.
+    expect(collect($body)->firstWhere('name', 'Discontinued Sauce')['weighted_avg_cost'])->toBe(8.25);
+});
+
+it('agrees with itself between the list and the item detail', function () {
+    $branch = Location::factory()->satellite()->create();
+    app(MovementPostingEngine::class)->post([
+        'item_id' => $this->chicken->id, 'location_id' => $branch->id, 'quantity' => 4,
+        'movement_type' => 'transfer_in', 'unit_cost_at_time' => 31.5,
+        'idempotency_key' => 'cost-detail-agreement',
+    ]);
+
+    $list = collect(
+        $this->actingAs($this->user)->getJson("/v1/inventory/items?location_id={$branch->id}")
+            ->assertSuccessful()->json('data')
+    )->firstWhere('name', 'Chicken Drumsticks');
+
+    $detail = $this->actingAs($this->user)
+        ->getJson("/v1/inventory/items/{$this->chicken->id}?location_id={$branch->id}")
+        ->assertSuccessful()->json('data');
+
+    expect($detail['weighted_avg_cost'])->toBe(31.5)
+        ->and($detail['weighted_avg_cost'])->toBe($list['weighted_avg_cost']);
+});

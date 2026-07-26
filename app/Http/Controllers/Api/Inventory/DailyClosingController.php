@@ -52,13 +52,21 @@ class DailyClosingController extends Controller
     /** Open (or return) a closing for a location + date, snapshotting expected qtys. */
     public function store(Request $request): JsonResponse
     {
+        // The date is no longer the client's to choose - a count is always for
+        // today (see DailyClosingService::open). Still accepted so an older
+        // client gets the service's explanation rather than a silent surprise,
+        // but it defaults to today and the service is the authority.
         $data = $request->validate([
             'location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
-            'business_date' => ['required', 'date', 'before_or_equal:today'],
+            'business_date' => ['sometimes', 'date'],
         ]);
 
         return $this->guard(function () use ($data, $request) {
-            $closing = $this->service->open($data['location_id'], $data['business_date'], $request->user());
+            $closing = $this->service->open(
+                $data['location_id'],
+                $data['business_date'] ?? now()->toDateString(),
+                $request->user(),
+            );
 
             return response()->success($this->fresh($closing), 'Daily closing opened.');
         });

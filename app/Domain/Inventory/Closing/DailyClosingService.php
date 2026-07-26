@@ -57,8 +57,31 @@ class DailyClosingService
     public function open(int $locationId, string $date, User $actor): DailyClosing
     {
         $businessDate = Carbon::parse($date)->toDateString();
-        if (Carbon::parse($businessDate)->isFuture()) {
-            throw new InventoryException('A daily closing cannot be opened for a future date.');
+        $today = Carbon::today()->toDateString();
+
+        /*
+         * A count may only be opened for TODAY.
+         *
+         * Future is obviously nonsense - there is nothing on the shelf yet to
+         * count. The past is the subtler half and the reason this exists: a
+         * closing snapshots `expected_qty` from the ledger AS IT IS NOW, not as
+         * it stood on the date written at the top. Opening a count for last
+         * Tuesday therefore compares Tuesday's physical shelf against today's
+         * expected figures and calls the whole week's legitimate movements a
+         * variance. Worse, `count_adjustment` then posts that difference to make
+         * the books agree with it, so a back-dated count actively corrupts the
+         * chain that lets each morning open where the night before closed.
+         *
+         * A day that was genuinely missed stays missed. The coverage strip shows
+         * it in red, which is the honest record; reconciliation is the tool for
+         * fixing a drift after the fact.
+         */
+        if ($businessDate !== $today) {
+            throw new InventoryException(
+                Carbon::parse($businessDate)->isFuture()
+                    ? 'A count can only be opened for today - there is nothing on the shelf yet to count for a future date.'
+                    : 'A count can only be opened for today. Expected quantities come from the ledger as it stands now, so a back-dated count would read every movement since as a discrepancy. Use a reconciliation to correct an earlier drift.'
+            );
         }
 
         $existing = DailyClosing::where('location_id', $locationId)
