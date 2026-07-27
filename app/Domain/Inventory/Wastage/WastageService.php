@@ -17,6 +17,7 @@ use App\Models\Inventory\Location;
 use App\Models\Inventory\Transfer;
 use App\Models\Inventory\Wastage;
 use App\Models\Inventory\WastagePhoto;
+use App\Models\UploadSessionFile;
 use App\Models\User;
 use App\Services\Media\EvidenceImageProcessor;
 use App\Services\SystemSettingService;
@@ -218,6 +219,44 @@ class WastageService
             'caption' => $caption !== null && trim($caption) !== '' ? trim($caption) : null,
             'mime_type' => $mime,
             'size_bytes' => $size,
+            'uploaded_by' => $actor->id,
+            ...$derivatives,
+        ]);
+    }
+
+    /**
+     * Record a photo that is ALREADY on disk against a claim.
+     *
+     * The staged-upload path: the phone sent this while the record form was
+     * still open, so the file was written before the claim existed. Re-storing
+     * it would duplicate it on disk for no reason.
+     *
+     * Everything else matches `attachPhoto()` - the same evidence gate, the same
+     * `stage` derived from the actor, the same derivatives - because a photo
+     * that arrived early is not a lesser kind of evidence.
+     */
+    public function attachStoredPhoto(Wastage $wastage, UploadSessionFile $file, User $actor): WastagePhoto
+    {
+        if (! $wastage->acceptsEvidence()) {
+            throw new InventoryException(
+                'This claim is already settled - its photos are the record of what was decided on, so nothing further can be added.'
+            );
+        }
+        if (! $wastage->isVisibleTo($actor)) {
+            throw new InventoryException('You cannot add evidence to a claim at a location you do not work with.');
+        }
+
+        $stage = (int) $wastage->recorded_by === (int) $actor->id ? 'declared' : 'inspection';
+
+        $derivatives = app(EvidenceImageProcessor::class)->process($file->path, $file->mime_type) ?? [];
+
+        return $wastage->photos()->create([
+            'stage' => $stage,
+            'path' => $file->path,
+            'url' => $file->url,
+            'caption' => $file->caption,
+            'mime_type' => $file->mime_type,
+            'size_bytes' => $file->size_bytes,
             'uploaded_by' => $actor->id,
             ...$derivatives,
         ]);

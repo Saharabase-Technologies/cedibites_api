@@ -51,6 +51,9 @@ class PublicUploadController extends Controller
         $this->sessions->touch($session, $request);
 
         return response()->success([
+            // Null on a staged session - the form that minted it has not saved
+            // anything yet, so there is no reference to show. The label alone is
+            // enough to photograph a crate.
             'reference' => $handler->reference($session->attachable),
             'label' => $handler->label($session->attachable),
             'expires_at' => $session->expires_at->toIso8601String(),
@@ -115,13 +118,23 @@ class PublicUploadController extends Controller
         }
 
         try {
-            $handler->handle(
-                $session->attachable,
-                $request->file('file'),
-                $actor,
-                $request->input('caption'),
-                $session,
-            );
+            if ($session->isStaging()) {
+                /*
+                 * No document yet. Hold the file on the session; the form will
+                 * claim it when it saves. This is what lets the photograph be
+                 * taken at the crate while the notes are still being typed,
+                 * instead of forcing a half-finished record to be saved first.
+                 */
+                $this->sessions->stage($session, $request->file('file'), $request->input('caption'));
+            } else {
+                $handler->handle(
+                    $session->attachable,
+                    $request->file('file'),
+                    $actor,
+                    $request->input('caption'),
+                    $session,
+                );
+            }
         } catch (UploadSessionException $e) {
             return response()->error($e->getMessage(), 422);
         } catch (\Throwable $e) {

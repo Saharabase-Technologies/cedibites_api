@@ -51,6 +51,9 @@ beforeEach(function () {
     // Evidence is gated on `view` rather than `record`: both ends of a
     // disagreement have to be able to put their account on the record.
     $this->jesse->givePermissionTo('view_inventory_catalog');
+    // Staging a session before the claim exists is gated on being able to raise
+    // the claim at all - which whoever is standing at the crate obviously is.
+    $this->jesse->givePermissionTo('inventory.wastage.record');
     Employee::factory()->create(['user_id' => $this->jesse->id])
         ->branches()->attach($branch->id);
 
@@ -415,4 +418,117 @@ it('accepts video on the laptop endpoint as well, so the two paths agree', funct
         'photo' => UploadedFile::fake()->create('crate.webm', 3000, 'video/webm'),
     ])->assertOk()
         ->assertJsonPath('data.photos.0.kind', 'video');
+});
+
+/*
+ * ── Staged sessions: photographing before the record exists ──────────────────
+ *
+ * The gap this closes: an upload session pointed at ONE existing document, so a
+ * phone could not photograph anything while a form was still open. "Save and use
+ * phone" had to save the claim first - which closed the record-wastage form, and
+ * with it any chance to write the notes or add the second item. The photograph
+ * is taken at the crate before anyone has finished typing; the software had it
+ * the wrong way round.
+ */
+it('takes photos before the claim exists, then attaches them when it is saved', function () {
+    actingAs($this->jesse, 'sanctum');
+
+    // No target: the form is still open.
+    $response = postJson('/v1/upload-sessions', [
+        'purpose' => WastageEvidenceHandler::PURPOSE,
+    ])->assertOk();
+
+    $token = basename(parse_url($response->json('data.url'), PHP_URL_PATH));
+    $sessionId = $response->json('data.id');
+
+    app('auth')->forgetGuards();
+
+    // The phone sends two photographs while the manager is still typing.
+    foreach (['crate-1.jpg', 'crate-2.jpg'] as $name) {
+        postJson("/v1/upload-sessions/{$token}/files", [
+            'file' => UploadedFile::fake()->image($name),
+        ])->assertOk();
+    }
+
+    $session = UploadSession::find($sessionId);
+    expect($session->isStaging())->toBeTrue()
+        ->and($session->files)->toHaveCount(2);
+
+    // Nothing is evidence yet - no claim exists to be evidence OF.
+    expect(App\Models\Inventory\WastagePhoto::count())->toBe(0);
+
+    // Now the form is finished and saved, naming the session it started.
+    actingAs($this->jesse, 'sanctum');
+    $created = postJson('/v1/inventory/wastages', [
+        'location_id' => $this->branch->id,
+        'notes' => 'Written after the photographs, which is the whole point.',
+        'lines' => [[
+            'item_id' => $this->chicken->id,
+            'quantity' => 20,
+            'reason' => WastageReason::Spoiled->value,
+        ]],
+        'upload_session_id' => $sessionId,
+    ])->assertOk();
+
+    $wastage = App\Models\Inventory\Wastage::find($created->json('data.id'));
+
+    expect($wastage->photos)->toHaveCount(2)
+        // Jesse raised the claim, so these are his account of it.
+        ->and($wastage->photos->pluck('stage')->unique()->all())->toBe(['declared'])
+        ->and($wastage->notes)->toContain('which is the whole point');
+
+    // The session is spent, so a screenshot of the code cannot re-attach them.
+    $session->refresh();
+    expect($session->claimed_at)->not->toBeNull()
+        ->and($session->isStaging())->toBeFalse();
+
+    app('auth')->forgetGuards();
+    getJson("/v1/upload-sessions/{$token}")->assertStatus(404);
+});
+
+it('shows the form what the phone has sent, so thumbnails appear while typing', function () {
+    actingAs($this->jesse, 'sanctum');
+    $response = postJson('/v1/upload-sessions', ['purpose' => WastageEvidenceHandler::PURPOSE])->assertOk();
+    $token = basename(parse_url($response->json('data.url'), PHP_URL_PATH));
+    $sessionId = $response->json('data.id');
+
+    app('auth')->forgetGuards();
+    postJson("/v1/upload-sessions/{$token}/files", [
+        'file' => UploadedFile::fake()->image('crate.jpg'),
+    ])->assertOk();
+
+    actingAs($this->jesse, 'sanctum');
+    $status = getJson("/v1/upload-sessions/{$sessionId}/status")->assertOk()->json('data');
+
+    expect($status['staging'])->toBeTrue()
+        ->and($status['files'])->toHaveCount(1)
+        ->and($status['files'][0]['kind'])->toBe('image')
+        ->and($status['files'][0]['attached'])->toBeFalse();
+});
+
+it('will not let somebody else claim your staged photographs', function () {
+    actingAs($this->jesse, 'sanctum');
+    $response = postJson('/v1/upload-sessions', ['purpose' => WastageEvidenceHandler::PURPOSE])->assertOk();
+    $session = UploadSession::find($response->json('data.id'));
+
+    // Wilfred cannot declare a loss at Jesse's branch, so the claim is Jesse's.
+    // What is under test is that WILFRED cannot spend Jesse's staged photos.
+    $wastage = openClaim($this->jesse, $this->branch, $this->chicken);
+
+    expect(fn () => app(App\Services\Uploads\UploadSessionService::class)
+        ->claim($session, $wastage, $this->wilfred))
+        ->toThrow(App\Services\Uploads\UploadSessionException::class, 'belongs to somebody else');
+});
+
+it('does not show a reference for a claim that does not exist yet', function () {
+    actingAs($this->jesse, 'sanctum');
+    $response = postJson('/v1/upload-sessions', ['purpose' => WastageEvidenceHandler::PURPOSE])->assertOk();
+    $token = basename(parse_url($response->json('data.url'), PHP_URL_PATH));
+
+    app('auth')->forgetGuards();
+    $body = getJson("/v1/upload-sessions/{$token}")->assertOk()->json('data');
+
+    // There is nothing to reference. The label alone tells the phone what to do.
+    expect($body['reference'])->toBeNull()
+        ->and($body['label'])->toBeString();
 });

@@ -11,9 +11,12 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Inventory\WastageResource;
 use App\Models\Inventory\Wastage;
 use App\Models\Inventory\WastagePhoto;
+use App\Models\UploadSession;
 use App\Rules\EvidenceMedia;
+use App\Services\Uploads\UploadSessionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class WastageController extends Controller
@@ -88,10 +91,31 @@ class WastageController extends Controller
             'lines.*.quantity' => ['required', 'numeric', 'gt:0'],
             'lines.*.reason' => ['required', 'string', Rule::enum(WastageReason::class)],
             'lines.*.reason_note' => ['nullable', 'string', 'max:1000'],
+            // Photos the phone sent while this form was still being filled in.
+            'upload_session_id' => ['sometimes', 'integer'],
         ]);
 
         return $this->guard(function () use ($data, $request) {
             $wastage = $this->service->record($data, $request->user());
+
+            // Attach anything staged before the claim existed. Never allowed to
+            // fail the claim: it is saved, and the detail page can always take
+            // more photos.
+            if (! empty($data['upload_session_id'])) {
+                $session = UploadSession::find($data['upload_session_id']);
+                if ($session !== null) {
+                    try {
+                        app(UploadSessionService::class)->claim($session, $wastage, $request->user());
+                    } catch (\Throwable $e) {
+                        Log::warning('Could not attach staged photos to a new wastage claim.', [
+                            'wastage_id' => $wastage->id,
+                            'session_id' => $session->id,
+                            'exception' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            }
+
             $this->broadcast($wastage, 'created');
 
             return response()->success($this->fresh($wastage), match ($wastage->status->value) {

@@ -7,6 +7,7 @@ use App\Domain\Inventory\Wastage\WastageService;
 use App\Events\Inventory\WastageBroadcastEvent;
 use App\Models\Inventory\Wastage;
 use App\Models\UploadSession;
+use App\Models\UploadSessionFile;
 use App\Models\User;
 use App\Rules\EvidenceMedia;
 use App\Services\Uploads\Contracts\UploadSessionHandler;
@@ -49,14 +50,48 @@ class WastageEvidenceHandler implements UploadSessionHandler
      * reference alongside it is enough to confirm you are at the right crate;
      * quantities, values and who is arguing with whom are none of its business.
      */
-    public function label(Model $target): string
+    public function label(?Model $target): string
     {
         return 'Photos or video of the goods being written off.';
     }
 
-    public function reference(Model $target): string
+    public function reference(?Model $target): ?string
     {
-        return $this->wastage($target)->reference;
+        // A staged session has no claim yet - the form is still open. The phone
+        // shows the label alone, which is all it needs to photograph a crate.
+        return $target === null ? null : $this->wastage($target)->reference;
+    }
+
+    /**
+     * Anyone who could raise the claim can photograph the goods before it
+     * exists. That is the whole point: the crate is in front of them now, and
+     * the notes are still being typed.
+     */
+    public function canStage(User $actor): bool
+    {
+        return $actor->can('inventory.wastage.record');
+    }
+
+    /**
+     * Attach a photo that arrived before the claim did.
+     *
+     * The file is already on disk from `stage()`, so this records it rather
+     * than storing it again - and as `$actor`, so `stage` still derives from
+     * whoever generated the code.
+     */
+    public function attachStaged(
+        Model $target,
+        UploadSessionFile $file,
+        User $actor,
+        UploadSession $session,
+    ): void {
+        $wastage = $this->wastage($target);
+
+        try {
+            $this->wastages->attachStoredPhoto($wastage, $file, $actor);
+        } catch (InventoryException $e) {
+            throw new UploadSessionException($e->getMessage(), previous: $e);
+        }
     }
 
     /** @return array<int, mixed> */

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 /**
@@ -27,6 +28,7 @@ class UploadSession extends Model
         'files_uploaded',
         'expires_at',
         'consumed_at',
+        'claimed_at',
         'revoked_at',
         'last_used_at',
         'last_ip',
@@ -40,6 +42,7 @@ class UploadSession extends Model
             'files_uploaded' => 'integer',
             'expires_at' => 'datetime',
             'consumed_at' => 'datetime',
+            'claimed_at' => 'datetime',
             'revoked_at' => 'datetime',
             'last_used_at' => 'datetime',
         ];
@@ -54,10 +57,28 @@ class UploadSession extends Model
 
     // ── Relations ────────────────────────────────────────────────────────────
 
-    /** The document this session may attach media to. One document, not a type. */
+    /**
+     * The document this session may attach media to. One document, not a type.
+     *
+     * Null on a STAGED session - one minted by a form that has not saved
+     * anything yet. Its files wait in `files()` until the document exists and
+     * the session is claimed.
+     */
     public function attachable(): MorphTo
     {
         return $this->morphTo();
+    }
+
+    /** Files sent to a staged session, waiting for a document to belong to. */
+    public function files(): HasMany
+    {
+        return $this->hasMany(UploadSessionFile::class)->oldest('id');
+    }
+
+    /** Minted by a form, before there was anything to attach to. */
+    public function isStaging(): bool
+    {
+        return $this->attachable_type === null;
     }
 
     /**
@@ -90,6 +111,7 @@ class UploadSession extends Model
     {
         return $this->revoked_at === null
             && $this->consumed_at === null
+            && $this->claimed_at === null
             && ! $this->isExpired()
             && ! $this->isFull();
     }
@@ -103,6 +125,9 @@ class UploadSession extends Model
     {
         if ($this->revoked_at !== null) {
             return 'This link was cancelled. Show the QR code again on the computer to get a new one.';
+        }
+        if ($this->claimed_at !== null) {
+            return 'These photos have already been saved onto the record. Show a new code if you need to add more.';
         }
         if ($this->consumed_at !== null) {
             return 'This link is closed - the record it belonged to has been settled.';
@@ -124,6 +149,7 @@ class UploadSession extends Model
     {
         $query->whereNull('revoked_at')
             ->whereNull('consumed_at')
+            ->whereNull('claimed_at')
             ->where('expires_at', '>', now())
             ->whereColumn('files_uploaded', '<', 'max_files');
     }

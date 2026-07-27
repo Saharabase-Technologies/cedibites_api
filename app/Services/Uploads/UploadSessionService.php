@@ -3,12 +3,15 @@
 namespace App\Services\Uploads;
 
 use App\Models\UploadSession;
+use App\Models\UploadSessionFile;
 use App\Models\User;
 use App\Services\Uploads\Contracts\UploadSessionHandler;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -50,7 +53,7 @@ class UploadSessionService
      * @return array{session: UploadSession, token: string, url: string}
      */
     public function issue(
-        Model $target,
+        ?Model $target,
         User $actor,
         string $purpose,
         ?int $maxFiles = null,
@@ -58,7 +61,17 @@ class UploadSessionService
     ): array {
         $handler = $this->handler($purpose);
 
-        if (! $handler->canIssue($target, $actor)) {
+        /*
+         * A STAGED session - no target. Minted by a form that has not saved
+         * anything yet, so the photograph can be taken at the crate while the
+         * notes and the second item are still being typed. Files wait on the
+         * session until the document exists and `claim()` attaches them.
+         */
+        if ($target === null) {
+            if (! $handler->canStage($actor)) {
+                throw new UploadSessionException('You cannot start an upload for this kind of record.');
+            }
+        } elseif (! $handler->canIssue($target, $actor)) {
             throw new UploadSessionException(
                 'This record can no longer take photos, so there is nothing to upload to.'
             );
@@ -67,16 +80,21 @@ class UploadSessionService
         $token = Str::random(self::TOKEN_BYTES);
 
         $session = DB::transaction(function () use ($target, $actor, $purpose, $maxFiles, $ttlMinutes, $token) {
-            UploadSession::query()
-                ->for($target)
-                ->where('created_by', $actor->id)
-                ->usable()
-                ->update(['revoked_at' => now()]);
+            // Only for a real document. Two staged sessions can legitimately
+            // be open at once - two forms in two tabs - and they have no
+            // document in common to collide over.
+            if ($target !== null) {
+                UploadSession::query()
+                    ->for($target)
+                    ->where('created_by', $actor->id)
+                    ->usable()
+                    ->update(['revoked_at' => now()]);
+            }
 
             return UploadSession::create([
                 'token_hash' => $this->hash($token),
-                'attachable_type' => $target->getMorphClass(),
-                'attachable_id' => $target->getKey(),
+                'attachable_type' => $target?->getMorphClass(),
+                'attachable_id' => $target?->getKey(),
                 'created_by' => $actor->id,
                 'purpose' => $purpose,
                 'max_files' => $maxFiles ?? self::DEFAULT_MAX_FILES,
@@ -115,8 +133,9 @@ class UploadSessionService
             throw new UploadSessionException($reason);
         }
 
-        // A session whose document was deleted underneath it.
-        if ($session->attachable === null) {
+        // A session whose document was deleted underneath it. A staged session
+        // legitimately has none yet, which is the whole point of staging.
+        if (! $session->isStaging() && $session->attachable === null) {
             throw new UploadSessionException('The record this link belonged to no longer exists.');
         }
 
@@ -164,6 +183,70 @@ class UploadSessionService
     {
         $session->increment('files_uploaded');
         $this->touch($session, $request);
+    }
+
+    /**
+     * Hold a file against a staged session.
+     *
+     * Deliberately NOT evidence yet: nothing references it, no `stage` has been
+     * derived from an actor, and the form that minted this may still be
+     * abandoned. It becomes evidence in `claim()`.
+     */
+    public function stage(UploadSession $session, UploadedFile $file, ?string $caption = null): UploadSessionFile
+    {
+        $mime = $file->getMimeType() ?: $file->getClientMimeType();
+        $size = $file->getSize();
+        $original = $file->getClientOriginalName();
+
+        $path = $file->store("uploads/staged/{$session->id}", 'public');
+
+        return $session->files()->create([
+            'path' => $path,
+            'url' => Storage::disk('public')->url($path),
+            'original_name' => $original,
+            'mime_type' => $mime,
+            'size_bytes' => $size,
+            'caption' => $caption !== null && trim($caption) !== '' ? trim($caption) : null,
+        ]);
+    }
+
+    /**
+     * The document finally exists - attach everything the phone sent while the
+     * form was still being filled in.
+     *
+     * Acts as `created_by`, exactly as a live session does, because the handler
+     * derives `stage` from the actor. Files are marked `attached_at`, so a
+     * double submit cannot file the same photograph twice.
+     *
+     * @return int how many files were attached
+     */
+    public function claim(UploadSession $session, Model $target, User $actor): int
+    {
+        if (! $session->isStaging()) {
+            throw new UploadSessionException('That upload was already tied to a record.');
+        }
+        if ((int) $session->created_by !== (int) $actor->id) {
+            throw new UploadSessionException('That upload belongs to somebody else.');
+        }
+
+        $handler = $this->handler($session);
+        $attached = 0;
+
+        DB::transaction(function () use ($session, $target, $actor, $handler, &$attached) {
+            foreach ($session->files()->whereNull('attached_at')->get() as $file) {
+                $handler->attachStaged($target, $file, $actor, $session);
+                $file->forceFill(['attached_at' => now()])->save();
+                $attached++;
+            }
+
+            $session->forceFill([
+                'attachable_type' => $target->getMorphClass(),
+                'attachable_id' => $target->getKey(),
+                'claimed_at' => now(),
+            ])->save();
+        });
+
+        return $attached;
     }
 
     /** A human deciding the screen was seen by the wrong person. */

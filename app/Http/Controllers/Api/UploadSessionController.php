@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\UploadSession;
+use App\Models\UploadSessionFile;
 use App\Services\Uploads\UploadSessionException;
 use App\Services\Uploads\UploadSessionService;
 use Illuminate\Http\JsonResponse;
@@ -44,20 +45,27 @@ class UploadSessionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // Target is OPTIONAL. Omit it and you get a STAGED session: files wait
+        // on the session until a document exists to attach them to. That is what
+        // lets a form photograph the goods before it has been saved.
         $data = $request->validate([
-            'target_type' => ['required', 'string', Rule::in(array_keys(self::TARGETS))],
-            'target_id' => ['required', 'integer'],
+            'target_type' => ['sometimes', 'string', Rule::in(array_keys(self::TARGETS))],
+            'target_id' => ['required_with:target_type', 'integer'],
             'purpose' => ['required', 'string', Rule::in(array_keys((array) config('upload-sessions.handlers')))],
         ]);
 
-        $model = self::TARGETS[$data['target_type']];
-        $target = $model::find($data['target_id']);
+        $target = null;
 
-        // 404 rather than 403 - authorization for the target is the handler's
-        // job (`canIssue`), and a record the caller cannot reach should not be
-        // confirmed to exist.
-        if ($target === null) {
-            return response()->error('That record could not be found.', 404);
+        if (isset($data['target_type'])) {
+            $model = self::TARGETS[$data['target_type']];
+            $target = $model::find($data['target_id']);
+
+            // 404 rather than 403 - authorization for the target is the
+            // handler's job (`canIssue`), and a record the caller cannot reach
+            // should not be confirmed to exist.
+            if ($target === null) {
+                return response()->error('That record could not be found.', 404);
+            }
         }
 
         try {
@@ -93,6 +101,8 @@ class UploadSessionController extends Controller
     {
         abort_unless($this->ownedBy($uploadSession, $request), 404);
 
+        $uploadSession->loadMissing('files');
+
         return response()->success([
             'id' => $uploadSession->id,
             'expires_at' => $uploadSession->expires_at->toIso8601String(),
@@ -101,6 +111,22 @@ class UploadSessionController extends Controller
             'max_files' => $uploadSession->max_files,
             'usable' => $uploadSession->isUsable(),
             'last_used_at' => optional($uploadSession->last_used_at)->toIso8601String(),
+            'staging' => $uploadSession->isStaging(),
+
+            /*
+             * The staged files themselves, so the form that minted this session
+             * can show thumbnails of what the phone has sent WHILE it is still
+             * being filled in. Owner-only (see ownedBy) - never anything already
+             * attached to somebody else's document.
+             */
+            'files' => $uploadSession->files->map(fn (UploadSessionFile $f) => [
+                'id' => $f->id,
+                'url' => $f->url,
+                'kind' => $f->isVideo() ? 'video' : 'image',
+                'mime_type' => $f->mime_type,
+                'original_name' => $f->original_name,
+                'attached' => $f->attached_at !== null,
+            ])->values(),
         ]);
     }
 
