@@ -128,9 +128,6 @@ class RoleSeeder extends Seeder
             Permission::InventoryDailyClosingEnter->value,
             Permission::InventoryRecipeView->value,
             Permission::InventoryReportView->value,
-            // The stock gate's exception. A cashier facing a customer cannot
-            // wave a sale through; the manager can, and it is logged.
-            Permission::InventoryStockGateOverride->value,
         ]);
 
         // Create Call Center role (order placement)
