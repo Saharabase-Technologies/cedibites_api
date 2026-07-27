@@ -32,7 +32,10 @@ class MenuItemController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = MenuItem::with($this->menuItemWith())
-            ->when($request->branch_id, fn ($q, $branchId) => $q->where('branch_id', $branchId))
+            // servedAt, not branch_id: a dish is one row served at many branches
+            // now. The scope still answers to branch_id for any item the merge
+            // has not reached yet.
+            ->when($request->branch_id, fn ($q, $branchId) => $q->servedAt($branchId))
             ->when($request->category_id, fn ($q, $categoryId) => $q->where('category_id', $categoryId))
             ->when($request->is_available !== null, fn ($q) => $q->where('is_available', $request->boolean('is_available')))
             ->when($request->boolean('popular'), fn ($q) => $q->whereHas('tags', fn ($tq) => $tq->where('slug', 'popular')));

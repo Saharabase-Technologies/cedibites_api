@@ -57,9 +57,26 @@ class Branch extends Model
         return $this->hasMany(MenuCategory::class);
     }
 
+    /**
+     * Legacy: dishes whose `branch_id` is this branch.
+     *
+     * Superseded by servedMenuItems(). Kept while menu_items.branch_id still
+     * exists so items the merge has not reached are not lost — see
+     * docs/BRANCH_ISOLATION_PLAN.md, Phase 3.
+     */
     public function menuItems(): HasMany
     {
         return $this->hasMany(MenuItem::class);
+    }
+
+    /**
+     * Dishes this branch serves. One dish, many branches.
+     */
+    public function servedMenuItems(): BelongsToMany
+    {
+        return $this->belongsToMany(MenuItem::class, 'menu_item_branches')
+            ->withPivot('is_available')
+            ->withTimestamps();
     }
 
     public function carts(): HasMany

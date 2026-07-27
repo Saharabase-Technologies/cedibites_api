@@ -33,6 +33,8 @@ class BranchController extends Controller
             ->with([
                 'menuItems.category',
                 'menuItems.options',
+                'servedMenuItems.category',
+                'servedMenuItems.options',
                 'managers.user',
                 'operatingHours',
                 'deliverySettings',
@@ -217,7 +219,12 @@ class BranchController extends Controller
      */
     public function getMenuItemIds(Branch $branch): JsonResponse
     {
-        $ids = $branch->menuItems()->pluck('id')->map(fn ($id) => (string) $id)->values()->all();
+        $ids = \App\Models\MenuItem::query()
+            ->servedAt($branch->id)
+            ->pluck('id')
+            ->map(fn ($id) => (string) $id)
+            ->values()
+            ->all();
 
         return response()->success($ids);
     }
@@ -227,9 +234,16 @@ class BranchController extends Controller
      */
     public function isItemAvailable(Branch $branch, string $itemId): JsonResponse
     {
-        $available = $branch->menuItems()
+        // Two levels of availability: the dish can be off everywhere
+        // (menu_items.is_available) or sold out at this branch today
+        // (menu_item_branches.is_available). Both have to say yes.
+        $available = \App\Models\MenuItem::query()
+            ->servedAt($branch->id)
             ->where('id', (int) $itemId)
-            ->where('is_available', true)
+            ->where('menu_items.is_available', true)
+            ->whereDoesntHave('branches', fn ($q) => $q
+                ->where('branches.id', $branch->id)
+                ->where('menu_item_branches.is_available', false))
             ->exists();
 
         return response()->success($available);
@@ -244,6 +258,7 @@ class BranchController extends Controller
             'employees',
             'menuCategories',
             'menuItems',
+            'servedMenuItems',
             'operatingHours',
             'deliverySettings',
             'orderTypes',

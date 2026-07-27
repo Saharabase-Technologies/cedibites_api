@@ -24,9 +24,23 @@ class BranchResource extends JsonResource
         $data['extended_order_access'] = $this->extended_order_access;
         $data['staff_access_allowed'] = $this->isStaffAccessAllowed();
 
-        // Include full menu items if loaded
-        if ($this->relationLoaded('menuItems')) {
-            $data['menu_items'] = MenuItemResource::collection($this->menuItems);
+        // Include full menu items if loaded.
+        //
+        // Union of both sources while the migration is in flight: dishes the
+        // merge has moved onto the pivot, plus any it has not reached yet that
+        // still carry this branch_id. Deduped by id, since a dish appears in
+        // both for its own original branch. Once menu_items.branch_id is
+        // dropped only servedMenuItems remains.
+        $legacy = $this->relationLoaded('menuItems') ? $this->menuItems : null;
+        $served = $this->relationLoaded('servedMenuItems') ? $this->servedMenuItems : null;
+
+        if ($legacy !== null || $served !== null) {
+            $items = ($served ?? collect())
+                ->concat($legacy ?? collect())
+                ->unique('id')
+                ->values();
+
+            $data['menu_items'] = MenuItemResource::collection($items);
         }
 
         // Include manager information if loaded
