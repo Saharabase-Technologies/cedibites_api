@@ -41,7 +41,14 @@ class RequisitionService
             $requisition = Requisition::create([
                 'reference' => $this->references->requisition(),
                 'requesting_location_id' => $data['requesting_location_id'],
-                'source_type' => 'warehouse',
+                // Derived, not assumed. A branch may now be asked to supply
+                // another branch - Ashaiman has a surplus and Test Branch needs
+                // it, and they are nearer each other than either is to the
+                // mother kitchen. Hardcoding 'warehouse' mislabelled every such
+                // request.
+                'source_type' => Location::find($data['source_location_id'])?->type === 'warehouse'
+                    ? 'warehouse'
+                    : 'branch',
                 'source_location_id' => $data['source_location_id'],
                 'purpose' => $data['purpose'] ?? 'supplementary',
                 'status' => RequisitionStatus::Draft,
@@ -183,6 +190,25 @@ class RequisitionService
 
         if (! $requisition->source_location_id) {
             throw new InventoryException('A source location is required before a requisition can be approved.');
+        }
+
+        /*
+         * Approving means agreeing to give up YOUR stock, so it belongs to the
+         * location being drawn on.
+         *
+         * This was only ever guarded by "you cannot approve your own request",
+         * which was enough while every requisition was aimed at the warehouse.
+         * Now that a branch can be the source, without this any branch manager
+         * could sign away another branch's stock.
+         */
+        $source = Location::find($requisition->source_location_id);
+        $operating = $actor->operatingLocationIds();
+
+        if ($operating !== null && ! in_array((int) $requisition->source_location_id, array_map('intval', $operating), true)) {
+            throw new InventoryException(
+                'This request draws on stock at '.($source?->name ?? 'another location')
+                .', so only someone there can approve it.'
+            );
         }
 
         return DB::transaction(function () use ($requisition, $actor, $approvedQty, $override) {

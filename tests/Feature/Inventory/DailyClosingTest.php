@@ -7,6 +7,7 @@ use App\Models\Inventory\DailyClosing;
 use App\Models\Inventory\Item;
 use App\Models\Inventory\Location;
 use App\Models\User;
+use Illuminate\Support\Carbon;
 
 beforeEach(function () {
     $this->engine = app(MovementPostingEngine::class);
@@ -29,7 +30,7 @@ beforeEach(function () {
 });
 
 it('opens a closing snapshotting expected quantities from the ledger', function () {
-    $closing = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $closing = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
 
     expect($closing->status)->toBe(DailyClosingStatus::Open)
         ->and($closing->lines()->count())->toBe(2);
@@ -40,7 +41,7 @@ it('opens a closing snapshotting expected quantities from the ledger', function 
 });
 
 it('is idempotent — re-opening returns the same closing', function () {
-    $date = now()->toDateString();
+    $date = DailyClosingService::currentBusinessDate();
     $a = $this->service->open($this->location->id, $date, $this->actor);
     $b = $this->service->open($this->location->id, $date, $this->actor);
 
@@ -49,7 +50,7 @@ it('is idempotent — re-opening returns the same closing', function () {
 });
 
 it('computes variance from counted quantities', function () {
-    $closing = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $closing = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
     $lineA = $closing->lines()->where('item_id', $this->itemA->id)->first();
     $lineB = $closing->lines()->where('item_id', $this->itemB->id)->first();
 
@@ -64,7 +65,7 @@ it('computes variance from counted quantities', function () {
 });
 
 it('blocks completing until every line is counted', function () {
-    $closing = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $closing = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
     $lineA = $closing->lines()->where('item_id', $this->itemA->id)->first();
 
     expect(fn () => $this->service->saveCounts($closing, [$lineA->id => 40], complete: true, actor: $this->actor))
@@ -72,7 +73,7 @@ it('blocks completing until every line is counted', function () {
 });
 
 it('completes when all lines are counted, then locks against further edits', function () {
-    $closing = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $closing = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
     $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty])->all();
 
     $closing = $this->service->saveCounts($closing, $counts, complete: true, actor: $this->actor);
@@ -85,19 +86,19 @@ it('completes when all lines are counted, then locks against further edits', fun
 });
 
 it('flags missed days on the calendar', function () {
-    $today = now()->toDateString();
+    $today = DailyClosingService::currentBusinessDate();
     $this->service->open($this->location->id, $today, $this->actor);
 
-    $cal = $this->service->calendar($this->location->id, now()->subDays(2)->toDateString(), $today);
+    $cal = $this->service->calendar($this->location->id, Carbon::parse($today)->subDays(2)->toDateString(), $today);
     $byDate = collect($cal)->keyBy('date');
 
     expect($cal)->toHaveCount(3)
         ->and($byDate[$today]['status'])->toBe('open')
-        ->and($byDate[now()->subDays(2)->toDateString()]['status'])->toBeNull(); // missed
+        ->and($byDate[Carbon::parse($today)->subDays(2)->toDateString()]['status'])->toBeNull(); // missed
 });
 
 it('rejects opening a closing for a future date', function () {
-    expect(fn () => $this->service->open($this->location->id, now()->addDay()->toDateString(), $this->actor))
+    expect(fn () => $this->service->open($this->location->id, Carbon::parse(DailyClosingService::currentBusinessDate())->addDay()->toDateString(), $this->actor))
         ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class);
 });
 
@@ -114,13 +115,13 @@ it('rejects opening a closing for a future date', function () {
  * Two open counts for past dates were sitting on production when this was found.
  */
 it('rejects opening a closing for a past date, not just a future one', function () {
-    expect(fn () => $this->service->open($this->location->id, now()->subDays(3)->toDateString(), $this->actor))
+    expect(fn () => $this->service->open($this->location->id, Carbon::parse(DailyClosingService::currentBusinessDate())->subDays(3)->toDateString(), $this->actor))
         ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class, 'current business day');
 });
 
 it('still opens the current business day, and re-opening returns the same one', function () {
-    $first = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
-    $again = $this->service->open($this->location->id, now()->toDateString(), $this->actor);
+    $first = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
+    $again = $this->service->open($this->location->id, DailyClosingService::currentBusinessDate(), $this->actor);
 
     expect($again->id)->toBe($first->id);
 });
@@ -135,7 +136,7 @@ it('defaults the business date to today when the client sends none', function ()
     $this->actingAs($this->actor, 'sanctum')
         ->postJson('/v1/inventory/daily-closings', ['location_id' => $this->location->id])
         ->assertSuccessful()
-        ->assertJsonPath('data.business_date', now()->toDateString());
+        ->assertJsonPath('data.business_date', DailyClosingService::currentBusinessDate());
 });
 
 /*
@@ -150,10 +151,10 @@ it('defaults the business date to today when the client sends none', function ()
  * an offset bug. It would elsewhere.
  */
 it('still calls it yesterday at one in the morning', function () {
-    $businessDay = now()->toDateString();
+    $businessDay = DailyClosingService::currentBusinessDate();
 
     // Half past midnight, the night after trading.
-    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+    $this->travelTo(Carbon::parse($businessDay)->addDay()->startOfDay()->addMinutes(30));
 
     expect(DailyClosingService::currentBusinessDate())->toBe($businessDay);
 
@@ -163,11 +164,11 @@ it('still calls it yesterday at one in the morning', function () {
 });
 
 it('has rolled over by the time the next morning starts', function () {
-    $businessDay = now()->toDateString();
+    $businessDay = DailyClosingService::currentBusinessDate();
 
-    $this->travelTo(now()->addDay()->startOfDay()->addHours(9));
+    $this->travelTo(Carbon::parse($businessDay)->addDay()->startOfDay()->addHours(9));
 
-    expect(DailyClosingService::currentBusinessDate())->toBe(now()->toDateString())
+    expect(DailyClosingService::currentBusinessDate())->toBe(Carbon::parse($businessDay)->addDay()->toDateString())
         ->and(DailyClosingService::currentBusinessDate())->not->toBe($businessDay);
 
     // Yesterday is now genuinely closed to new counts.
@@ -184,12 +185,12 @@ it('has rolled over by the time the next morning starts', function () {
  * silently cancel the movement out - a received delivery would simply vanish.
  */
 it('refuses to settle a finished day once stock has moved since', function () {
-    $businessDay = now()->toDateString();
+    $businessDay = DailyClosingService::currentBusinessDate();
     $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
     $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty])->all();
 
     // Next morning, after the day rolled - and a delivery has landed.
-    $this->travelTo(now()->addDay()->startOfDay()->addHours(9));
+    $this->travelTo(Carbon::parse($businessDay)->addDay()->startOfDay()->addHours(9));
     $this->engine->post([
         'item_id' => $this->itemA->id,
         'location_id' => $this->location->id,
@@ -210,12 +211,12 @@ it('refuses to settle a finished day once stock has moved since', function () {
 });
 
 it('settles a finished day happily when nothing has moved', function () {
-    $businessDay = now()->toDateString();
+    $businessDay = DailyClosingService::currentBusinessDate();
     $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
     $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty - 1])->all();
 
     // 01:00, the small hours of the same working night. Nothing has moved.
-    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+    $this->travelTo(Carbon::parse($businessDay)->addDay()->startOfDay()->addMinutes(30));
 
     $closing = $this->service->saveCounts($closing->fresh(), $counts, complete: true, actor: $this->actor);
     expect($closing->status)->toBe(DailyClosingStatus::Completed);
@@ -227,11 +228,11 @@ it('settles a finished day happily when nothing has moved', function () {
  * movement-by-date report disagreeing with the closings list by one day.
  */
 it('dates the closing adjustment to the day being counted, not the wall clock', function () {
-    $businessDay = now()->toDateString();
+    $businessDay = DailyClosingService::currentBusinessDate();
     $closing = $this->service->open($this->location->id, $businessDay, $this->actor);
     $counts = $closing->lines->mapWithKeys(fn ($l) => [$l->id => (float) $l->expected_qty - 3])->all();
 
-    $this->travelTo(now()->addDay()->startOfDay()->addMinutes(30));
+    $this->travelTo(Carbon::parse($businessDay)->addDay()->startOfDay()->addMinutes(30));
     $this->service->saveCounts($closing->fresh(), $counts, complete: true, actor: $this->actor);
 
     $adjustment = App\Models\Inventory\StockMovement::where('movement_type', 'count_adjustment')

@@ -558,7 +558,7 @@ it('still calls genuinely missing stock a dispute', function () {
 // ── The point of all of it: tomorrow opens where tonight closed ──────────────
 
 it('leaves the ledger reading exactly what was counted, so tomorrow opens there', function () {
-    $closing = $this->closings->open($this->branch->id, now()->toDateString(), $this->jesse);
+    $closing = $this->closings->open($this->branch->id, DailyClosingService::currentBusinessDate(), $this->jesse);
     $riceLine = $closing->lines()->where('item_id', $this->rice->id)->first();
     $chickenLine = $closing->lines()->where('item_id', $this->chicken->id)->first();
 
@@ -578,12 +578,12 @@ it('leaves the ledger reading exactly what was counted, so tomorrow opens there'
 
     // Opening tomorrow starts from the counted actual, not from yesterday's hope.
     $this->travel(1)->days();
-    $tomorrow = $this->closings->open($this->branch->id, now()->toDateString(), $this->jesse);
+    $tomorrow = $this->closings->open($this->branch->id, DailyClosingService::currentBusinessDate(), $this->jesse);
     expect((float) $tomorrow->lines()->where('item_id', $this->rice->id)->first()->expected_qty)->toBe(37.0);
 });
 
 it('files the explained part of a shortfall as wastage but never deducts it twice', function () {
-    $closing = $this->closings->open($this->branch->id, now()->toDateString(), $this->jesse);
+    $closing = $this->closings->open($this->branch->id, DailyClosingService::currentBusinessDate(), $this->jesse);
     $riceLine = $closing->lines()->where('item_id', $this->rice->id)->first();
     $chickenLine = $closing->lines()->where('item_id', $this->chicken->id)->first();
 
@@ -605,7 +605,7 @@ it('files the explained part of a shortfall as wastage but never deducts it twic
 
 it('measures the count against the ledger as it stands at completion, not at opening', function () {
     // Jesse opens the count first thing in the morning...
-    $closing = $this->closings->open($this->branch->id, now()->toDateString(), $this->jesse);
+    $closing = $this->closings->open($this->branch->id, DailyClosingService::currentBusinessDate(), $this->jesse);
     $riceLine = $closing->lines()->where('item_id', $this->rice->id)->first();
     expect((float) $riceLine->expected_qty)->toBe(40.0);
 
@@ -632,7 +632,7 @@ it('measures the count against the ledger as it stands at completion, not at ope
 });
 
 it('leaves an unexplained shortfall unexplained rather than blocking the day', function () {
-    $closing = $this->closings->open($this->branch->id, now()->toDateString(), $this->jesse);
+    $closing = $this->closings->open($this->branch->id, DailyClosingService::currentBusinessDate(), $this->jesse);
     $counts = $closing->lines->mapWithKeys(fn ($l) => [
         $l->id => ['counted_qty' => (float) $l->expected_qty - 1],
     ])->all();

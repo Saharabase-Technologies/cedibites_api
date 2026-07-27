@@ -1,5 +1,6 @@
 <?php
 
+use App\Domain\Inventory\Exceptions\InventoryException;
 use App\Domain\Inventory\Movements\Engines\MovementPostingEngine;
 use App\Domain\Inventory\Requisitions\RequisitionService;
 use App\Domain\Inventory\Transfers\TransferService;
@@ -271,4 +272,79 @@ it('blocks approval when no line is granted a positive quantity', function () {
 
     expect(fn () => $this->requisitions->approve($r, $this->approver, [$lineId => 0]))
         ->toThrow(App\Domain\Inventory\Exceptions\InventoryException::class);
+});
+
+/*
+ * ── A branch asking another branch ───────────────────────────────────────────
+ *
+ * Ashaiman has a surplus, Test Branch needs it, and they are nearer each other
+ * than either is to the mother kitchen. A requisition is the right verb: you
+ * can only DISPATCH stock you hold, so asking Test Branch to raise a transfer
+ * out of Ashaiman's shelf inverts who is doing what.
+ *
+ * The domain already expected this - `approve()` carries a comment saying the
+ * branch manager's approve grant exists "so they can fulfil requests from OTHER
+ * branches drawing on their stock". Only `source_type` was hardcoded.
+ */
+it('lets one branch requisition from another, and labels the source honestly', function () {
+    $supplierBranchRow = Branch::factory()->create();
+    $supplier = Location::factory()->satellite()->create(['branch_id' => $supplierBranchRow->id]);
+
+    $this->engine->post([
+        'item_id' => $this->item->id, 'location_id' => $supplier->id, 'quantity' => 60,
+        'movement_type' => 'purchase', 'unit_cost_at_time' => 5.0,
+        'idempotency_key' => 'peer-seed',
+    ]);
+
+    $r = $this->requisitions->create([
+        'requesting_location_id' => $this->branch->id,
+        'source_location_id' => $supplier->id,
+        'purpose' => 'supplementary',
+        'items' => [['item_id' => $this->item->id, 'requested_qty' => 12]],
+    ], $this->requester);
+
+    // Was hardcoded 'warehouse', which mislabelled every peer request.
+    expect($r->source_type)->toBe('branch');
+
+    // The supplying branch's manager approves - it is their stock going out.
+    $supplierManager = User::factory()->create();
+    Employee::factory()->create(['user_id' => $supplierManager->id])
+        ->branches()->attach($supplierBranchRow->id);
+
+    $r = $this->requisitions->submit($r, $this->requester);
+    $r = $this->requisitions->approve($r, $supplierManager);
+
+    expect($r->status)->toBe(RequisitionStatus::Approved);
+
+    $transfer = Transfer::find($r->fulfilling_transfer_id);
+    expect($transfer->source_location_id)->toBe($supplier->id)
+        ->and($transfer->destination_location_id)->toBe($this->branch->id);
+});
+
+it('will not let an unrelated branch sign away another branch stock', function () {
+    $supplier = Location::factory()->satellite()->create(['branch_id' => Branch::factory()->create()->id]);
+    $this->engine->post([
+        'item_id' => $this->item->id, 'location_id' => $supplier->id, 'quantity' => 60,
+        'movement_type' => 'purchase', 'unit_cost_at_time' => 5.0,
+        'idempotency_key' => 'peer-seed-2',
+    ]);
+
+    $r = $this->requisitions->create([
+        'requesting_location_id' => $this->branch->id,
+        'source_location_id' => $supplier->id,
+        'purpose' => 'supplementary',
+        'items' => [['item_id' => $this->item->id, 'requested_qty' => 12]],
+    ], $this->requester);
+    $r = $this->requisitions->submit($r, $this->requester);
+
+    // A manager at some third branch. Not the requester, so the old "cannot
+    // approve your own" guard let them straight through - and once a branch can
+    // be a source, that means signing away stock that is none of their business.
+    $outsiderBranch = Branch::factory()->create();
+    $outsider = User::factory()->create();
+    Employee::factory()->create(['user_id' => $outsider->id])
+        ->branches()->attach($outsiderBranch->id);
+
+    expect(fn () => $this->requisitions->approve($r->fresh(), $outsider))
+        ->toThrow(InventoryException::class, 'only someone there can approve it');
 });
