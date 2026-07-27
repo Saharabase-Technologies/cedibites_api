@@ -37,8 +37,28 @@ class ItemResource extends JsonResource
             'storage_type' => $this->storage_type,
             'is_consumable' => (bool) $this->is_consumable,
             'expiry_tracked' => (bool) $this->expiry_tracked,
+            // The item's own global figures. These stay global on purpose: the
+            // edit form prefills from them, and a branch saving a form that had
+            // been quietly filled with branch numbers would overwrite the
+            // company-wide setting.
             'reorder_level' => $this->reorder_level !== null ? (float) $this->reorder_level : null,
             'min_threshold' => $this->min_threshold !== null ? (float) $this->min_threshold : null,
+            /*
+             * The figures `stock_on_hand` should actually be judged against.
+             *
+             * `stock_on_hand` is scoped to the locations the viewer runs, but the
+             * thresholds were not, so a branch holding a day of cover was measured
+             * against a warehouse's reorder point and read Critical on nearly every
+             * line. Where the view is one location and that location sets its own
+             * threshold, this is that; otherwise it is the global figure.
+             */
+            'effective_reorder_level' => $this->effective_thresholds['reorder_level'] ?? (
+                $this->reorder_level !== null ? (float) $this->reorder_level : null
+            ),
+            'effective_min_threshold' => $this->effective_thresholds['min_threshold'] ?? (
+                $this->min_threshold !== null ? (float) $this->min_threshold : null
+            ),
+            'has_location_thresholds' => (bool) ($this->effective_thresholds['is_location_specific'] ?? false),
             // Option A - buy-in-packs-of (e.g. a "crate" of 30 pieces). Null when the
             // item is only ever bought in its base unit.
             'purchase_pack_label' => $this->purchase_pack_label,
