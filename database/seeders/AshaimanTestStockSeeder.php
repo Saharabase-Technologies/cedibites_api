@@ -25,11 +25,16 @@ use Illuminate\Support\Facades\DB;
  * is left alone - this seeder is not entitled to write off stock somebody
  * counted for real.
  *
+ * Safe to run on every deploy, including mid-service. After its first run of the
+ * day it tops up against the target it previously set rather than against the
+ * current balance, so a deploy at lunchtime cannot refill what the morning sold.
+ *
  * Negative balances are trued up to zero as a side effect, on the grounds that
  * no test should start from a position the warehouse would call impossible.
  *
- * The idempotency key carries the date: re-running today changes nothing,
- * running again tomorrow tops the branch back up.
+ * The idempotency key carries the date AND the target it was computed from:
+ * re-running today against unchanged recipes does nothing, re-running after the
+ * recipes grew tops up to the new figure, and tomorrow it refills from scratch.
  */
 class AshaimanTestStockSeeder extends Seeder
 {
@@ -109,7 +114,16 @@ class AshaimanTestStockSeeder extends Seeder
                 $units[$itemId] ?? null,
             );
 
-            $delta = round($target - $current, 4);
+            // What this seeder already promised the branch today. Topping up
+            // against the CURRENT balance would refill whatever the day's real
+            // sales consumed, which on a deploy mid-service would quietly undo
+            // the very depletion this exercise exists to observe. Against the
+            // previous target it only ever makes up a genuine increase.
+            $priorTarget = $this->targetSetToday($itemId, $location->id, $stamp);
+
+            $delta = $priorTarget === null
+                ? round($target - $current, 4)
+                : round($target - $priorTarget, 4);
 
             if ($delta <= 0) {
                 $skipped++;
@@ -125,7 +139,15 @@ class AshaimanTestStockSeeder extends Seeder
                 // A count does not reprice stock, so no cost is asserted; the
                 // weighted average is left exactly where it was.
                 'unit_cost_at_time' => null,
-                'idempotency_key' => "ashaiman-test-stock:{$stamp}:{$itemId}:{$location->id}",
+                // The target is part of the key, not just the date. Keyed on the
+                // date alone, a second run after the recipes changed would find
+                // the same key and silently no-op, leaving every shared
+                // ingredient short by the difference. This way an unchanged
+                // target is still a no-op and a raised one tops up to it.
+                'idempotency_key' => sprintf(
+                    'ashaiman-test-stock:%s:%d:%d:%s',
+                    $stamp, $itemId, $location->id, number_format($target, 4, '.', ''),
+                ),
             ]);
 
             $rows[] = sprintf(
@@ -185,6 +207,24 @@ class AshaimanTestStockSeeder extends Seeder
         }
 
         return $demand;
+    }
+
+    /**
+     * The highest figure this seeder has already topped this item up to today,
+     * read back off its own idempotency keys, or null if it has not run yet.
+     */
+    private function targetSetToday(int $itemId, int $locationId, string $stamp): ?float
+    {
+        $prefix = "ashaiman-test-stock:{$stamp}:{$itemId}:{$locationId}:";
+
+        $targets = DB::table('inventory_stock_movements')
+            ->where('location_id', $locationId)
+            ->where('item_id', $itemId)
+            ->where('idempotency_key', 'like', $prefix.'%')
+            ->pluck('idempotency_key')
+            ->map(fn ($key) => (float) substr($key, strlen($prefix)));
+
+        return $targets->isEmpty() ? null : (float) $targets->max();
     }
 
     /** Whole units where the unit is physically indivisible, 1 dp otherwise. */

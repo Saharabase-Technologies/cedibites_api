@@ -55,6 +55,10 @@ function ashaimanOption(int $branchId, int $optionId, string $itemName, string $
 {
     $item = MenuItem::factory()->create(['branch_id' => $branchId, 'name' => $itemName]);
 
+    // The factory auto-creates a "standard" option, which takes the next
+    // auto-increment id and would collide with a low explicit id below.
+    $item->options()->forceDelete();
+
     return MenuItemOption::factory()->create([
         'id' => $optionId,
         'menu_item_id' => $item->id,
@@ -96,6 +100,17 @@ it('states every quantity in the item base unit, because deduction does not conv
 
     expect((float) $line->quantity)->toBe(0.25)
         ->and($line->unit_id)->toBe($rice->base_unit_id);
+});
+
+it('matches a dish whose own name contains the separator', function () {
+    // A third of this menu is named like this. Comparing by splitting the
+    // expected label on its first " / " tears the name in half and refuses the
+    // dish as drifted - which is exactly what happened on the first prod run.
+    ashaimanOption($this->branch->id, 16, 'Fried Rice / Jollof Rice / Noodles + 3 Drumsticks', 'fried-rice');
+
+    (new AshaimanRecipeSeeder)->run();
+
+    expect(Recipe::where('menu_item_option_id', 16)->exists())->toBeTrue();
 });
 
 it('refuses to attach a recipe to an option that has drifted to another dish', function () {
@@ -198,6 +213,51 @@ it('trues a negative balance up to zero so the day does not start impossible', f
     (new AshaimanTestStockSeeder)->run();
 
     expect(ashaimanOnHand($stray->id, $location->id))->toBe(0.0);
+});
+
+it('tops up the difference when the recipes grew since the last run today', function () {
+    ashaimanOption($this->branch->id, 4, 'Fried Rice', 'plain');
+    $location = Location::factory()->satellite()->create(['branch_id' => $this->branch->id]);
+    $rice = Item::where('name', 'Parboiled Rice')->first();
+
+    (new AshaimanRecipeSeeder)->run();
+    (new AshaimanTestStockSeeder)->run();
+    expect(ashaimanOnHand($rice->id, $location->id))->toBe(0.9);
+
+    // A second dish is recipe'd later the same day - as happens when a first
+    // run only covered part of the menu. Demand doubles, and the second stock
+    // run must make up the difference rather than recognising a stale key.
+    ashaimanOption($this->branch->id, 1, 'Jollof Rice', 'plain');
+    (new AshaimanRecipeSeeder)->run();
+    (new AshaimanTestStockSeeder)->run();
+
+    // Two dishes at 0.25 each x 3 covers x 1.2 = 1.8
+    expect(ashaimanOnHand($rice->id, $location->id))->toBe(1.8);
+});
+
+it('does not refill what the day already sold when it runs again mid-service', function () {
+    ashaimanOption($this->branch->id, 4, 'Fried Rice', 'plain');
+    $location = Location::factory()->satellite()->create(['branch_id' => $this->branch->id]);
+    $rice = Item::where('name', 'Parboiled Rice')->first();
+
+    (new AshaimanRecipeSeeder)->run();
+    (new AshaimanTestStockSeeder)->run();
+
+    // Trading draws the branch down.
+    $this->engine->post([
+        'item_id' => $rice->id,
+        'location_id' => $location->id,
+        'quantity' => -0.6,
+        'movement_type' => 'sale',
+        'idempotency_key' => 'lunchtime-trade',
+    ]);
+
+    // A deploy at lunchtime re-runs the seeder. It must leave the depletion
+    // alone - refilling here would erase the evidence the whole exercise is
+    // meant to produce.
+    (new AshaimanTestStockSeeder)->run();
+
+    expect(ashaimanOnHand($rice->id, $location->id))->toBe(0.3);
 });
 
 it('is idempotent on the same day but tops up again on the next', function () {

@@ -34,6 +34,18 @@ jobs:
             # RoleSeeder (additive) cannot remove. Idempotent; safe to keep.
             php artisan db:seed --class=WarehouseManagerCleanup2Seeder --force
 
+            # Ashaiman recipes, then a day's cover for the branch. Order matters:
+            # the stock seeder derives its demand from the recipes.
+            #
+            # Both are safe on every deploy. The recipe seeder converges on one
+            # definition per option and refuses any option whose dish has since
+            # changed. The stock seeder only ever adds, and after its first run
+            # of the day it tops up against the target it previously set rather
+            # than the current balance — so a deploy mid-service cannot refill
+            # what the morning already sold.
+            php artisan db:seed --class=AshaimanRecipeSeeder --force
+            php artisan db:seed --class=AshaimanTestStockSeeder --force
+
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
