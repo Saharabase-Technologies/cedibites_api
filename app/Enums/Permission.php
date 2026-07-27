@@ -18,9 +18,20 @@ enum Permission: string
     case ViewMenu = 'view_menu';
     case ManageMenu = 'manage_menu';
 
+    // Menu — availability only. The branch manager's single menu power: flip a dish
+    // on or off at a branch he is assigned to when the kitchen runs out. Deliberately
+    // NOT price — the menu is one menu across every branch, and every price, including
+    // a per-branch one, is set by the Admin.
+    case MenuAvailabilityManage = 'menu.availability.manage';
+
     // Branch permissions
     case ViewBranches = 'view_branches';
     case ManageBranches = 'manage_branches';
+
+    // Branch — day-to-day operation of a branch you are assigned to: open/close,
+    // manual override, extended staff/order access. Split out of `manage_branches`,
+    // which now means creating and deleting branches and stays with the Admin.
+    case BranchOperate = 'branch.operate';
 
     // Customer permissions
     case ViewCustomers = 'view_customers';
@@ -29,6 +40,12 @@ enum Permission: string
     // Employee permissions
     case ViewEmployees = 'view_employees';
     case ManageEmployees = 'manage_employees';
+
+    // Employee — notes only. A branch manager keeps a running record on his own people
+    // (read, write, edit and delete his own notes) without any power over their access:
+    // no hiring, no role changes, no suspending. Authoring is enforced per note, so one
+    // manager cannot rewrite another's entry.
+    case EmployeeNotesManage = 'employee.notes.manage';
 
     // Analytics permissions
     case ViewAnalytics = 'view_analytics';

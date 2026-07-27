@@ -72,7 +72,25 @@ class RoleSeeder extends Seeder
             Permission::AccessPartnerPortal->value,
         ]);
 
-        // Create Manager role (branch operations)
+        // Create Manager role (branch operations).
+        // Scope: the manager runs a branch, he does not run the business. Every
+        // branch is the same institution behind a different till, so the menu, the
+        // prices and the staff roster are company-level and belong to the Admin. He
+        // keeps what running a shift actually needs — taking and advancing orders,
+        // flipping a dish off when the kitchen runs out, opening and closing his own
+        // branch, and a private record on his own people.
+        //
+        // Deliberately NOT granted:
+        //   ManageMenu      — one menu across every branch; editing it is company-wide.
+        //                     He gets MenuAvailabilityManage instead. Prices are Admin's.
+        //   ManageEmployees — no hiring, no role changes, no suspending access.
+        //                     He gets EmployeeNotesManage instead.
+        //   ManageBranches  — creating and deleting branches is Admin's.
+        //                     He gets BranchOperate for his own branch instead.
+        //   DeleteOrders    — a deleted order drops out of revenue. Cancellation
+        //                     already has a request-and-approve flow; he uses that.
+        // See ManagerScopeCleanupSeeder for revoking these on environments seeded
+        // before this scoping — addPermissions only ever adds.
         $manager = Role::updateOrCreate(
             ['name' => RoleEnum::Manager->value, 'guard_name' => 'api'],
             ['name' => RoleEnum::Manager->value, 'guard_name' => 'api']
@@ -81,15 +99,14 @@ class RoleSeeder extends Seeder
             Permission::ViewOrders->value,
             Permission::CreateOrders->value,
             Permission::UpdateOrders->value,
-            Permission::DeleteOrders->value,
             Permission::ViewMenu->value,
-            Permission::ManageMenu->value,
+            Permission::MenuAvailabilityManage->value,
             Permission::ViewBranches->value,
-            Permission::ManageBranches->value,
+            Permission::BranchOperate->value,
             Permission::ViewCustomers->value,
             Permission::ManageCustomers->value,
             Permission::ViewEmployees->value,
-            Permission::ManageEmployees->value,
+            Permission::EmployeeNotesManage->value,
             Permission::ViewAnalytics->value,
             Permission::AccessManagerPortal->value,
             Permission::AccessPos->value,

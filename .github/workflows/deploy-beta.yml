@@ -42,6 +42,12 @@ jobs:
             # Warehouse Manager Cleanup 2 — revokes the WM's stale grants that
             # RoleSeeder (additive) cannot remove. Idempotent; safe to keep.
             php artisan db:seed --class=WarehouseManagerCleanup2Seeder --force
+            # Manager Scope Cleanup — same reason: revokes manage_menu,
+            # manage_employees, manage_branches and delete_orders from the branch
+            # manager, on the role and on any manager holding them directly.
+            # manage_employees is what let a manager promote himself to tech_admin.
+            # Idempotent; safe to keep.
+            php artisan db:seed --class=ManagerScopeCleanupSeeder --force
 
             php artisan cache:clear
             php artisan route:clear
