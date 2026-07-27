@@ -69,6 +69,11 @@ class WastageResource extends JsonResource
                     'unit' => $line->relationLoaded('unit') && $line->unit ? $line->unit->symbol : null,
                 ] : null,
                 'quantity' => (float) $line->quantity,
+                // What the approver ALLOWED. Null until a decision is made, and
+                // deliberately kept apart from `quantity`: the gap between what
+                // a branch claims and what survives inspection is the record of
+                // how well they judge their own stock.
+                'approved_qty' => $line->approved_qty !== null ? (float) $line->approved_qty : null,
                 'unit_cost' => $line->unit_cost !== null ? (float) $line->unit_cost : null,
                 'line_value' => (float) $line->line_value,
                 'reason' => $line->reason->value,

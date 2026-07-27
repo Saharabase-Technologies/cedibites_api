@@ -102,14 +102,40 @@ class WastageController extends Controller
         });
     }
 
-    /** The approver has seen the goods and agrees the loss is real. */
+    /**
+     * Sign off a claim, in whole or in part.
+     *
+     * `approved_qty` is line_id => quantity allowed; anything omitted is allowed
+     * in full, so an unchanged client keeps behaving exactly as before. Partial
+     * approval is the point of returning the goods at all - 20 kg comes back,
+     * 10 kg turns out to be fine, and neither "write off everything" nor "call
+     * it a lie" is the truth.
+     */
     public function approve(Request $request, Wastage $wastage): JsonResponse
     {
-        return $this->guard(function () use ($wastage, $request) {
-            $updated = $this->service->approve($wastage, $request->user());
+        $data = $request->validate([
+            'approved_qty' => ['sometimes', 'array'],
+            'approved_qty.*' => ['numeric', 'min:0'],
+        ]);
+
+        return $this->guard(function () use ($wastage, $request, $data) {
+            $granted = collect($data['approved_qty'] ?? [])
+                ->mapWithKeys(fn ($qty, $lineId) => [(int) $lineId => (float) $qty])
+                ->all();
+
+            $updated = $this->service->approve($wastage, $request->user(), $granted);
             $this->broadcast($updated, 'approved');
 
-            return response()->success($this->fresh($updated), 'Wastage approved and written off.');
+            $partial = $updated->lines->contains(
+                fn ($l) => $l->approved_qty !== null && (float) $l->approved_qty < (float) $l->quantity
+            );
+
+            return response()->success(
+                $this->fresh($updated),
+                $partial
+                    ? 'Approved in part - only what you allowed has been written off.'
+                    : 'Wastage approved and written off.'
+            );
         });
     }
 

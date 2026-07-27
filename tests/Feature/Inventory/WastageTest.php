@@ -763,3 +763,103 @@ it('lets a self-approved claim still take the photographs of what was thrown awa
     expect(app(App\Services\Uploads\Handlers\WastageEvidenceHandler::class)
         ->canIssue($wastage->fresh(), $this->jesse))->toBeTrue();
 });
+
+/*
+ * ── Approving part of a claim ────────────────────────────────────────────────
+ *
+ * The reason the goods travel back at all is that somebody looks at them, and
+ * looking has three answers. A branch returns 20 kg calling it spoiled; the
+ * manager opens the crate and 10 kg are fine. Before this he could only write
+ * off all 20 or refuse all 20 - destroy good food on paper, or call an honest
+ * claim a lie.
+ */
+it('writes off only what the approver allowed, and leaves the rest in stock', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+    $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+
+    $return = Transfer::find($wastage->return_transfer_id);
+    $this->transfers->send($return->fresh('lines'), $this->jesse);
+    $this->transfers->receive($return->fresh('lines'), $this->wilfred);
+
+    $warehouseOnArrival = onHandAt($this->warehouse->id, $this->chicken->id);
+    $line = $wastage->fresh('lines')->lines->first();
+
+    // Half of it is perfectly good.
+    $settled = $this->wastages->approve($wastage->fresh(), $this->wilfred, [$line->id => 8]);
+
+    expect($settled->status)->toBe(WastageStatus::Approved);
+
+    $settledLine = $settled->lines->first();
+    expect((float) $settledLine->quantity)->toBe(20.0)      // what was CLAIMED, untouched
+        ->and((float) $settledLine->approved_qty)->toBe(8.0); // what was ALLOWED
+
+    // Only the allowed 8 leave the shelf; the other 12 stay in warehouse stock.
+    expect(onHandAt($this->warehouse->id, $this->chicken->id))->toBe($warehouseOnArrival - 8);
+
+    // And the claim is worth what was allowed, or every report overstates it.
+    expect((float) $settled->total_value)->toBe(round(8 * 70.0, 4));
+});
+
+it('refuses to write off more than was declared', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+    $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+
+    $return = Transfer::find($wastage->return_transfer_id);
+    $this->transfers->send($return->fresh('lines'), $this->jesse);
+    $this->transfers->receive($return->fresh('lines'), $this->wilfred);
+    $line = $wastage->fresh('lines')->lines->first();
+
+    expect(fn () => $this->wastages->approve($wastage->fresh(), $this->wilfred, [$line->id => 25]))
+        ->toThrow(InventoryException::class, 'more than was declared');
+});
+
+it('calls approving nothing what it is - a refusal', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+    $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+
+    $return = Transfer::find($wastage->return_transfer_id);
+    $this->transfers->send($return->fresh('lines'), $this->jesse);
+    $this->transfers->receive($return->fresh('lines'), $this->wilfred);
+    $line = $wastage->fresh('lines')->lines->first();
+
+    // An approval that writes off zero is a refusal wearing the wrong hat, and
+    // would leave no reason on the record for why nothing was allowed.
+    expect(fn () => $this->wastages->approve($wastage->fresh(), $this->wilfred, [$line->id => 0]))
+        ->toThrow(InventoryException::class, 'refusal rather than an approval');
+});
+
+it('still writes off everything when the approver says nothing', function () {
+    Storage::fake('public');
+
+    $wastage = $this->wastages->record([
+        'location_id' => $this->branch->id,
+        'lines' => [['item_id' => $this->chicken->id, 'quantity' => 20, 'reason' => WastageReason::Spoiled->value]],
+    ], $this->jesse);
+    $this->wastages->attachPhoto($wastage, UploadedFile::fake()->image('crate.jpg'), $this->jesse);
+
+    $return = Transfer::find($wastage->return_transfer_id);
+    $this->transfers->send($return->fresh('lines'), $this->jesse);
+    $this->transfers->receive($return->fresh('lines'), $this->wilfred);
+    $warehouseOnArrival = onHandAt($this->warehouse->id, $this->chicken->id);
+
+    // No per-line figures: the old behaviour, unchanged.
+    $settled = $this->wastages->approve($wastage->fresh(), $this->wilfred);
+
+    expect((float) $settled->lines->first()->approved_qty)->toBe(20.0)
+        ->and(onHandAt($this->warehouse->id, $this->chicken->id))->toBe($warehouseOnArrival - 20);
+});

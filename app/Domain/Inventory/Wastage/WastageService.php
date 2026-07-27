@@ -260,21 +260,103 @@ class WastageService
      * ledger - at the disposal location, because the branch's stock already left
      * on the return transfer.
      */
-    public function approve(Wastage $wastage, User $actor): Wastage
+    /**
+     * @param  array<int,float>  $approvedQty  line_id => quantity allowed. Omitted
+     *                                         lines are allowed in full.
+     *
+     * Partial approval is the reason the goods come back at all. *"So show me
+     * the food that has gone bad."* Looking has three answers, and there were
+     * only two buttons: a branch returns 20 kg claiming spoilage, the manager
+     * opens the crate and 10 kg are fine. He had to write off all 20 or refuse
+     * all 20 - destroy good food on paper, or call an honest claim a lie.
+     *
+     * What the branch DECLARED stays on the line untouched; what was allowed is
+     * recorded beside it. The gap between the two is the record of how well a
+     * branch judges its own stock.
+     *
+     * Goods not written off simply stay where they physically are - warehouse
+     * stock, having arrived on the return transfer. They are not conjured back
+     * to the branch. If the branch wants them, it requisitions them, which is
+     * the honest way for them to travel and be accounted for.
+     */
+    public function approve(Wastage $wastage, User $actor, array $approvedQty = []): Wastage
     {
         $this->assertDecidable($wastage, $actor);
         $this->assertEvidenced($wastage);
 
-        return DB::transaction(function () use ($wastage, $actor) {
+        $wastage->loadMissing('lines');
+
+        // Validate before anything is written, so a bad number cannot half-apply.
+        foreach ($wastage->lines as $line) {
+            if (! array_key_exists($line->id, $approvedQty)) {
+                continue;
+            }
+            $granted = round((float) $approvedQty[$line->id], 4);
+
+            if ($granted < 0) {
+                throw new InventoryException('An approved quantity cannot be negative.');
+            }
+            if ($granted > (float) $line->quantity) {
+                throw new InventoryException(
+                    'You cannot write off more than was declared: the claim says '
+                    .rtrim(rtrim((string) (float) $line->quantity, '0'), '.').', not '
+                    .rtrim(rtrim((string) $granted, '0'), '.').'.'
+                );
+            }
+        }
+
+        $totalGranted = 0.0;
+        foreach ($wastage->lines as $line) {
+            $totalGranted += array_key_exists($line->id, $approvedQty)
+                ? round((float) $approvedQty[$line->id], 4)
+                : (float) $line->quantity;
+        }
+
+        // Allowing nothing is a refusal, and should be recorded as one rather
+        // than as an approval that happens to write off zero.
+        if ($totalGranted <= 0) {
+            throw new InventoryException(
+                'Nothing is being written off, so this is a refusal rather than an approval. '
+                .'Refuse the claim and say why.'
+            );
+        }
+
+        return DB::transaction(function () use ($wastage, $actor, $approvedQty) {
+            foreach ($wastage->lines as $line) {
+                $line->approved_qty = array_key_exists($line->id, $approvedQty)
+                    ? round((float) $approvedQty[$line->id], 4)
+                    : (float) $line->quantity;
+                $line->save();
+            }
+
             $wastage->status = WastageStatus::Approved;
             $wastage->approved_by = $actor->id;
             $wastage->approved_at = now();
             $wastage->save();
 
-            $this->postWriteOff($wastage, $actor);
+            $this->postWriteOff($wastage->fresh(['lines']), $actor);
+
+            // The claim is now worth what was allowed, not what was asked for -
+            // otherwise every wastage report overstates the loss.
+            $this->revalueFromApproved($wastage->fresh(['lines']));
 
             return $wastage->fresh(['lines']);
         });
+    }
+
+    /** Re-total a claim against the approved quantities. */
+    private function revalueFromApproved(Wastage $wastage): void
+    {
+        $total = 0.0;
+        foreach ($wastage->lines as $line) {
+            $qty = $line->approved_qty !== null ? (float) $line->approved_qty : (float) $line->quantity;
+            $value = round($qty * (float) ($line->unit_cost ?? 0), 4);
+            $line->line_value = $value;
+            $line->save();
+            $total += $value;
+        }
+        $wastage->total_value = round($total, 4);
+        $wastage->save();
     }
 
     /**
@@ -570,7 +652,10 @@ class WastageService
 
         foreach ($wastage->lines as $line) {
             $itemId = (int) $line->item_id;
-            $qty = (float) $line->quantity;
+            // What the approver allowed, falling back to the declared amount for
+            // claims that never went through a decision (self-approved, or
+            // settled before partial approval existed).
+            $qty = $line->approved_qty !== null ? (float) $line->approved_qty : (float) $line->quantity;
             if ($qty <= 0) {
                 continue;
             }

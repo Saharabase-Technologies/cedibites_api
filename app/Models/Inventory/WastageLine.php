@@ -15,6 +15,8 @@ class WastageLine extends Model
         'item_id',
         'unit_id',
         'quantity',
+        // What the approver allowed. Null = all of it. See the migration.
+        'approved_qty',
         'unit_cost',
         'line_value',
         'reason',
@@ -47,6 +49,7 @@ class WastageLine extends Model
         return [
             'reason' => WastageReason::class,
             'quantity' => 'float',
+            'approved_qty' => 'float',
             'unit_cost' => 'float',
             'line_value' => 'float',
         ];

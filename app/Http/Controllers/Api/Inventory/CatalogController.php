@@ -337,12 +337,26 @@ class CatalogController extends Controller
 
     public function locations(Request $request): JsonResponse
     {
-        // Confine the list to what the caller can actually act on. Warehouses stay
-        // visible to everyone: a branch has to be able to name the warehouse it is
-        // requesting stock from, and it is a counterparty on every transfer in.
-        // Without this, branch pickers offered locations whose records the user
-        // would then 404 on.
-        $accessible = $request->user()?->accessibleLocationIds();
+        /*
+         * Confine the list to what the caller can actually act on. Warehouses
+         * stay visible to everyone: a branch has to be able to name the
+         * warehouse it is requesting stock from. Without this, branch pickers
+         * offered locations whose records the user would then 404 on.
+         *
+         * `counterparties=1` opts out, and exists because a branch can now
+         * requisition from ANOTHER BRANCH - Ashaiman having a surplus that Test
+         * Branch needs. The narrow list made that impossible to express: the
+         * picker could only ever offer the mother kitchen, so the feature
+         * looked unbuilt.
+         *
+         * Safe to widen for this purpose. A location's name and type are not
+         * secrets; the scoping is about not offering pickers that dead-end on
+         * records you cannot read, and naming a counterparty does not read
+         * anything. Stock figures stay scoped separately - see itemStockScope().
+         */
+        $accessible = $request->boolean('counterparties')
+            ? null
+            : $request->user()?->accessibleLocationIds();
 
         $locations = Location::query()
             ->with('branch')
