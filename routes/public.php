@@ -25,7 +25,21 @@ Route::get('menu-items', [MenuItemController::class, 'index']);
 Route::get('menu-items/{menuItem}', [MenuItemController::class, 'show']);
 Route::get('smart-categories', [SmartCategoryController::class, 'index']);
 Route::get('media/{media}/{conversion?}', MediaController::class)->name('media.show');
-Route::get('orders/by-number/{orderNumber}', [OrderController::class, 'showByNumber']);
+// Guest order tracking. Deliberately unauthenticated: this is where the payment
+// gateway redirects a guest after they pay, and they have no account to log into.
+//
+// Order numbers are sequential and guessable (A001, A002 … B001 — see
+// OrderNumberService), so without a limit anyone could walk the whole order
+// history and read off each branch's daily volume. The response carries no
+// customer name, phone or address, so the exposure is what was ordered rather
+// than who ordered it — but the enumeration itself is the problem, and throttling
+// takes it from trivial to impractical.
+//
+// A per-order tracking token in the URL would close this properly. That is a
+// contract change across checkout, the receipt and the gateway redirect, so it is
+// tracked in docs/BRANCH_ISOLATION_PLAN.md rather than done here.
+Route::get('orders/by-number/{orderNumber}', [OrderController::class, 'showByNumber'])
+    ->middleware('throttle:20,1');
 Route::post('promos/resolve', [PromoController::class, 'resolve']);
 
 // Public checkout config (service charge settings for frontend display)

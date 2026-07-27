@@ -42,14 +42,29 @@ class BranchController extends Controller
             ->when($request->area, fn ($query, $area) => $query->where('area', $area))
             ->get();
 
-        // Add today's stats to each branch — uses canonical revenue definition
-        $branchesWithStats = $branches->map(function ($branch) {
-            $stats = $this->analyticsService->getBranchTodayStats($branch->id);
+        // Today's takings are attached only for staff who may see figures for that
+        // branch. This endpoint is also served unauthenticated (routes/public.php)
+        // so customers can pick a branch, and it was handing every passer-by the
+        // day's revenue for every outlet. Menu, hours and address are meant to be
+        // public; the money is not.
+        $user = $request->user();
+        $canSeeFigures = $user?->can('view_analytics') ?? false;
+        $isAdmin = $user?->hasAnyRole(['admin', 'tech_admin']) ?? false;
+        $assignedBranchIds = $isAdmin
+            ? null
+            : ($user?->employee?->branches()->pluck('branches.id')->map(fn ($id) => (int) $id)->all() ?? []);
 
-            $resource = new BranchResource($branch);
-            $data = $resource->toArray(request());
-            $data['today_orders'] = $stats['orders_today'];
-            $data['today_revenue'] = $stats['revenue_today'];
+        $branchesWithStats = $branches->map(function ($branch) use ($canSeeFigures, $assignedBranchIds) {
+            $data = (new BranchResource($branch))->toArray(request());
+
+            $maySeeThisBranch = $canSeeFigures
+                && ($assignedBranchIds === null || in_array((int) $branch->id, $assignedBranchIds, true));
+
+            if ($maySeeThisBranch) {
+                $stats = $this->analyticsService->getBranchTodayStats($branch->id);
+                $data['today_orders'] = $stats['orders_today'];
+                $data['today_revenue'] = $stats['revenue_today'];
+            }
 
             return $data;
         });

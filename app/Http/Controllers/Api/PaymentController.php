@@ -19,11 +19,36 @@ class PaymentController extends Controller
     ) {}
 
     /**
+     * The branches this caller may see payments for. `null` means every branch
+     * and is reserved for admin and tech_admin; an empty array means the caller
+     * is confined to nothing and must see no rows rather than all of them.
+     *
+     * @return list<int>|null
+     */
+    private function assignedBranchIds(Request $request): ?array
+    {
+        $user = $request->user();
+
+        if ($user?->hasAnyRole(['admin', 'tech_admin'])) {
+            return null;
+        }
+
+        return $user?->employee
+            ? $user->employee->branches()->pluck('branches.id')->map(fn ($id) => (int) $id)->all()
+            : [];
+    }
+
+    /**
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
     {
         $query = Payment::with(['order.customer.user']);
+
+        $assigned = $this->assignedBranchIds($request);
+        if ($assigned !== null) {
+            $query->whereHas('order', fn ($q) => $q->whereIn('branch_id', $assigned ?: [-1]));
+        }
 
         if ($request->has('payment_status')) {
             $query->where('payments.payment_status', $request->payment_status);
@@ -64,6 +89,19 @@ class PaymentController extends Controller
             'date_to' => $request->input('date_to'),
         ]);
 
+        // Confine a non-admin to their own branches, intersecting whatever they
+        // asked for so a crafted branch_id cannot widen the scope.
+        $assigned = $this->assignedBranchIds($request);
+        if ($assigned !== null) {
+            $requested = isset($filters['branch_id']) ? [(int) $filters['branch_id']] : [];
+            $allowed = empty($requested)
+                ? $assigned
+                : array_values(array_intersect($requested, $assigned));
+
+            unset($filters['branch_id']);
+            $filters['branch_ids'] = empty($allowed) ? [-1] : $allowed;
+        }
+
         $stats = $this->analyticsService->getPaymentStats($filters);
 
         return response()->success($stats, 'Payment stats retrieved successfully.');
@@ -72,8 +110,13 @@ class PaymentController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Payment $payment): JsonResponse
+    public function show(Request $request, Payment $payment): JsonResponse
     {
+        $assigned = $this->assignedBranchIds($request);
+        if ($assigned !== null && ! in_array((int) $payment->order?->branch_id, $assigned, true)) {
+            return response()->error('Payment not found.', 404);
+        }
+
         return response()->success(
             new PaymentResource($payment->load(['order.customer.user'])),
             'Payment retrieved successfully.'

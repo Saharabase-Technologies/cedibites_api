@@ -20,7 +20,9 @@ use App\Http\Controllers\Api\RoleController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('admin')->group(function () {
-    Route::middleware('permission:view_orders')->group(function () {
+    // Same reasoning as analytics below: the dashboard is revenue and live orders
+    // across every branch, which is a reporting surface, not an order-handling one.
+    Route::middleware('permission:view_analytics')->group(function () {
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
     });
 
@@ -30,8 +32,17 @@ Route::prefix('admin')->group(function () {
         Route::get('employees/{employee}', [EmployeeController::class, 'show']);
     });
 
-    Route::middleware('permission:view_employees')->group(function () {
+    // Staff notes are the branch manager's one remaining power over his people:
+    // a private running record, with no ability to hire, change a role, or
+    // suspend anyone's access. Gated on `employee.notes.manage` rather than
+    // `manage_employees` so the manager keeps this while losing the rest, and
+    // scoped in the controller to employees who share one of his branches.
+    // Editing and deleting are restricted to the note's own author.
+    Route::middleware('permission:employee.notes.manage')->group(function () {
         Route::get('employees/{employee}/notes', [EmployeeController::class, 'notes']);
+        Route::post('employees/{employee}/notes', [EmployeeController::class, 'addNote']);
+        Route::patch('employees/{employee}/notes/{note}', [EmployeeController::class, 'updateNote']);
+        Route::delete('employees/{employee}/notes/{note}', [EmployeeController::class, 'deleteNote']);
     });
 
     Route::middleware('permission:manage_employees')->group(function () {
@@ -40,17 +51,25 @@ Route::prefix('admin')->group(function () {
         Route::delete('employees/{employee}', [EmployeeController::class, 'destroy']);
         Route::post('employees/{employee}/force-logout', [EmployeeController::class, 'forceLogout']);
         Route::post('employees/{employee}/require-password-reset', [EmployeeController::class, 'requirePasswordReset']);
-        Route::post('employees/{employee}/notes', [EmployeeController::class, 'addNote']);
-        Route::delete('employees/{employee}/notes/{note}', [EmployeeController::class, 'deleteNote']);
 
         // Role and permission endpoints for staff management
         Route::get('roles', [RoleController::class, 'index']);
         Route::get('permissions', [RoleController::class, 'permissions']);
     });
 
+    // Bulk contact export is the whole customer database in one call — name and
+    // phone for every registered customer and every guest who ever ordered. That
+    // is an admin act, not a `view_customers` one: sales staff, call centre,
+    // riders, managers and partners all hold `view_customers` so they can look a
+    // caller up, and none of them should be able to walk out with the list.
+    // Declared before the `{customer}` routes below so it is not swallowed by the
+    // wildcard.
+    Route::middleware('role:admin|tech_admin')->group(function () {
+        Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
+    });
+
     Route::middleware('permission:view_customers')->group(function () {
         Route::get('customers', [CustomerController::class, 'index']);
-        Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
         Route::get('customers/{customer}', [CustomerController::class, 'show']);
         Route::get('customers/{customer}/orders', [CustomerController::class, 'orders']);
     });
@@ -115,7 +134,12 @@ Route::prefix('admin')->group(function () {
         Route::post('smart-categories/{smartCategorySetting}/reset', [SmartCategorySettingController::class, 'resetToDefault']);
     });
 
-    Route::middleware('permission:view_orders')->group(function () {
+    // Payments are financial reporting, not order handling. `view_orders` is held
+    // by every staff role including the cashier, so gating on it put the whole
+    // company's payment ledger behind a till login. `view_analytics` is the
+    // permission that was always meant for this — admin, tech_admin, manager and
+    // branch partner. The controller scopes the rows to the caller's branches.
+    Route::middleware('permission:view_analytics')->group(function () {
         Route::get('payments', [PaymentController::class, 'index']);
         Route::get('payments/stats', [PaymentController::class, 'stats']);
         Route::get('payments/{payment}', [PaymentController::class, 'show']);
@@ -130,7 +154,14 @@ Route::prefix('admin')->group(function () {
         Route::get('activity-logs/causers', [ActivityLogController::class, 'causers']);
     });
 
-    Route::middleware('permission:view_orders')->group(function () {
+    // Analytics and reports are gated on `view_analytics`, NOT `view_orders`.
+    // `view_orders` is held by sales staff, kitchen, riders and call centre, so
+    // gating these on it meant any till login could pull company-wide revenue,
+    // every colleague's sales figures and the branch league table. The correct
+    // permission already existed and was already granted to exactly the right
+    // roles — it just was not being used anywhere. AdminAnalyticsController
+    // confines every figure to the caller's own branches on top of this.
+    Route::middleware('permission:view_analytics')->group(function () {
         Route::prefix('analytics')->group(function () {
             Route::get('sales', [AdminAnalyticsController::class, 'sales']);
             Route::get('sales-comparison', [AdminAnalyticsController::class, 'salesComparison']);

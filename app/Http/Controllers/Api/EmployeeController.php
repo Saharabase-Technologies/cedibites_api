@@ -27,11 +27,13 @@ class EmployeeController extends Controller
     {
         $query = Employee::with(['user.roles.permissions', 'user.permissions', 'branches']);
 
-        // Branch partners may only list employees from their assigned branches,
-        // regardless of any branch_id passed in the request.
+        // Nobody below Admin lists staff from a branch they are not assigned to,
+        // regardless of any branch_id passed in the request. This used to guard
+        // branch partners alone, which left a manager reading the entire company
+        // roster — names, phones and HR records included.
         $user = $request->user();
-        if ($user && $user->hasRole('branch_partner')) {
-            $assigned = $user->employee
+        if (! $user?->hasAnyRole(['admin', 'tech_admin'])) {
+            $assigned = $user?->employee
                 ? $user->employee->branches()->pluck('branches.id')->all()
                 : [];
             $query->whereHas('branches', function ($q) use ($assigned) {
@@ -375,8 +377,36 @@ class EmployeeController extends Controller
     /**
      * List notes for an employee.
      */
-    public function notes(Employee $employee): JsonResponse
+    /**
+     * Whether the caller may keep notes on this particular employee.
+     *
+     * A manager's one remaining power over staff is the record he keeps on his
+     * own people — so the target has to actually be one of his people. Admins
+     * sit above the branch structure and may note anyone.
+     */
+    private function sharesBranchWith(Request $request, Employee $employee): bool
     {
+        $user = $request->user();
+
+        if ($user?->hasAnyRole(['admin', 'tech_admin'])) {
+            return true;
+        }
+
+        $mine = $user?->employee?->branches()->pluck('branches.id');
+
+        if (! $mine || $mine->isEmpty()) {
+            return false;
+        }
+
+        return $employee->branches()->whereIn('branches.id', $mine)->exists();
+    }
+
+    public function notes(Request $request, Employee $employee): JsonResponse
+    {
+        if (! $this->sharesBranchWith($request, $employee)) {
+            return response()->error('Employee not found.', 404);
+        }
+
         $notes = $employee->notes()
             ->with('author:id,name')
             ->latest()
@@ -397,6 +427,10 @@ class EmployeeController extends Controller
      */
     public function addNote(Request $request, Employee $employee): JsonResponse
     {
+        if (! $this->sharesBranchWith($request, $employee)) {
+            return response()->error('Employee not found.', 404);
+        }
+
         $request->validate([
             'content' => ['required', 'string', 'max:2000'],
         ]);
@@ -408,27 +442,79 @@ class EmployeeController extends Controller
 
         $note->load('author:id,name');
 
+        // setStatusCode rather than a third argument: response()->success() takes
+        // only ($data, $message), so the 201 that used to be passed here was
+        // silently dropped and this returned 200 for a creation.
         return response()->success([
             'id' => $note->id,
             'content' => $note->content,
             'author' => $note->author->name,
             'created_at' => $note->created_at->toISOString(),
             'is_own' => true,
-        ], 'Note added.', 201);
+        ], 'Note added.')->setStatusCode(201);
+    }
+
+    /**
+     * Edit a note. Only its author, and only on an employee at your own branch.
+     *
+     * A note is one person's record of what they observed. Letting a second
+     * manager rewrite it would make the record worthless as a record.
+     */
+    public function updateNote(Request $request, Employee $employee, EmployeeNote $note): JsonResponse
+    {
+        if (! $this->sharesBranchWith($request, $employee)) {
+            return response()->error('Employee not found.', 404);
+        }
+
+        if ($note->employee_id !== $employee->id) {
+            return response()->error('Note does not belong to this employee.', 404);
+        }
+
+        if ($note->author_id !== $request->user()->id) {
+            return response()->forbidden('You can only edit your own notes.');
+        }
+
+        $request->validate([
+            'content' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $note->update(['content' => $request->content]);
+        $note->load('author:id,name');
+
+        return response()->success([
+            'id' => $note->id,
+            'content' => $note->content,
+            'author' => $note->author->name,
+            'created_at' => $note->created_at->toISOString(),
+            'updated_at' => $note->updated_at->toISOString(),
+            'is_own' => true,
+        ], 'Note updated.');
     }
 
     /**
      * Delete a note (only the author can delete their own notes).
      */
-    public function deleteNote(Employee $employee, EmployeeNote $note): JsonResponse
+    public function deleteNote(Request $request, Employee $employee, EmployeeNote $note): JsonResponse
     {
+        if (! $this->sharesBranchWith($request, $employee)) {
+            return response()->error('Employee not found.', 404);
+        }
+
         if ($note->employee_id !== $employee->id) {
             return response()->error('Note does not belong to this employee.', 404);
         }
 
-        if ($note->author_id !== request()->user()->id) {
+        if ($note->author_id !== $request->user()->id) {
             return response()->forbidden('You can only delete your own notes.');
         }
+
+        // Logged so the record of who removed what survives the note itself.
+        activity('admin')
+            ->causedBy($request->user())
+            ->performedOn($employee)
+            ->event('employee_note_deleted')
+            ->withProperties(['employee_name' => $employee->user->name ?? null])
+            ->log('Staff note deleted');
 
         $note->delete();
 

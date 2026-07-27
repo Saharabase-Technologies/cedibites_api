@@ -29,8 +29,20 @@ class EnsureBranchAccess
 
         $branch = $request->route('branch');
 
+        // Fail closed. This middleware only knows how to check a route that binds
+        // a {branch}; on any other route it has nothing to compare and cannot
+        // honestly say the caller is allowed. Waving those through made the
+        // middleware look like it was guarding routes it was doing nothing for —
+        // put it on /employees/{employee} or /orders/{order} and it passed
+        // everything. Refusing loudly means a misapplied guard shows up as a 500
+        // in testing rather than as an open door in production.
         if (! $branch instanceof Branch) {
-            return $next($request);
+            \Log::error('branch.access applied to a route with no {branch} binding', [
+                'route' => $request->route()?->uri(),
+                'user_id' => $user->id,
+            ]);
+
+            return response()->json(['message' => 'You do not have access to this branch.'], 403);
         }
 
         $employee = $user->employee;

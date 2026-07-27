@@ -23,9 +23,20 @@ class AdminDashboardController extends Controller
     {
         $user = $request->user();
 
+        // Admins sit above the branch structure; everyone else sees only the
+        // branches they are assigned to. Without this the dashboard handed out
+        // today's revenue for every branch plus the last ten live orders
+        // company-wide to anyone who could open it.
+        $isAdmin = $user?->hasAnyRole(['admin', 'tech_admin']) ?? false;
+        $assignedBranchIds = $isAdmin
+            ? null
+            : ($user?->employee?->branches()->pluck('branches.id')->all() ?? []);
+
         $kpis = $this->analyticsService->getDashboardMetrics();
 
-        $activeBranches = Branch::where('is_active', true)->get();
+        $activeBranches = Branch::where('is_active', true)
+            ->when($assignedBranchIds !== null, fn ($q) => $q->whereIn('id', $assignedBranchIds ?: [-1]))
+            ->get();
         $branchStats = $this->analyticsService->getBranchTodayStatsBulk(
             $activeBranches->pluck('id')->all()
         );
@@ -44,6 +55,7 @@ class AdminDashboardController extends Controller
         $liveOrders = Order::with(['customer.user', 'branch', 'assignedEmployee.user'])
             ->paymentConfirmed()
             ->whereIn('status', AnalyticsQueryBuilder::ACTIVE_STATUSES)
+            ->when($assignedBranchIds !== null, fn ($q) => $q->whereIn('branch_id', $assignedBranchIds ?: [-1]))
             ->latest()
             ->limit(10)
             ->get();

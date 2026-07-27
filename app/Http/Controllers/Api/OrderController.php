@@ -28,6 +28,38 @@ class OrderController extends Controller
     }
 
     /**
+     * Whether this user is allowed to see or touch this particular order.
+     *
+     * An order belongs to two people: the customer who placed it, and the branch
+     * that has to make it. Everyone else is a stranger to it — including staff at
+     * another branch, who have no reason to read a stranger's name, phone and
+     * delivery address.
+     *
+     * Admins sit above the branch structure and see everything.
+     */
+    private function canAccessOrder(?User $user, Order $order): bool
+    {
+        if (! $user) {
+            return false;
+        }
+
+        if ($user->hasAnyRole([Role::Admin, Role::TechAdmin])) {
+            return true;
+        }
+
+        // The customer who placed it.
+        if ($user->customer && (int) $order->customer_id === (int) $user->customer->id) {
+            return true;
+        }
+
+        // Staff at the branch that owns it.
+        return $user->employee
+            ?->branches()
+            ->where('branches.id', $order->branch_id)
+            ->exists() ?? false;
+    }
+
+    /**
      * Normalise a Ghana phone number to +233XXXXXXXXX format so that
      * "0539157613" and "+233539157613" resolve to the same user record.
      */
@@ -302,8 +334,13 @@ class OrderController extends Controller
     }
 
     /**
-     * Get orders for kitchen display (public, no auth required).
-     * Returns orders in kitchen-relevant statuses: received, accepted, preparing, ready.
+     * Kitchen display feed. Orders in kitchen-relevant statuses: received,
+     * accepted, preparing, ready.
+     *
+     * Requires `access_kitchen` (see routes/protected.php). Authenticated
+     * employees see only their own branches, and an out-of-scope `branch_id`
+     * is refused rather than quietly honoured — a kitchen has no business
+     * watching another branch's tickets. Mirrors orderManagerOrders() above.
      */
     public function kitchenOrders(Request $request): JsonResponse
     {
@@ -314,20 +351,36 @@ class OrderController extends Controller
             ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
 
-        if ($branchId) {
-            $query->where('branch_id', $branchId);
+        $user = $request->user();
+        $employee = $user?->employee;
+
+        if ($employee && ! $user->hasAnyRole([Role::Admin, Role::TechAdmin])) {
+            $allowed = $employee->branches()->pluck('branches.id');
+            $query->whereIn('branch_id', $allowed);
+
+            if ($branchId !== null && $branchId !== '') {
+                $bid = (int) $branchId;
+                if (! $allowed->contains($bid)) {
+                    return response()->json(['message' => 'You cannot view orders for this branch.'], 403);
+                }
+                $query->where('branch_id', $bid);
+            }
+        } elseif ($branchId !== null && $branchId !== '') {
+            $query->where('branch_id', (int) $branchId);
         }
 
-        $orders = $query->get();
-
-        return response()->success(OrderResource::collection($orders));
+        return response()->success(OrderResource::collection($query->get()));
     }
 
     /**
      * Display the specified resource.
      */
-    public function show(Order $order): JsonResponse
+    public function show(Request $request, Order $order): JsonResponse
     {
+        if (! $this->canAccessOrder($request->user(), $order)) {
+            return response()->error('Order not found.', 404);
+        }
+
         $order->load(['customer.user', 'branch', 'items.menuItem', 'statusHistory', 'payments']);
 
         return response()->success(new OrderResource($order));
@@ -338,6 +391,10 @@ class OrderController extends Controller
      */
     public function update(UpdateOrderRequest $request, Order $order): JsonResponse
     {
+        if (! $this->canAccessOrder($request->user(), $order)) {
+            return response()->error('You can only update orders from your branch.', 403);
+        }
+
         try {
             $order->update($request->validated());
 
@@ -354,8 +411,12 @@ class OrderController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Order $order): JsonResponse
+    public function destroy(Request $request, Order $order): JsonResponse
     {
+        if (! $this->canAccessOrder($request->user(), $order)) {
+            return response()->error('You can only delete orders from your branch.', 403);
+        }
+
         try {
             $order->delete();
 

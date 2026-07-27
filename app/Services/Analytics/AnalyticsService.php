@@ -601,6 +601,12 @@ class AnalyticsService
             $query->where('orders.branch_id', $filters['branch_id']);
         }
 
+        // Callers that confine a non-admin to their assignment pass the resolved
+        // set here rather than a single id.
+        if (isset($filters['branch_ids'])) {
+            $query->whereIn('orders.branch_id', $filters['branch_ids']);
+        }
+
         if (isset($filters['date_from'])) {
             $query->whereDate('payments.created_at', '>=', $filters['date_from']);
         }
