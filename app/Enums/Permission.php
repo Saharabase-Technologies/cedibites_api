@@ -143,6 +143,13 @@ enum Permission: string
     case InventoryReportView = 'inventory.report.view';
     case InventorySettingsManage = 'inventory.settings.manage';
 
+    // Inventory — sell past the stock gate.
+    // No stock, no sale is the rule; this is the exception for when the ledger
+    // is wrong rather than the shelf empty (a delivery arrived and has not been
+    // recorded yet). Every use is logged with who and why. Deliberately NOT a
+    // cashier's to hold — an override anyone can reach is not a rule.
+    case InventoryStockGateOverride = 'inventory.stock_gate.override';
+
     // Inventory — visibility scope.
     // Absent this, a user's inventory reads are confined to the locations
     // belonging to their assigned branches (see User::accessibleLocationIds).
