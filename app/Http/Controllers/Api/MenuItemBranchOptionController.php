@@ -47,6 +47,7 @@ class MenuItemBranchOptionController extends Controller
     {
         $branches = $request->validated('branches');
         $updated = [];
+        $skipped = [];
 
         foreach ($branches as $branchId => $payload) {
             $branchId = (int) $branchId;
@@ -55,7 +56,14 @@ class MenuItemBranchOptionController extends Controller
                 ->where('slug', $menuItem->slug)
                 ->first();
 
+            // No sibling row means this dish does not exist at that branch at
+            // all, so there is nothing to override. Recorded rather than skipped
+            // in silence: this used to `continue`, which let the editor report a
+            // successful save while writing nothing — the exact symptom of a
+            // branch that was never given a copy of the menu.
             if (! $sibling) {
+                $skipped[] = $branchId;
+
                 continue;
             }
 
@@ -86,8 +94,17 @@ class MenuItemBranchOptionController extends Controller
             }
         }
 
+        $message = 'Branch options synced.';
+
+        if ($skipped !== []) {
+            $names = \App\Models\Branch::whereIn('id', $skipped)->pluck('name')->all();
+            $message .= ' Skipped '.count($skipped).' branch(es) where this item does not exist: '
+                .implode(', ', $names ?: array_map('strval', $skipped)).'.';
+        }
+
         return response()->success([
             'updated_option_ids' => array_values(array_unique($updated)),
-        ], 'Branch options synced.');
+            'skipped_branch_ids' => $skipped,
+        ], $message);
     }
 }

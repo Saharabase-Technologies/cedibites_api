@@ -14,6 +14,7 @@ use App\Models\Order;
 use App\Notifications\BranchManagerAssignedNotification;
 use App\Notifications\BranchManagerRemovedNotification;
 use App\Services\Analytics\AnalyticsService;
+use App\Services\BranchProvisioningService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -166,6 +167,12 @@ class BranchController extends Controller
                     ]);
                 }
             }
+
+            // Give the branch its inventory location. Without one its manager
+            // cannot see stock at all, and its sales silently debit the mother
+            // kitchen instead. Inside the transaction so a branch is never
+            // created half-provisioned.
+            app(BranchProvisioningService::class)->provision($branch);
 
             \DB::commit();
 

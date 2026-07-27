@@ -181,9 +181,13 @@ class RecipeDeductionService
 
     /**
      * The location a sale is deducted from: the order's branch (now that branch
-     * stock exists via transfers/requisitions). Falls back to the warehouse when
-     * the branch has no inventory location mapped yet, so nothing silently stops
-     * deducting during the roll-out.
+     * stock exists via transfers/requisitions).
+     *
+     * A branch with no inventory location still falls back to the warehouse, so
+     * a roll-out never stops deducting — but it raises a critical alert while it
+     * does. The fallback means the branch's sales eat the mother kitchen's
+     * stock: neither figure is then true, and the longer it goes unnoticed the
+     * less the ledger is worth. It used to be a Log::info nobody reads.
      */
     private function resolveDeductionLocation(Order $order): ?Location
     {
@@ -198,9 +202,24 @@ class RecipeDeductionService
                 return $branchLocation;
             }
 
-            Log::info('Recipe deduction: branch has no inventory location, falling back to warehouse.', [
-                'order_id' => $order->id, 'branch_id' => $order->branch_id,
+            $fallback = $this->warehouseLocation();
+
+            Log::warning('Recipe deduction: branch has no inventory location, falling back to warehouse.', [
+                'order_id' => $order->id,
+                'branch_id' => $order->branch_id,
+                'fallback_location_id' => $fallback?->id,
             ]);
+
+            if ($fallback) {
+                Alert::raiseMisroutedDeduction(
+                    (int) $order->branch_id,
+                    $order->branch?->name ?? "Branch #{$order->branch_id}",
+                    $fallback,
+                    $order->id,
+                );
+            }
+
+            return $fallback;
         }
 
         return $this->warehouseLocation();

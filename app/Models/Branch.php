@@ -73,6 +73,17 @@ class Branch extends Model
     }
 
     /**
+     * The IMS location(s) holding this branch's stock. Normally exactly one
+     * satellite; a branch with none cannot be seen in the inventory portal and
+     * its sales fall back to debiting the mother kitchen, so
+     * BranchProvisioningService creates one whenever a branch is created.
+     */
+    public function inventoryLocations(): HasMany
+    {
+        return $this->hasMany(\App\Models\Inventory\Location::class);
+    }
+
+    /**
      * Get the manager(s) for this branch.
      * Returns employees with 'manager' role assigned to this branch.
      */

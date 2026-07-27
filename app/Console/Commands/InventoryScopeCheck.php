@@ -92,7 +92,8 @@ class InventoryScopeCheck extends Command
 
         if ($orphans > 0) {
             $this->newLine();
-            $this->warn("{$orphans} branch(es) have no inventory location. Managers of those branches can create requisitions but never read them back.");
+            $this->warn("{$orphans} branch(es) have no inventory location. Managers of those branches can create requisitions but never read them back, and their sales are deducted from the mother kitchen instead of their own stock.");
+            $this->line('  Fix: <fg=cyan>php artisan branch:provision-locations</>');
         }
     }
 
