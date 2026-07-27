@@ -98,6 +98,17 @@ it('states every quantity in the item base unit, because deduction does not conv
         ->and($line->unit_id)->toBe($rice->base_unit_id);
 });
 
+it('matches a dish whose own name contains the separator', function () {
+    // A third of this menu is named like this. Comparing by splitting the
+    // expected label on its first " / " tears the name in half and refuses the
+    // dish as drifted - which is exactly what happened on the first prod run.
+    ashaimanOption($this->branch->id, 16, 'Fried Rice / Jollof Rice / Noodles + 3 Drumsticks', 'fried-rice');
+
+    (new AshaimanRecipeSeeder)->run();
+
+    expect(Recipe::where('menu_item_option_id', 16)->exists())->toBeTrue();
+});
+
 it('refuses to attach a recipe to an option that has drifted to another dish', function () {
     // Option 4 exists, but it is no longer "Fried Rice / plain".
     ashaimanOption($this->branch->id, 4, 'Goat Light Soup', 'plain');

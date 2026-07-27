@@ -327,13 +327,19 @@ class AshaimanRecipeSeeder extends Seeder
         return self::BRANCH;
     }
 
-    /** Does the live option still look like the dish this recipe was written for? */
+    /**
+     * Does the live option still look like the dish this recipe was written for?
+     *
+     * Built up and compared whole, never split apart on the separator: a third
+     * of this menu has " / " inside the dish name itself ("Fried Rice / Jollof
+     * Rice / Noodles + 3 Drumsticks"), so splitting on the first one tears the
+     * name in half and every such dish is refused as drifted.
+     */
     private function matches(object $option, string $expected): bool
     {
-        [$name, $key] = array_pad(explode(' / ', $expected, 2), 2, '');
+        $actual = trim($option->item_name).' / '.trim($option->option_key);
 
-        return Str::lower(trim($option->option_key)) === Str::lower(trim($key))
-            && Str::lower(trim($option->item_name)) === Str::lower(trim($name));
+        return Str::lower($actual) === Str::lower(trim($expected));
     }
 
     /** Create the handful of catalogue items the menu needs and lacks. */
