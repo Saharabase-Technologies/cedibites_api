@@ -78,6 +78,10 @@ trait RefusesShortStock
 
         return response()->json([
             'message' => $result->message(),
+            // Both spellings on purpose. `code` is what the frontend's ApiError
+            // preserves; `error` is the shape the rest of this API uses. Sending
+            // one and reading the other is how the till fell back to a toast.
+            'code' => 'insufficient_stock',
             'error' => 'insufficient_stock',
             'shortfalls' => $result->shortfalls,
             'can_override' => $mayOverride,
