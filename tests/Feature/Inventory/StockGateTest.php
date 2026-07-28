@@ -304,6 +304,86 @@ describe('the till', function () {
     });
 });
 
+describe('the checkout-session path — the one the till actually takes', function () {
+    /*
+     * PosOrderController::store was gated first and the terminal does not use
+     * it. The POS creates a checkout session and confirms it, so the gate was
+     * live and inert at the same time: a sale of 23 portions went through
+     * against a balance of 6. Both paths are covered now, and this describe
+     * block exists so neither can be left behind again.
+     */
+    it('refuses a session it cannot make', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 2);
+        stockOf($this->chicken, $this->location, 6);
+        ['user' => $cashier] = gateStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $response = $this->actingAs($cashier)
+            ->postJson('/v1/pos/checkout-sessions', [
+                'branch_id' => $this->branch->id,
+                'items' => [[
+                    'menu_item_id' => $dish->id,
+                    'menu_item_option_id' => $dish->options->first()->id,
+                    'quantity' => 23,
+                    'unit_price' => 50,
+                ]],
+                'payment_method' => 'cash',
+                'fulfillment_type' => 'takeaway',
+                'contact_name' => 'Walk-in',
+                'contact_phone' => '+233541234567',
+            ])
+            ->assertStatus(422);
+
+        expect($response->json('error'))->toBe('insufficient_stock')
+            ->and($response->json('message'))->toContain('Chicken');
+    });
+
+    it('opens a session when there is enough', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+        stockOf($this->chicken, $this->location, 100);
+        ['user' => $cashier] = gateStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->postJson('/v1/pos/checkout-sessions', [
+                'branch_id' => $this->branch->id,
+                'items' => [[
+                    'menu_item_id' => $dish->id,
+                    'menu_item_option_id' => $dish->options->first()->id,
+                    'quantity' => 2,
+                    'unit_price' => 50,
+                ]],
+                'payment_method' => 'cash',
+                'fulfillment_type' => 'takeaway',
+                'contact_name' => 'Walk-in',
+                'contact_phone' => '+233541234567',
+            ])
+            ->assertSuccessful();
+    });
+
+    it('will not let a cashier override on this path either', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+        stockOf($this->chicken, $this->location, 0);
+        ['user' => $cashier] = gateStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->postJson('/v1/pos/checkout-sessions', [
+                'branch_id' => $this->branch->id,
+                'items' => [[
+                    'menu_item_id' => $dish->id,
+                    'menu_item_option_id' => $dish->options->first()->id,
+                    'quantity' => 1,
+                    'unit_price' => 50,
+                ]],
+                'payment_method' => 'cash',
+                'fulfillment_type' => 'takeaway',
+                'contact_name' => 'Walk-in',
+                'contact_phone' => '+233541234567',
+                'override_stock_gate' => true,
+                'override_reason' => 'trust me',
+            ])
+            ->assertStatus(422);
+    });
+});
+
 describe('the advisory endpoint', function () {
     it('tells the till which options it can still make', function () {
         $plenty = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);

@@ -14,6 +14,8 @@ use Illuminate\Support\Collection;
 
 class PosOrderController extends Controller
 {
+    use \App\Http\Controllers\Api\Concerns\RefusesShortStock;
+
     private function taxRate(): float
     {
         return (float) config('app.tax_rate', 0.20);
@@ -303,70 +305,6 @@ class PosOrderController extends Controller
                 'message' => 'An error occurred while creating the order. Please try again.',
             ], 500);
         }
-    }
-
-    /**
-     * Refuse the sale when the branch cannot make it — 422 with the ingredients
-     * that fell short, never a bare "out of stock".
-     *
-     * Returns null when the sale may proceed, which includes every case the
-     * check could not judge: a branch with no inventory location, or dishes with
-     * no recipe. Refusing on a configuration gap would stop a branch trading
-     * over a data problem, and both gaps are already surfaced elsewhere.
-     *
-     * A holder of inventory.stock_gate.override may pass `override_stock_gate`
-     * with a reason — for when the ledger is wrong rather than the shelf empty,
-     * such as a delivery that arrived and has not been recorded yet. Logged
-     * either way, so overrides are countable afterwards.
-     *
-     * @param  array<int, array<string, mixed>>  $items
-     */
-    private function refuseIfShort(Request $request, int $branchId, array $items, \App\Models\Employee $employee): ?JsonResponse
-    {
-        $lines = [];
-        foreach ($items as $item) {
-            if (! empty($item['menu_item_option_id'])) {
-                $lines[] = [
-                    'option_id' => (int) $item['menu_item_option_id'],
-                    'quantity' => (float) ($item['quantity'] ?? 1),
-                ];
-            }
-        }
-
-        if ($lines === []) {
-            return null;
-        }
-
-        $result = app(\App\Domain\Inventory\Stock\StockAvailabilityService::class)->check($branchId, $lines);
-
-        if ($result->canSell()) {
-            return null;
-        }
-
-        $user = $request->user();
-        $mayOverride = $user?->can(\App\Enums\Permission::InventoryStockGateOverride->value) ?? false;
-
-        if ($request->boolean('override_stock_gate') && $mayOverride) {
-            activity('inventory')
-                ->causedBy($user)
-                ->event('stock_gate_overridden')
-                ->withProperties([
-                    'branch_id' => $branchId,
-                    'employee_id' => $employee->id,
-                    'reason' => $request->input('override_reason'),
-                    'shortfalls' => $result->shortfalls,
-                ])
-                ->log('Sold past the stock gate: '.$result->message());
-
-            return null;
-        }
-
-        return response()->json([
-            'message' => $result->message(),
-            'error' => 'insufficient_stock',
-            'shortfalls' => $result->shortfalls,
-            'can_override' => $mayOverride,
-        ], 422);
     }
 
     /**

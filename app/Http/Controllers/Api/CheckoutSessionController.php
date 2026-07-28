@@ -24,6 +24,8 @@ use Illuminate\Support\Str;
 
 class CheckoutSessionController extends Controller
 {
+    use \App\Http\Controllers\Api\Concerns\RefusesShortStock;
+
     public function __construct(
         protected OrderCreationService $orderCreationService,
         protected SystemSettingService $settingService,
@@ -353,6 +355,11 @@ class CheckoutSessionController extends Controller
             'discount' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'delivery_fee' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
+
+            // No stock, no sale — and its exception. Honoured only for a holder
+            // of inventory.stock_gate.override.
+            'override_stock_gate' => ['sometimes', 'boolean'],
+            'override_reason' => ['nullable', 'string', 'max:500'],
         ]);
 
         $user = $request->user();
@@ -373,6 +380,18 @@ class CheckoutSessionController extends Controller
                 'code' => 'branch_closed',
                 'message' => 'This branch is currently closed. To place orders after hours, ask an administrator to enable extended order access from the admin settings.',
             ], 422);
+        }
+
+        // No stock, no sale.
+        //
+        // This is the path the till actually takes. PosOrderController::store
+        // carries the same check, but the terminal creates a checkout session
+        // and confirms it — so gating that controller alone left the real POS
+        // flow wide open, and a sale of 23 portions went through against a
+        // balance of 6 with the gate "live".
+        $stockRefusal = $this->refuseIfShort($request, $branchId, $validated['items'], $employee);
+        if ($stockRefusal !== null) {
+            return $stockRefusal;
         }
 
         // Validate menu items belong to branch + resolve DB prices
