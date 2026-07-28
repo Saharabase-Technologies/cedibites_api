@@ -20,6 +20,11 @@ Route::middleware('password.reset')->group(function () {
         Route::post('orders', [PosOrderController::class, 'store']);
         Route::post('verify-momo', [PosOrderController::class, 'verifyMomo']);
 
+        // No stock, no sale — advisory reads so the till can grey an item out
+        // as the cart is built. The rule itself lives in PosOrderController.
+        Route::get('stock-gate', [\App\Http\Controllers\Api\StockGateController::class, 'index']);
+        Route::post('stock-gate/check', [\App\Http\Controllers\Api\StockGateController::class, 'check']);
+
         // Checkout sessions (POS)
         Route::post('checkout-sessions', [CheckoutSessionController::class, 'posStore'])
             ->middleware('throttle:30,1');

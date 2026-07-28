@@ -38,6 +38,12 @@ class StorePosOrderRequest extends FormRequest
             'customer_notes' => ['nullable', 'string'],
             'discount' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
+
+            // No stock, no sale — and its exception. Honoured only for a holder
+            // of inventory.stock_gate.override; a cashier sending it is ignored
+            // rather than refused, so the shortfall message is what they see.
+            'override_stock_gate' => ['sometimes', 'boolean'],
+            'override_reason' => ['nullable', 'string', 'max:500'],
         ];
     }
 
