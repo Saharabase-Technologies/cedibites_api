@@ -129,6 +129,7 @@ Route::prefix('admin')->group(function () {
         Route::patch('menu-items/{menuItem}/options/{option}', [MenuItemOptionController::class, 'update']);
         Route::delete('menu-items/{menuItem}/options/{option}', [MenuItemOptionController::class, 'destroy']);
         Route::post('menu-items/{menuItem}/options/{option}/image', [MenuItemOptionController::class, 'uploadImage']);
+        Route::delete('menu-items/{menuItem}/options/{option}/image', [MenuItemOptionController::class, 'deleteImage']);
 
         // Smart category settings
         Route::get('smart-categories', [SmartCategorySettingController::class, 'index']);
