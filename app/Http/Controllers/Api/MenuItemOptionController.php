@@ -111,4 +111,26 @@ class MenuItemOptionController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Take the photo off an option.
+     *
+     * Upload could only ever replace, so a photo put on the wrong option was
+     * there for good unless you had another one to hand. Clearing the
+     * collection is enough — the item falls back to the next option's photo,
+     * and to the fork-and-knife placeholder when none of them has one.
+     */
+    public function deleteImage(MenuItem $menuItem, MenuItemOption $option): JsonResponse
+    {
+        if ($option->menu_item_id !== $menuItem->id) {
+            return response()->error('Option not found for this menu item.', 404);
+        }
+
+        $option->clearMediaCollection('menu-item-options');
+
+        return response()->success(
+            new MenuItemOptionResource($option->fresh()),
+            'Image removed.'
+        );
+    }
 }
