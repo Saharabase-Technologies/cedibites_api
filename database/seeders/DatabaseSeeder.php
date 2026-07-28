@@ -19,7 +19,6 @@ class DatabaseSeeder extends Seeder
             MenuTagSeeder::class,
             EmployeeSeeder::class,
             MenuSeeder::class,
-            MenuAddOnSeeder::class,
             PromoSeeder::class,
             InventoryCatalogSeeder::class,
         ]);

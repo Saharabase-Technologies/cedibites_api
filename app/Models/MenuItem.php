@@ -100,14 +100,6 @@ class MenuItem extends Model
         return $this->belongsToMany(MenuTag::class, 'menu_item_menu_tag')->withTimestamps();
     }
 
-    public function addOns(): BelongsToMany
-    {
-        return $this->belongsToMany(MenuAddOn::class, 'menu_item_menu_add_on')
-            ->withPivot('sort_order')
-            ->withTimestamps()
-            ->orderByPivot('sort_order');
-    }
-
     public function cartItems(): HasMany
     {
         return $this->hasMany(CartItem::class);

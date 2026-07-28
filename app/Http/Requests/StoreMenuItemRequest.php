@@ -30,8 +30,6 @@ class StoreMenuItemRequest extends FormRequest
             'is_available' => ['boolean'],
             'tag_ids' => ['nullable', 'array'],
             'tag_ids.*' => ['integer', 'exists:menu_tags,id'],
-            'add_on_ids' => ['nullable', 'array'],
-            'add_on_ids.*' => ['integer', 'exists:menu_add_ons,id'],
             'pricing_type' => ['nullable', 'string', 'in:simple,options'],
             'price' => ['nullable', 'numeric', 'min:0', 'required_if:pricing_type,simple'],
         ];
