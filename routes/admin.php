@@ -9,9 +9,8 @@ use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CancelRequestController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\EmployeeController;
-use App\Http\Controllers\Api\MenuAddOnController;
 use App\Http\Controllers\Api\MenuCategoryController;
-use App\Http\Controllers\Api\MenuItemBranchOptionController;
+use App\Http\Controllers\Api\MenuBranchAvailabilityController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\MenuItemOptionController;
 use App\Http\Controllers\Api\MenuTagController;
@@ -108,15 +107,21 @@ Route::prefix('admin')->group(function () {
 
     Route::middleware('permission:manage_menu')->group(function () {
         Route::apiResource('menu-tags', MenuTagController::class);
-        Route::apiResource('menu-add-ons', MenuAddOnController::class);
 
+        // Literal segments before the {menuItem} wildcard, or the wildcard eats them.
+        Route::get('menu-items', [MenuItemController::class, 'adminIndex']);
+        Route::get('menu-items/branch-availability', [MenuBranchAvailabilityController::class, 'index']);
         Route::post('menu-items', [MenuItemController::class, 'store']);
         Route::post('menu-items/bulk-import-preview', [MenuItemController::class, 'bulkImportPreview']);
         Route::post('menu-items/bulk-import', [MenuItemController::class, 'bulkImport']);
         Route::patch('menu-items/{menuItem}', [MenuItemController::class, 'update']);
         Route::delete('menu-items/{menuItem}', [MenuItemController::class, 'destroy']);
-        Route::get('menu-items/{menuItem}/branch-overrides', [MenuItemBranchOptionController::class, 'show']);
-        Route::put('menu-items/{menuItem}/branch-options', [MenuItemBranchOptionController::class, 'update']);
+
+        // Availability is the only thing that varies by branch. Replaces the
+        // sibling-row branch-overrides pair, which matched nothing after
+        // menu:unify and reported success while writing nothing.
+        Route::patch('menu-items/{menuItem}/branches/{branch}', [MenuBranchAvailabilityController::class, 'update']);
+        Route::patch('menu-items/{menuItem}/branches', [MenuBranchAvailabilityController::class, 'updateAll']);
 
         Route::get('menu-items/{menuItem}/options', [MenuItemOptionController::class, 'index']);
         Route::post('menu-items/{menuItem}/options', [MenuItemOptionController::class, 'store']);

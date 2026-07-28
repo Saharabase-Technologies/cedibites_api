@@ -222,19 +222,21 @@ describe('manager cannot reach company-level data', function () {
         expect($item->fresh()->name)->not->toBe('Renamed');
     });
 
-    it('cannot change a branch price override', function () {
+    // Whether a branch serves a dish at all is an admin decision, and stays one
+    // even for the manager's own branch. What he keeps is the sold-out toggle
+    // on /manager/branches/{branch}/menu-availability — "we ran out today", not
+    // "we don't sell this".
+    it('cannot change what its own branch serves', function () {
         $branch = Branch::factory()->create();
         ['user' => $manager] = scopedStaff(RoleEnum::Manager->value, $branch);
         $item = MenuItem::factory()->create(['branch_id' => $branch->id]);
 
         $this->actingAs($manager)
-            ->putJson("/v1/admin/menu-items/{$item->id}/branch-options", [
-                'branches' => [
-                    (string) $branch->id => [
-                        'options' => [['option_key' => 'standard', 'price' => 1.00]],
-                    ],
-                ],
-            ])
+            ->patchJson("/v1/admin/menu-items/{$item->id}/branches/{$branch->id}", ['served' => false])
+            ->assertForbidden();
+
+        $this->actingAs($manager)
+            ->patchJson("/v1/admin/menu-items/{$item->id}/branches", ['served' => false])
             ->assertForbidden();
     });
 

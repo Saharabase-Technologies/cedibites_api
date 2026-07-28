@@ -7,7 +7,6 @@ use App\Http\Requests\StoreMenuItemRequest;
 use App\Http\Requests\UpdateMenuItemRequest;
 use App\Http\Resources\MenuItemCollection;
 use App\Http\Resources\MenuItemResource;
-use App\Models\MenuAddOn;
 use App\Models\MenuItem;
 use App\Models\MenuItemRating;
 use Illuminate\Http\JsonResponse;
@@ -25,8 +24,27 @@ class MenuItemController extends Controller
             'options.media',
             'options.branchPrices',
             'tags',
-            'addOns',
         ];
+    }
+
+    /**
+     * The admin catalogue.
+     *
+     * Deliberately not `index()`. That one belongs to the storefront: it is
+     * unauthenticated, and its branch filter runs through servedAt() — which,
+     * now that every branch serves every dish, returns the same list whatever
+     * you ask it for. The admin needs the opposite shape: one row per dish,
+     * company-wide, carrying *where it is served* rather than being filtered
+     * by it. Hence `branches`, which is what the availability matrix reads.
+     */
+    public function adminIndex(Request $request): JsonResponse
+    {
+        $query = MenuItem::with([...$this->menuItemWith(), 'branches'])
+            ->when($request->category_id, fn ($q, $categoryId) => $q->where('category_id', $categoryId))
+            ->when($request->filled('is_available'), fn ($q) => $q->where('is_available', $request->boolean('is_available')))
+            ->orderBy('name');
+
+        return response()->success(MenuItemResource::collection($query->get()));
     }
 
     public function index(Request $request): JsonResponse
@@ -52,15 +70,11 @@ class MenuItemController extends Controller
     public function store(StoreMenuItemRequest $request): JsonResponse
     {
         try {
-            $data = $request->safe()->except(['tag_ids', 'add_on_ids']);
+            $data = $request->safe()->except(['tag_ids']);
             $menuItem = MenuItem::create($data);
 
             if ($request->filled('tag_ids')) {
                 $menuItem->tags()->sync($request->input('tag_ids'));
-            }
-
-            if ($request->filled('add_on_ids')) {
-                $this->syncAddOns($menuItem, $request->input('add_on_ids'));
             }
 
             if ($request->input('pricing_type') === 'simple') {
@@ -112,14 +126,10 @@ class MenuItemController extends Controller
     public function update(UpdateMenuItemRequest $request, MenuItem $menuItem): JsonResponse
     {
         try {
-            $menuItem->update($request->safe()->except(['tag_ids', 'add_on_ids']));
+            $menuItem->update($request->safe()->except(['tag_ids']));
 
             if ($request->has('tag_ids')) {
                 $menuItem->tags()->sync($request->input('tag_ids', []));
-            }
-
-            if ($request->has('add_on_ids')) {
-                $this->syncAddOns($menuItem, $request->input('add_on_ids', []));
             }
 
             if ($request->input('pricing_type') === 'simple') {
@@ -179,21 +189,6 @@ class MenuItemController extends Controller
 
         // Soft-delete any non-standard options left over from a previous options-mode setup.
         $menuItem->options()->where('option_key', '!=', 'standard')->delete();
-    }
-
-    /**
-     * @param  array<int, int>  $addOnIds
-     */
-    protected function syncAddOns(MenuItem $menuItem, array $addOnIds): void
-    {
-        $sync = [];
-        foreach (array_values($addOnIds) as $i => $id) {
-            $addOn = MenuAddOn::query()->find($id);
-            if ($addOn && (int) $addOn->branch_id === (int) $menuItem->branch_id) {
-                $sync[$id] = ['sort_order' => $i];
-            }
-        }
-        $menuItem->addOns()->sync($sync);
     }
 
     public function bulkImport(Request $request): JsonResponse

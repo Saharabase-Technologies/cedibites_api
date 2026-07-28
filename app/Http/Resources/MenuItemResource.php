@@ -38,7 +38,14 @@ class MenuItemResource extends JsonResource
                 : null,
             'options' => MenuItemOptionResource::collection($this->whenLoaded('options')),
             'tags' => MenuTagResource::collection($this->whenLoaded('tags')),
-            'add_ons' => MenuAddOnResource::collection($this->whenLoaded('addOns')),
+            // Where this dish is served, and whether each branch has it on
+            // today. Only loaded for the admin catalogue — the storefront asks
+            // about one branch and gets filtered, not told about the others.
+            'branches' => $this->whenLoaded('branches', fn () => $this->branches->map(fn ($branch) => [
+                'id' => $branch->id,
+                'name' => $branch->name,
+                'is_available' => (bool) $branch->pivot->is_available,
+            ])->values()),
         ];
     }
 }

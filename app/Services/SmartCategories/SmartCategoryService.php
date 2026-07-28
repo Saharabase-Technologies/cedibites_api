@@ -161,7 +161,6 @@ class SmartCategoryService
                 'options.media',
                 'options.branchPrices' => fn ($q) => $q->where('branch_id', $branchId),
                 'tags',
-                'addOns',
             ])
             ->whereIn('id', $itemIds)
             ->where('is_available', true)
