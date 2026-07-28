@@ -40,6 +40,20 @@ jobs:
             # Idempotent; safe to keep.
             php artisan db:seed --class=ManagerScopeCleanupSeeder --force
 
+            # Every active branch needs an inventory location or its manager is
+            # locked out of the IMS and its sales are deducted from the mother
+            # kitchen instead of its own stock. BranchProvisioningService creates
+            # one at branch-creation time; this repairs anything that predates it.
+            # Idempotent — a no-op once every branch has one.
+            php artisan branch:provision-locations
+
+            # Merge the per-branch duplicates of each dish into one. Idempotent:
+            # once there are no duplicate slugs left it only tops up the
+            # menu_item_branches pivot, which is what MenuItem::servedAt reads.
+            # Leaving this manual is how the branch-to-location wiring drifted in
+            # the first place.
+            php artisan menu:unify
+
             # Ashaiman recipes, then a day's cover for the branch. Order matters:
             # the stock seeder derives its demand from the recipes.
             #

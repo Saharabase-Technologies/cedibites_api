@@ -49,6 +49,12 @@ jobs:
             # Idempotent; safe to keep.
             php artisan db:seed --class=ManagerScopeCleanupSeeder --force
 
+            # Same two as production: every branch gets its inventory location,
+            # and the per-branch menu duplicates are merged into one dish. Both
+            # idempotent, so they settle to a no-op once done.
+            php artisan branch:provision-locations
+            php artisan menu:unify
+
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
