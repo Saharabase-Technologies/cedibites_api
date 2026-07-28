@@ -72,9 +72,14 @@ describe('merging duplicates', function () {
 
         $this->artisan('menu:unify')->assertSuccessful();
 
-        $branchIds = $original->fresh()->branches->pluck('id')->sort()->values()->all();
+        // Contains rather than equals: the factory chain (menu item → category
+        // → branch) quietly creates branches of its own, and every active
+        // branch is served the whole menu. What matters is that the merge left
+        // both real branches attached to the one surviving row.
+        $branchIds = $original->fresh()->branches->pluck('id')->all();
 
-        expect($branchIds)->toBe(collect([$this->ashaiman->id, $this->kasoa->id])->sort()->values()->all());
+        expect($branchIds)->toContain($this->ashaiman->id)
+            ->and($branchIds)->toContain($this->kasoa->id);
     });
 
     it('preserves a differing branch price as an override', function () {
@@ -144,12 +149,14 @@ describe('merging duplicates', function () {
             ->and(DB::table('menu_item_option_branch_prices')->count())->toBe(0);
     });
 
-    it('gives a dish sold at one branch only its pivot row', function () {
+    it('gives a dish that exists at one branch its pivot row', function () {
         $solo = dishAt($this->ashaiman, 'Banku', 40);
 
         $this->artisan('menu:unify')->assertSuccessful();
 
-        expect($solo->fresh()->branches->pluck('id')->all())->toBe([$this->ashaiman->id]);
+        // Without this row the dish would vanish from the menu entirely once
+        // reads move off the legacy branch_id.
+        expect($solo->fresh()->branches->pluck('id')->all())->toContain($this->ashaiman->id);
     });
 });
 
@@ -289,12 +296,16 @@ describe('reading the menu during and after the merge', function () {
             ->and(MenuItem::servedAt($this->kasoa->id)->pluck('name')->all())->toBe(['Jollof Rice']);
     });
 
-    it('does not serve a branch a dish it never had', function () {
+    it('serves a dish that started at one branch to all of them', function () {
+        // The model is one menu for the whole business: the same institution
+        // behind several tills. A dish that happens to have been created at
+        // Ashaiman is not an Ashaiman dish — it is on the menu. What differs by
+        // branch is the price and whether today's pot has run out.
         dishAt($this->ashaiman, 'Banku', 40);
 
         $this->artisan('menu:unify')->assertSuccessful();
 
-        expect(MenuItem::servedAt($this->kasoa->id)->count())->toBe(0);
+        expect(MenuItem::servedAt($this->kasoa->id)->pluck('name')->all())->toBe(['Banku']);
     });
 
     it('answers the public menu endpoint per branch after the merge', function () {
@@ -308,6 +319,44 @@ describe('reading the menu during and after the merge', function () {
             ->assertSuccessful()
             ->json('data');
 
-        expect(collect($kasoa)->pluck('name')->all())->toBe(['Jollof Rice']);
+        expect(collect($kasoa)->pluck('name')->sort()->values()->all())
+            ->toBe(['Banku', 'Jollof Rice']);
+    });
+});
+
+describe('every branch serves the whole menu', function () {
+    it('gives a branch with no menu of its own the full menu', function () {
+        // The Test Branch symptom: created after the menu existed, so nothing
+        // ever gave it one and its POS came up empty.
+        dishAt($this->ashaiman, 'Jollof Rice', 50);
+        dishAt($this->ashaiman, 'Banku', 40);
+
+        $this->artisan('menu:unify')->assertSuccessful();
+
+        expect(MenuItem::servedAt($this->kasoa->id)->pluck('name')->sort()->values()->all())
+            ->toBe(['Banku', 'Jollof Rice']);
+    });
+
+    it('does not switch a sold-out dish back on', function () {
+        $dish = dishAt($this->ashaiman, 'Jollof Rice', 50);
+        $this->artisan('menu:unify')->assertSuccessful();
+
+        // A manager marks it sold out at Kasoa.
+        $dish->branches()->syncWithoutDetaching([$this->kasoa->id => ['is_available' => false]]);
+
+        // A later deploy re-runs the command.
+        $this->artisan('menu:unify')->assertSuccessful();
+
+        $atKasoa = $dish->fresh()->branches->firstWhere('id', $this->kasoa->id);
+        expect((bool) $atKasoa->pivot->is_available)->toBeFalse();
+    });
+
+    it('skips branches that are not active', function () {
+        $closed = Branch::factory()->create(['is_active' => false]);
+        dishAt($this->ashaiman, 'Jollof Rice', 50);
+
+        $this->artisan('menu:unify')->assertSuccessful();
+
+        expect(MenuItem::servedAt($closed->id)->count())->toBe(0);
     });
 });

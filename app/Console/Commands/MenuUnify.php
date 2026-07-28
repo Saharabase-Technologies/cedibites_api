@@ -62,6 +62,7 @@ class MenuUnify extends Command
         if ($groups->isEmpty()) {
             $this->info('No duplicate slugs. The menu is already unified, or there is only one branch.');
             $this->backfillPivotForSingletons();
+            $this->serveEveryBranch();
 
             return self::SUCCESS;
         }
@@ -81,6 +82,7 @@ class MenuUnify extends Command
         );
 
         $this->backfillPivotForSingletons();
+        $this->serveEveryBranch();
 
         if ($this->warnings !== []) {
             $this->newLine();
@@ -420,6 +422,69 @@ class MenuUnify extends Command
             'rating_count' => (int) $stats->total,
             'updated_at' => now(),
         ]);
+    }
+
+    /**
+     * Every branch serves the whole menu.
+     *
+     * The business is one institution behind several tills — the menu does not
+     * differ by branch, only the price and whether today's pot has run out. So a
+     * branch that has no row for a dish gets one, and a new branch inherits the
+     * whole menu the moment it exists rather than waiting for someone to copy it
+     * across (which is what left the Test Branch with an empty POS).
+     *
+     * Only ever INSERTS a missing pair. An existing row is left exactly as it
+     * is, so a manager's "sold out today" is not quietly switched back on by the
+     * next deploy.
+     */
+    private function serveEveryBranch(): void
+    {
+        $branchIds = \App\Models\Branch::query()->where('is_active', true)->pluck('id');
+        $itemIds = MenuItem::query()->pluck('id');
+
+        if ($branchIds->isEmpty() || $itemIds->isEmpty()) {
+            return;
+        }
+
+        // A dry run reports and writes nothing. Missing this made --dry-run
+        // create rows, which is worse than having no dry run at all: the whole
+        // point is that it can be trusted before the real run.
+        if ($this->dry) {
+            $this->line('Would serve every active branch the whole menu.');
+
+            return;
+        }
+
+        $existing = DB::table('menu_item_branches')
+            ->get(['menu_item_id', 'branch_id'])
+            ->map(fn ($r) => $r->menu_item_id.':'.$r->branch_id)
+            ->flip();
+
+        $insert = [];
+        foreach ($itemIds as $itemId) {
+            foreach ($branchIds as $branchId) {
+                if ($existing->has($itemId.':'.$branchId)) {
+                    continue;
+                }
+                $insert[] = [
+                    'menu_item_id' => $itemId,
+                    'branch_id' => $branchId,
+                    'is_available' => true,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
+        }
+
+        if ($insert === []) {
+            return;
+        }
+
+        foreach (array_chunk($insert, 500) as $chunk) {
+            DB::table('menu_item_branches')->insert($chunk);
+        }
+
+        $this->line('Served '.count($insert).' dish/branch pair(s) that had no row yet.');
     }
 
     /**
