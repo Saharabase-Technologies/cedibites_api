@@ -49,6 +49,9 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         Route::middleware('permission:manage_inventory_catalog')->group(function () {
             Route::post('items', [CatalogController::class, 'storeItem'])->name('items.store');
             Route::patch('items/{item}', [CatalogController::class, 'updateItem'])->name('items.update');
+            // One location's own reorder point, overriding the item default. A
+            // warehouse figure and a branch figure cannot be the same number.
+            Route::put('items/{item}/thresholds', [CatalogController::class, 'setItemThresholds'])->name('items.thresholds');
         });
 
         // Suppliers — a purchasing concern. Purchasing Clerk + Admin (NOT WM).

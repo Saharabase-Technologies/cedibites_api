@@ -11,6 +11,7 @@ use App\Http\Resources\Inventory\SupplierResource;
 use App\Http\Resources\Inventory\UnitResource;
 use App\Models\Inventory\Category;
 use App\Models\Inventory\Item;
+use App\Models\Inventory\ItemLocationThreshold;
 use App\Models\Inventory\Location;
 use App\Models\Inventory\PurchaseItem;
 use App\Models\Inventory\StockMovement;
@@ -22,6 +23,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Read-only catalog endpoints that back the IMS portal dropdowns and list
@@ -105,6 +107,31 @@ class CatalogController extends Controller
         return $cost !== null ? (float) $cost : null;
     }
 
+    /**
+     * The single location a threshold override should be read for, or null when
+     * the view spans several (or all) of them.
+     *
+     * A company-wide view has no business showing one branch's reorder point, so
+     * it keeps the item's global figure. Only a view narrowed to exactly one
+     * location can meaningfully use that location's own numbers.
+     */
+    private function thresholdLocation(?array $scopeLocations): ?int
+    {
+        return $scopeLocations !== null && count($scopeLocations) === 1
+            ? (int) $scopeLocations[0]
+            : null;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, Item>|array<int, Item>  $items
+     */
+    private function attachEffectiveThresholds(iterable $items, ?int $locationId): void
+    {
+        foreach ($items as $item) {
+            $item->effective_thresholds = $item->thresholdsAt($locationId);
+        }
+    }
+
     public function items(Request $request): JsonResponse
     {
         // Whose stock is this figure? `stock_on_hand` summed every location, so a
@@ -114,8 +141,13 @@ class CatalogController extends Controller
         // (warehouse manager, admin) still get the company-wide total.
         $scopeLocations = $this->itemStockScope($request);
 
+        $thresholdLocation = $this->thresholdLocation($scopeLocations);
+
         $items = Item::query()
             ->with(['category', 'baseUnit', 'defaultSupplier'])
+            ->when($thresholdLocation !== null, fn ($q) => $q->with([
+                'locationThresholds' => fn ($t) => $t->where('location_id', $thresholdLocation),
+            ]))
             ->addSelect(['scoped_unit_cost' => $this->scopedUnitCost($scopeLocations)])
             ->withSum(
                 ['stockBalances as stock_on_hand' => fn ($q) => $scopeLocations === null
@@ -142,6 +174,8 @@ class CatalogController extends Controller
             ->orderBy('name')
             ->get();
 
+        $this->attachEffectiveThresholds($items, $thresholdLocation);
+
         return response()->success(ItemResource::collection($items));
     }
 
@@ -161,6 +195,7 @@ class CatalogController extends Controller
         // Same true cost as the list, or the detail contradicts the row that
         // opened it.
         $item->scoped_unit_cost = $this->unitCostForItem($item, $scope);
+        $item->effective_thresholds = $item->thresholdsAt($this->thresholdLocation($scope));
 
         return response()->success(new ItemResource($item));
     }
@@ -187,6 +222,7 @@ class CatalogController extends Controller
         // Same true cost as the list, or the detail contradicts the row that
         // opened it.
         $item->scoped_unit_cost = $this->unitCostForItem($item, $scope);
+        $item->effective_thresholds = $item->thresholdsAt($this->thresholdLocation($scope));
 
         $movements = StockMovement::query()
             ->where('item_id', $item->id)
@@ -451,6 +487,59 @@ class CatalogController extends Controller
         $unit = Unit::create([...$data, 'is_active' => true]);
 
         return response()->success(new UnitResource($unit), 'Unit created.');
+    }
+
+    /**
+     * Set (or clear) one location's own reorder thresholds for an item.
+     *
+     * Sending null for a column drops back to the item's global figure, and
+     * sending null for both removes the override entirely rather than leaving a
+     * row that says nothing.
+     */
+    public function setItemThresholds(Request $request, Item $item): JsonResponse
+    {
+        $data = $request->validate([
+            'location_id' => ['required', 'integer', 'exists:inventory_locations,id'],
+            'reorder_level' => ['present', 'nullable', 'numeric', 'min:0'],
+            'min_threshold' => ['present', 'nullable', 'numeric', 'min:0'],
+        ]);
+
+        $reorder = $data['reorder_level'];
+        $min = $data['min_threshold'];
+
+        // The bands only read correctly when the critical minimum sits UNDER the
+        // reorder trigger. Inverted, "Low" is unreachable - the check tests the
+        // minimum first, so stock jumps straight from OK to Critical. Three items
+        // on production were shipped this way.
+        if ($reorder !== null && $min !== null && (float) $min > (float) $reorder) {
+            throw ValidationException::withMessages([
+                'min_threshold' => 'The critical minimum must sit at or below the reorder level, otherwise stock never reads Low.',
+            ]);
+        }
+
+        if ($reorder === null && $min === null) {
+            ItemLocationThreshold::where('item_id', $item->id)
+                ->where('location_id', $data['location_id'])
+                ->delete();
+
+            $message = 'Location thresholds cleared; the item default applies again.';
+        } else {
+            ItemLocationThreshold::updateOrCreate(
+                ['item_id' => $item->id, 'location_id' => $data['location_id']],
+                ['reorder_level' => $reorder, 'min_threshold' => $min],
+            );
+
+            $message = 'Location thresholds saved.';
+        }
+
+        $item->load(['category', 'baseUnit', 'defaultSupplier'])
+            ->loadSum(
+                ['stockBalances as stock_on_hand' => fn ($q) => $q->where('location_id', $data['location_id'])],
+                'quantity',
+            );
+        $item->effective_thresholds = $item->thresholdsAt((int) $data['location_id']);
+
+        return response()->success(new ItemResource($item), $message);
     }
 
     public function storeItem(Request $request): JsonResponse

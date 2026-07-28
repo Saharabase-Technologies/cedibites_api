@@ -65,6 +65,11 @@ jobs:
             # what the morning already sold.
             php artisan db:seed --class=AshaimanRecipeSeeder --force
             php artisan db:seed --class=AshaimanTestStockSeeder --force
+            # Repairs thresholds shipped inverted (min above reorder, so "Low"
+            # never fires) and gives the branch its own reorder points, sized
+            # from the recipes above. Warehouse-scale figures make a branch
+            # holding a day of cover read Critical on nearly every line.
+            php artisan db:seed --class=InventoryThresholdSeeder --force
 
             php artisan cache:clear
             php artisan route:clear

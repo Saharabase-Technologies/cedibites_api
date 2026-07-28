@@ -54,6 +54,50 @@ class Item extends Model
         return $this->hasMany(StockBalance::class, 'item_id');
     }
 
+    /** Per-location overrides of this item's global reorder thresholds. */
+    public function locationThresholds(): HasMany
+    {
+        return $this->hasMany(ItemLocationThreshold::class, 'item_id');
+    }
+
+    /**
+     * The reorder point and critical minimum that apply at one location: its own
+     * override where it has set one, the item's global figure otherwise. Either
+     * half falls back independently.
+     *
+     * @return array{reorder_level: float|null, min_threshold: float|null, is_location_specific: bool}
+     */
+    public function thresholdsAt(?int $locationId): array
+    {
+        $global = [
+            'reorder_level' => $this->reorder_level !== null ? (float) $this->reorder_level : null,
+            'min_threshold' => $this->min_threshold !== null ? (float) $this->min_threshold : null,
+            'is_location_specific' => false,
+        ];
+
+        if ($locationId === null) {
+            return $global;
+        }
+
+        $override = $this->relationLoaded('locationThresholds')
+            ? $this->locationThresholds->firstWhere('location_id', $locationId)
+            : $this->locationThresholds()->where('location_id', $locationId)->first();
+
+        if (! $override) {
+            return $global;
+        }
+
+        return [
+            'reorder_level' => $override->reorder_level !== null
+                ? (float) $override->reorder_level
+                : $global['reorder_level'],
+            'min_threshold' => $override->min_threshold !== null
+                ? (float) $override->min_threshold
+                : $global['min_threshold'],
+            'is_location_specific' => true,
+        ];
+    }
+
     protected static function newFactory(): ItemFactory
     {
         return ItemFactory::new();
