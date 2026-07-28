@@ -279,5 +279,8 @@ Route::middleware(['auth:sanctum', 'inventory.enabled'])
         Route::prefix('reports')->name('reports.')->group(function () {
             Route::get('expiring-batches', [ReportController::class, 'expiringBatches'])
                 ->middleware('permission:inventory.report.view')->name('expiring-batches');
+            // What the kitchen used today, and which sales used it.
+            Route::get('daily-consumption', [ReportController::class, 'dailyConsumption'])
+                ->middleware('permission:inventory.report.view')->name('daily-consumption');
         });
     });
