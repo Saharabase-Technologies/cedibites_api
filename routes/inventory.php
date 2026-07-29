@@ -27,7 +27,9 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-Route::middleware(['auth:sanctum', 'inventory.enabled'])
+// IMS is staff-only end to end — `token.staff` keeps a customer OTP token out
+// even when the same human is a warehouse manager. See EnsureStaffToken.
+Route::middleware(['auth:sanctum', 'token.staff', 'inventory.enabled'])
     ->prefix('inventory')
     ->name('inventory.')
     ->group(function () {

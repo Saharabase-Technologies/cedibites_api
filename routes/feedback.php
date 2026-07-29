@@ -21,7 +21,8 @@ Route::prefix('feedback')->name('feedback.')->group(function () {
     Route::get('my-reports', [FeedbackReportController::class, 'myReports'])->name('my-reports');
 
     // Triage — admin / tech-admin (inherit feedback.triage via the seeder).
-    Route::middleware('permission:feedback.triage')->group(function () {
+    // Submitting a report above stays open to customers; triaging one does not.
+    Route::middleware(['token.staff', 'permission:feedback.triage'])->group(function () {
         Route::get('reports', [FeedbackReportController::class, 'index'])->name('reports.index');
         Route::get('reports/{feedbackReport}', [FeedbackReportController::class, 'show'])->name('reports.show');
         Route::patch('reports/{feedbackReport}', [FeedbackReportController::class, 'update'])->name('reports.update');

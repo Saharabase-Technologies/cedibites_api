@@ -72,7 +72,12 @@ class EmployeeAuthController extends Controller
             return response()->forbidden('Your account is currently '.$user->employee->status->value.'. Please contact your administrator.');
         }
 
-        $token = $user->createToken('employee-auth-token')->plainTextToken;
+        // The `staff` ability is what actually opens the staff surface — see
+        // EnsureStaffToken. It is granted only here, behind the password, the
+        // active-employee check and the password-reset gate above. A customer
+        // OTP login on the same phone yields a `customer` token that cannot
+        // reach any of it.
+        $token = $user->createToken('employee-auth-token', ['staff'])->plainTextToken;
 
         activity('auth')
             ->causedBy($user)

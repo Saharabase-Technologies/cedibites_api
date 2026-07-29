@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Events\CustomerSessionEvent;
+use App\Helpers\PhoneHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\RegisterRequest;
 use App\Http\Requests\SendOTPRequest;
@@ -98,16 +99,26 @@ class AuthController extends Controller
         if ($user) {
             // Create a Customer record if one doesn't exist.
             // Staff members can also be customers (dual-identity) — they use
-            // OTP login as customer and password login as staff.
+            // OTP login as customer and password login as staff. The token
+            // issued here carries only the `customer` ability, so it opens
+            // nothing on the staff surface.
             if (! $user->customer) {
                 Customer::create([
                     'user_id' => $user->id,
                     'is_guest' => false,
                 ]);
                 $user->load('customer');
+            } elseif ($user->customer->is_guest) {
+                // They arrived as a guest (an order created the row) and have now
+                // proved they hold the phone — that is exactly what claiming an
+                // account means, so stop calling them a guest. Leaving the flag set
+                // used to be silent but not harmless: suspension, the guest/
+                // registered analytics split and the admin list filter all key off
+                // it.
+                $user->customer->update(['is_guest' => false]);
             }
 
-            $token = $user->createToken('auth-token')->plainTextToken;
+            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
 
             activity('auth')
                 ->causedBy($user)
@@ -159,7 +170,7 @@ class AuthController extends Controller
             // Send welcome notification
             $user->notify(new WelcomeNotification);
 
-            $token = $user->createToken('auth-token')->plainTextToken;
+            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
 
             return response()->created([
                 'token' => $token,
@@ -197,23 +208,47 @@ class AuthController extends Controller
      */
     public function quickRegister(Request $request): JsonResponse|Response
     {
+        // Checkout collects the phone as typed ("0241234567"), while users, orders
+        // and OTPs are all keyed on the canonical "+233…" form. Normalise before
+        // validating, not after: the unique rule below is what stops a
+        // password-holding account (every staff member) from being claimed, and
+        // run against the raw string it would miss "0241234567" against a stored
+        // "+233241234567" and wave the request through.
+        $request->merge([
+            'phone' => PhoneHelper::normalize((string) $request->input('phone', '')),
+        ]);
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             // Allow phone if no password-having user owns it already.
             // POS-created users (no password) are merged rather than rejected.
-            'phone' => ['required', 'string', 'max:20', \Illuminate\Validation\Rule::unique('users', 'phone')->where(fn ($q) => $q->whereNotNull('password'))],
+            'phone' => ['required', 'string', 'max:20', 'regex:/^\+233[0-9]{9}$/', \Illuminate\Validation\Rule::unique('users', 'phone')->where(fn ($q) => $q->whereNotNull('password'))],
             'email' => ['nullable', 'email', 'max:255'],
         ]);
+
+        $phone = $validated['phone'];
+
+        // Claiming merges the caller into whatever passwordless account already
+        // holds this phone, inheriting its entire order history and saved
+        // addresses. That is an account takeover unless control of the number is
+        // proved first, so this endpoint carries the same OTP requirement as
+        // register() — knowing a number that once ordered at the counter must not
+        // be enough to become that customer.
+        if (! $this->otpService->hasRecentlyVerified($phone)) {
+            return response()->unprocessable('OTP verification required', [
+                'phone' => ['Please verify your phone number first'],
+            ]);
+        }
 
         try {
             DB::beginTransaction();
 
             // Find an existing POS-created user (no password) or create a new one.
-            $user = User::where('phone', $validated['phone'])->first();
+            $user = User::where('phone', $phone)->first();
             if (! $user) {
                 $user = User::create([
                     'name' => $validated['name'],
-                    'phone' => $validated['phone'],
+                    'phone' => $phone,
                     'email' => $validated['email'] ?? null,
                 ]);
             }
@@ -240,7 +275,7 @@ class AuthController extends Controller
                 ]);
             }
 
-            $token = $user->createToken('auth-token')->plainTextToken;
+            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
 
             return response()->created([
                 'token' => $token,

@@ -227,7 +227,7 @@ class CustomerController extends Controller
      */
     public function show(Customer $customer): JsonResponse
     {
-        $customer->load(['user', 'addresses', 'orders']);
+        $customer->load(['user', 'addresses', 'orders', 'orderAliases']);
 
         return response()->success(new CustomerResource($customer));
     }

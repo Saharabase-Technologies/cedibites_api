@@ -55,15 +55,18 @@ class OrderCreationService
             if (! $customerId && $session->customer_phone) {
                 $normalizedPhone = PhoneHelper::normalize($session->customer_phone);
                 $sessionName = $session->customer_name ?? 'Customer';
+                // The identity name is set once, when the row is first created, and
+                // is never rewritten from order data. An order is an immutable
+                // record of what was said at the counter; a user is a mutable
+                // profile. Data flows profile -> order, never back — otherwise the
+                // same phone ordering as "Philippa" renames the account (and, when
+                // the phone belongs to a staff member, their staff identity too),
+                // and last month's receipt starts displaying a name that was never
+                // spoken. The per-order name is captured in `contact_name` below.
                 $user = User::firstOrCreate(
                     ['phone' => $normalizedPhone],
                     ['name' => $sessionName]
                 );
-
-                // Keep the display name current when the same phone is used with a different name
-                if ($sessionName !== 'Customer' && $user->name !== $sessionName && ! $user->wasRecentlyCreated) {
-                    $user->update(['name' => $sessionName]);
-                }
 
                 if (! $user->customer) {
                     $user->customer()->create(['is_guest' => true]);

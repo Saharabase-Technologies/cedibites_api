@@ -46,9 +46,36 @@ class CustomerResource extends JsonResource
             'last_order_at' => $lastOrder?->created_at?->toIso8601String(),
             'join_date' => $this->created_at?->format('M Y'),
             'addresses' => $this->addresses->map(fn ($a) => $a->full_address)->filter()->values()->all(),
+            'also_known_as' => $this->whenLoaded('orderAliases', fn () => $this->aliases($name)),
             'most_ordered_item' => $mostOrderedItem?->name ?? '—',
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * Other names this person has given at the counter, newest first.
+     *
+     * An order records the name spoken at the time and never writes it back to
+     * the account, so a customer saved as "Akosua" who orders as "Philippa"
+     * keeps both: Akosua on the profile, Philippa on that receipt. Surfacing the
+     * difference here is what makes that split usable — the call centre can
+     * still match a caller who gives a name the profile has never held.
+     *
+     * @return array<int, string>
+     */
+    private function aliases(string $canonicalName): array
+    {
+        $canonical = mb_strtolower(trim($canonicalName));
+
+        return $this->orderAliases
+            ->pluck('contact_name')
+            ->map(fn (?string $n): string => trim((string) $n))
+            ->filter(fn (string $n): bool => $n !== '' && mb_strtolower($n) !== $canonical)
+            // Case-insensitive de-dupe, keeping the most recent spelling.
+            ->unique(fn (string $n): string => mb_strtolower($n))
+            ->take(5)
+            ->values()
+            ->all();
     }
 }

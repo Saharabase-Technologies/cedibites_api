@@ -12,13 +12,21 @@ require __DIR__.'/cart.php';
 require __DIR__.'/uploads.php';
 
 Route::middleware('auth:sanctum')->group(function () {
+    // Mixed surfaces — each declares its own staff gating internally, because a
+    // customer and a staff member both legitimately reach parts of them.
     require __DIR__.'/protected.php';
-    require __DIR__.'/employee.php';
-    require __DIR__.'/manager.php';
-    require __DIR__.'/admin.php';
     require __DIR__.'/promos.php';
-    require __DIR__.'/platform.php';
     require __DIR__.'/feedback.php';
+
+    // Staff-only surfaces. `token.staff` requires a token minted by the staff
+    // password login; a customer OTP token cannot reach these regardless of what
+    // permissions the underlying user happens to hold. See EnsureStaffToken.
+    Route::middleware('token.staff')->group(function () {
+        require __DIR__.'/employee.php';
+        require __DIR__.'/manager.php';
+        require __DIR__.'/admin.php';
+        require __DIR__.'/platform.php';
+    });
 });
 
 // Hubtel Payment Routes

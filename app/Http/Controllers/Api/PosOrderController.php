@@ -114,15 +114,14 @@ class PosOrderController extends Controller
                 $contactPhone = $this->normalizePhone($request->validated('contact_phone') ?? '');
                 $contactName = $request->validated('contact_name');
 
+                // Name is set on creation only — never rewritten from an order. A
+                // walk-in giving a different name at the counter must not rename the
+                // account behind that phone, least of all when the phone belongs to a
+                // staff member. The name spoken today lives on `contact_name` below.
                 $posUser = \App\Models\User::firstOrCreate(
                     ['phone' => $contactPhone],
                     ['name' => $contactName]
                 );
-
-                // Keep the display name current when the same phone is used with a different name
-                if ($contactName && $posUser->name !== $contactName && ! $posUser->wasRecentlyCreated) {
-                    $posUser->update(['name' => $contactName]);
-                }
 
                 if (! $posUser->customer) {
                     $posUser->customer()->create(['is_guest' => true]);
