@@ -49,13 +49,26 @@ class MenuItemController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        // "What does branch X sell right now" and "what is on branch X's menu"
+        // are different questions, and the till is asking the first. It passes
+        // is_available=true meaning "only what you will actually sell me", so
+        // that is the flag that picks the scope — a branch's own sold-out mark
+        // counts alongside the company-wide one.
+        //
+        // Without this the manager's sold-out toggle was decorative: it wrote
+        // the pivot and no selling screen ever read it.
+        $onSaleOnly = $request->branch_id && $request->is_available !== null && $request->boolean('is_available');
+
         $query = MenuItem::with($this->menuItemWith())
             // servedAt, not branch_id: a dish is one row served at many branches
             // now. The scope still answers to branch_id for any item the merge
             // has not reached yet.
-            ->when($request->branch_id, fn ($q, $branchId) => $q->servedAt($branchId))
+            ->when($request->branch_id, fn ($q, $branchId) => $onSaleOnly
+                ? $q->onSaleAt($branchId)
+                : $q->servedAt($branchId))
             ->when($request->category_id, fn ($q, $categoryId) => $q->where('category_id', $categoryId))
-            ->when($request->is_available !== null, fn ($q) => $q->where('is_available', $request->boolean('is_available')))
+            ->when(! $onSaleOnly && $request->is_available !== null,
+                fn ($q) => $q->where('is_available', $request->boolean('is_available')))
             ->when($request->boolean('popular'), fn ($q) => $q->whereHas('tags', fn ($tq) => $tq->where('slug', 'popular')));
 
         if ($request->has('per_page')) {

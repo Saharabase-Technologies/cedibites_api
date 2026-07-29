@@ -195,6 +195,99 @@ describe('what it must never block', function () {
 
         expect($result->canSell())->toBeTrue();
     });
+
+    /**
+     * A balance row is created the first time an item is counted or received at
+     * a location. No row means "never counted here", which is a configuration
+     * gap, not a shortage — the same rule as a missing location or a missing
+     * recipe.
+     *
+     * Reading the absent row as 0.0 refused 55 of Test Branch's 59 options on
+     * prod, every one for a missing row rather than a real shortage. The top
+     * blockers were serviettes and carrier bags.
+     */
+    it('lets the sale through when the ingredient was never counted here', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+        // No stockOf() call at all — the location has never tracked chicken.
+
+        $result = app(StockAvailabilityService::class)->check($this->branch->id, [
+            ['option_id' => $dish->options->first()->id, 'quantity' => 99],
+        ]);
+
+        expect($result->canSell())->toBeTrue()
+            ->and($result->shortfalls)->toBeEmpty();
+    });
+
+    it('greys out nothing on the till for an ingredient never counted here', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+
+        $map = app(StockAvailabilityService::class)
+            ->sellableMap($this->branch->id, [$dish->options->first()->id]);
+
+        expect($map[$dish->options->first()->id] ?? true)->toBeTrue();
+    });
+});
+
+describe('what it must still block', function () {
+    /**
+     * The other half of the rule above, and the line it turns on: a row holding
+     * zero is a real zero. Someone counted, and the answer was none.
+     */
+    it('refuses when the ingredient was counted and the answer was zero', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+        stockOf($this->chicken, $this->location, 0);
+
+        $result = app(StockAvailabilityService::class)->check($this->branch->id, [
+            ['option_id' => $dish->options->first()->id, 'quantity' => 1],
+        ]);
+
+        expect($result->canSell())->toBeFalse()
+            ->and($result->shortfalls[0]['item_name'])->toBe('Chicken');
+    });
+
+    it('greys the option out on the till when the count says zero', function () {
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+        stockOf($this->chicken, $this->location, 0);
+
+        $map = app(StockAvailabilityService::class)
+            ->sellableMap($this->branch->id, [$dish->options->first()->id]);
+
+        expect($map[$dish->options->first()->id])->toBeFalse();
+    });
+
+    /**
+     * A cart mixing the two must still refuse on the one that was counted. The
+     * untracked ingredient produces no verdict for itself and does not get to
+     * veto a real shortage next to it.
+     */
+    it('still refuses on a counted shortage beside an untracked ingredient', function () {
+        $serviettes = Item::factory()->create(['name' => 'Serviettes']);
+        $dish = dishNeeding($this->branch, 'Jollof', $this->chicken, 1);
+
+        $recipeId = DB::table('inventory_recipes')
+            ->where('menu_item_option_id', $dish->options->first()->id)->value('id');
+        DB::table('inventory_recipe_ingredients')->insert([
+            'recipe_id' => $recipeId,
+            'item_id' => $serviettes->id,
+            'unit_id' => $serviettes->base_unit_id,
+            'quantity' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        stockOf($this->chicken, $this->location, 1);   // counted, and short
+        // serviettes: never counted here
+
+        $result = app(StockAvailabilityService::class)->check($this->branch->id, [
+            ['option_id' => $dish->options->first()->id, 'quantity' => 5],
+        ]);
+
+        expect($result->canSell())->toBeFalse()
+            ->and(collect($result->shortfalls)->pluck('item_name'))
+            ->toContain('Chicken')
+            ->and(collect($result->shortfalls)->pluck('item_name'))
+            ->not->toContain('Serviettes');
+    });
 });
 
 describe('the till', function () {

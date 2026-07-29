@@ -69,27 +69,60 @@ class MenuBranchAvailabilityController extends Controller
     }
 
     /**
-     * Serve / stop serving a dish at one branch.
+     * Change one dish at one branch.
      *
-     * Detaching rather than flagging is deliberate: `is_available = false` means
-     * "we have it, we are out today", which is the manager's word to overwrite
-     * each morning. An admin removing a dish from a branch is saying it is not
-     * on that branch's menu at all — a different statement, and one a manager
-     * should not be able to undo from the sold-out toggle.
+     * Two separate statements, never conflated:
+     *
+     *   served    — is this dish on that branch's menu at all. Attach/detach.
+     *   available — has the branch got it today. The pivot flag, normally the
+     *               manager's to set, which an admin may override.
+     *
+     * Detaching rather than flagging is deliberate for the first: `is_available
+     * = false` means "we have it, we are out today", which is the manager's
+     * word to overwrite each morning. An admin removing a dish from a branch is
+     * saying it is not on that branch's menu at all.
+     *
+     * `served: true` deliberately leaves an existing row's flag alone, so
+     * re-serving a dish does not silently overrule a branch that marked it off
+     * this morning. Clearing that flag is the other verb, and has to be asked
+     * for — which until now was impossible: this took only `served`, and
+     * re-serving went through `syncWithoutDetaching([$branch->id])`. A bare id
+     * array carries no pivot attributes, and sync does not update an existing
+     * row without them, so "serve here" on a sold-out row wrote nothing at all.
+     * Combined with `menu:unify` stamping the flag from the company-wide one,
+     * whole branches read sold out with no way back.
      */
     public function update(Request $request, MenuItem $menuItem, Branch $branch): JsonResponse
     {
         $validated = $request->validate([
-            'served' => ['required', 'boolean'],
+            'served' => ['sometimes', 'boolean'],
+            'available' => ['sometimes', 'boolean'],
         ]);
 
-        if ($validated['served']) {
-            // syncWithoutDetaching so re-serving a dish does not silently clear
-            // a sold-out flag the branch set for a reason.
-            $menuItem->branches()->syncWithoutDetaching([$branch->id]);
-        } else {
-            $menuItem->branches()->detach($branch->id);
+        if (! array_key_exists('served', $validated) && ! array_key_exists('available', $validated)) {
+            return response()->error('Say what to change: served, available, or both.', 422);
         }
+
+        $served = $validated['served'] ?? true;
+        $available = $validated['available'] ?? null;
+
+        if (! $served) {
+            $menuItem->branches()->detach($branch->id);
+        } elseif ($available !== null) {
+            // Both statements at once: on the menu here, and on sale.
+            $menuItem->branches()->syncWithoutDetaching([
+                $branch->id => ['is_available' => $available],
+            ]);
+        } else {
+            $menuItem->branches()->syncWithoutDetaching([$branch->id]);
+        }
+
+        $verb = match (true) {
+            ! $served => 'No longer served',
+            $available === true => 'Back on',
+            $available === false => 'Marked sold out',
+            default => 'Now served',
+        };
 
         activity('admin')
             ->causedBy($request->user())
@@ -98,18 +131,22 @@ class MenuBranchAvailabilityController extends Controller
             ->withProperties([
                 'branch_id' => $branch->id,
                 'branch_name' => $branch->name,
-                'served' => $validated['served'],
+                'served' => $served,
+                'available' => $available,
             ])
-            ->log(($validated['served'] ? 'Now served' : 'No longer served')
-                .": {$menuItem->name} at {$branch->name}");
+            ->log("{$verb}: {$menuItem->name} at {$branch->name}");
 
         return response()->success([
             'menu_item_id' => $menuItem->id,
             'branch_id' => $branch->id,
-            'served' => $validated['served'],
-        ], $validated['served']
-            ? "{$menuItem->name} is now served at {$branch->name}."
-            : "{$menuItem->name} is no longer served at {$branch->name}.");
+            'served' => $served,
+            'available' => $available,
+        ], match (true) {
+            ! $served => "{$menuItem->name} is no longer served at {$branch->name}.",
+            $available === true => "{$menuItem->name} is back on at {$branch->name}.",
+            $available === false => "{$menuItem->name} is marked sold out at {$branch->name}.",
+            default => "{$menuItem->name} is now served at {$branch->name}.",
+        });
     }
 
     /**

@@ -85,6 +85,35 @@ class MenuItem extends Model
         });
     }
 
+    /**
+     * Dishes a branch is actually selling right now.
+     *
+     * `servedAt` answers "is this on that branch's menu", which is the question
+     * the manager's own availability screen asks — it has to list the sold-out
+     * ones in order to put them back. It is the wrong question for a till.
+     *
+     * Nothing asked this one until now, so a manager marking a dish sold out
+     * changed the pivot and nothing else: the POS kept offering it, because its
+     * only availability filter was `menu_items.is_available` — the company-wide
+     * flag. The toggle was decorative on every screen that sells.
+     *
+     * Kept separate rather than folded into `servedAt` precisely so the
+     * manager's screen keeps seeing everything.
+     */
+    public function scopeOnSaleAt(Builder $query, int|string $branchId): Builder
+    {
+        return $query
+            ->servedAt($branchId)
+            ->where('menu_items.is_available', true)
+            // Absent pivot row = the legacy branch_id fallback above, which has
+            // no flag to read. No verdict never means refuse — the same rule the
+            // stock gate follows — or deploying this ahead of the data would
+            // empty every menu that has not been merged yet.
+            ->whereDoesntHave('branches', fn (Builder $b) => $b
+                ->where('branches.id', $branchId)
+                ->where('menu_item_branches.is_available', false));
+    }
+
     public function category(): BelongsTo
     {
         return $this->belongsTo(MenuCategory::class, 'category_id');

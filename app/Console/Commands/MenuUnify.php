@@ -131,10 +131,10 @@ class MenuUnify extends Command
 
         DB::transaction(function () use ($survivor, $losers, &$overrides, &$recipes, &$ratings) {
             // The survivor's own branch serves it.
-            $this->serveAt($survivor->id, (int) $survivor->branch_id, (bool) $survivor->is_available);
+            $this->serveAt($survivor->id, (int) $survivor->branch_id);
 
             foreach ($losers as $loser) {
-                $this->serveAt($survivor->id, (int) $loser->branch_id, (bool) $loser->is_available);
+                $this->serveAt($survivor->id, (int) $loser->branch_id);
 
                 $optionMap = $this->mapOptions($survivor, $loser, $overrides);
 
@@ -169,17 +169,41 @@ class MenuUnify extends Command
 
     /**
      * Record that a branch serves this dish.
+     *
+     * Insert-only, and always available. The pivot's `is_available` is not the
+     * same statement as `menu_items.is_available`, and seeding one from the
+     * other is what made a whole branch's menu read "not available":
+     *
+     *   menu_items.is_available          on sale company-wide — the admin's
+     *   menu_item_branches.is_available  we have it here today — the branch's
+     *
+     * A dish that was withdrawn company-wide when the merge ran — or whose
+     * duplicate row at that branch happened to be off — got a permanent `false`
+     * stamped on the branch pivot. Putting the dish back on sale company-wide
+     * never cleared it, because nothing writes that column except the branch's
+     * own sold-out toggle. The branch read sold out forever.
+     *
+     * Both flags are ANDed on read, so a withdrawn dish is already invisible
+     * everywhere without help from this column. Writing it here only removed
+     * the branch's ability to speak for itself.
+     *
+     * `insertOrIgnore`, not `updateOrInsert`, for the second half of the same
+     * rule: this command runs on every deploy, and a manager's "sold out today"
+     * must survive one.
      */
-    private function serveAt(int $menuItemId, int $branchId, bool $isAvailable): void
+    private function serveAt(int $menuItemId, int $branchId): void
     {
         if ($this->dry) {
             return;
         }
 
-        DB::table('menu_item_branches')->updateOrInsert(
-            ['menu_item_id' => $menuItemId, 'branch_id' => $branchId],
-            ['is_available' => $isAvailable, 'updated_at' => now(), 'created_at' => now()],
-        );
+        DB::table('menu_item_branches')->insertOrIgnore([
+            'menu_item_id' => $menuItemId,
+            'branch_id' => $branchId,
+            'is_available' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
     }
 
     /**
@@ -498,7 +522,7 @@ class MenuUnify extends Command
             ->whereNotExists(fn ($q) => $q->select(DB::raw(1))
                 ->from('menu_item_branches')
                 ->whereColumn('menu_item_branches.menu_item_id', 'menu_items.id'))
-            ->get(['id', 'branch_id', 'is_available']);
+            ->get(['id', 'branch_id']);
 
         if ($missing->isEmpty()) {
             return;
@@ -511,7 +535,7 @@ class MenuUnify extends Command
         }
 
         foreach ($missing as $item) {
-            $this->serveAt($item->id, (int) $item->branch_id, (bool) $item->is_available);
+            $this->serveAt($item->id, (int) $item->branch_id);
         }
     }
 }

@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
  * fire-and-forget: the balance went negative, an alert was raised, and the sale
  * went through regardless. This is the check that stops it.
  *
- * Three things it deliberately will NOT do:
+ * Four things it deliberately will NOT do:
  *
  *   1. Block when it cannot judge. A branch with no inventory location, or a
  *      dish with no recipe, produces no verdict — and no verdict must never mean
@@ -22,10 +22,22 @@ use Illuminate\Support\Facades\DB;
  *      branch raises misrouted_deduction on every sale, and a recipe-less dish
  *      shows up in the IMS recipe coverage report.
  *
- *   2. Judge add-ons. They carry no recipe and deduct nothing, so they can never
+ *   2. Treat an ingredient the location has never tracked as a balance of zero.
+ *      This is the same rule as (1), for the gap it did not anticipate. A stock
+ *      balance row is created the first time an item is counted or received at a
+ *      location, so no row means "we have never counted this here" — not "we
+ *      have none". Reading the absent row as 0.0 refused 55 of Test Branch's 59
+ *      options on 2026-07-29, every one of them for a missing row rather than a
+ *      real shortage: the top blockers were serviettes, carrier bags and
+ *      seasoning cubes, which no one would call being out of food. A branch part
+ *      way through IMS onboarding could not trade at all, and the cashier was
+ *      told "out of stock" about things sitting in front of them. A row holding
+ *      0 is a real zero and still refuses. See `inventory:stock-coverage`.
+ *
+ *   3. Judge add-ons. They carry no recipe and deduct nothing, so they can never
  *      short anything. Stated rather than silently true.
  *
- *   3. Name "stock" as the problem. A cashier cannot act on "out of stock"; they
+ *   4. Name "stock" as the problem. A cashier cannot act on "out of stock"; they
  *      can act on "no chicken". Every shortfall names the ingredient.
  *
  * The check aggregates demand across the whole cart before comparing, because
@@ -92,8 +104,15 @@ class StockAvailabilityService
             $canMake = true;
 
             foreach ($recipe->ingredients as $ingredient) {
+                $itemId = (int) $ingredient->item_id;
+
+                // No balance row is not a balance of zero. See untracked().
+                if (! array_key_exists($itemId, $balances)) {
+                    continue;
+                }
+
                 $need = (float) $ingredient->quantity / $yield;
-                if (($balances[(int) $ingredient->item_id] ?? 0.0) < $need) {
+                if ($balances[$itemId] < $need) {
                     $canMake = false;
                     break;
                 }
@@ -159,7 +178,12 @@ class StockAvailabilityService
         $short = [];
 
         foreach ($demand as $itemId => $required) {
-            $available = $balances[$itemId] ?? 0.0;
+            // No balance row is not a balance of zero. See untracked().
+            if (! array_key_exists($itemId, $balances)) {
+                continue;
+            }
+
+            $available = $balances[$itemId];
 
             if ($available >= $required) {
                 continue;

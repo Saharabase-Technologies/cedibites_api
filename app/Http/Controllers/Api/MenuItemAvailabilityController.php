@@ -39,11 +39,19 @@ class MenuItemAvailabilityController extends Controller
                 'id' => $item->id,
                 'name' => $item->name,
                 'category' => $item->category?->name,
-                // Off everywhere beats on here: an item withdrawn company-wide
-                // is not something a branch can put back.
+                // Two flags, reported separately, because they are two
+                // statements and the screen has to tell them apart:
+                //
+                //   everywhere — on sale company-wide. The admin's.
+                //   here       — we have it today. The branch's own word.
+                //
+                // These used to be ANDed into `available_here`, which made a
+                // dish withdrawn by the admin indistinguishable from one the
+                // branch had run out of — so the branch saw "sold out" against
+                // a toggle that could not fix it. Off everywhere still beats on
+                // here; that is now a rule the UI applies, visibly.
                 'available_everywhere' => (bool) $item->is_available,
-                'available_here' => (bool) $item->is_available
-                    && (bool) ($item->branches->first()?->pivot?->is_available ?? true),
+                'available_here' => (bool) ($item->branches->first()?->pivot?->is_available ?? true),
             ]);
 
         return response()->success($items);
