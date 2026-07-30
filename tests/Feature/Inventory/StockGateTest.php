@@ -92,7 +92,15 @@ beforeEach(function () {
     $this->seed(RoleSeeder::class);
     app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
 
-    $this->branch = Branch::factory()->create(['name' => 'Ashaiman']);
+    // Kept open explicitly. posStore refuses an order at a closed branch, and
+    // the factory's operating hours are real ones — so the checkout-session
+    // tests below passed or failed with the time of day, returning
+    // `branch_closed` instead of the stock verdict they assert on.
+    $this->branch = Branch::factory()->create([
+        'name' => 'Ashaiman',
+        'extended_staff_access' => true,
+        'extended_order_access' => true,
+    ]);
     $this->location = Location::factory()->create([
         'branch_id' => $this->branch->id,
         'type' => 'satellite',

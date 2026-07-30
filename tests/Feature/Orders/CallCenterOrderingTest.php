@@ -65,8 +65,16 @@ beforeEach(function () {
     $this->seed(RoleSeeder::class);
     app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
 
-    $this->branch = Branch::factory()->create();
-    $this->otherBranch = Branch::factory()->create();
+    // Kept open explicitly — posStore refuses orders at a closed branch, so
+    // without this these tests pass or fail with the time of day.
+    $openBranch = fn () => Branch::factory()->create([
+        'is_active' => true,
+        'extended_staff_access' => true,
+        'extended_order_access' => true,
+    ]);
+
+    $this->branch = $openBranch();
+    $this->otherBranch = $openBranch();
 });
 
 /*

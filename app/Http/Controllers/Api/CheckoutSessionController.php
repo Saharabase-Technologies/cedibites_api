@@ -917,11 +917,14 @@ class CheckoutSessionController extends Controller
             return response()->json(['message' => 'Employee record not found.'], 403);
         }
 
-        $branchIds = $employee->branches()->pluck('branches.id');
-
-        if ($user->hasAnyRole([Role::Admin, Role::TechAdmin])) {
-            $branchIds = null; // Admin sees all
-        }
+        // Null means every branch. A company-wide operator holds no branch
+        // assignment, so plucking their pivot returns the empty set and the
+        // drawer showed "0 sessions awaiting payment" however many were waiting
+        // — including the ones they had just started themselves.
+        // See User::isCompanyWide.
+        $branchIds = $user->isCompanyWide()
+            ? null
+            : $employee->branches()->pluck('branches.id');
 
         $query = CheckoutSession::where('session_type', 'pos')
             ->where(function ($q) {

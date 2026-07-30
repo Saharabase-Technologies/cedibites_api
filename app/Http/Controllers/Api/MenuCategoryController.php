@@ -23,8 +23,25 @@ class MenuCategoryController extends Controller
             $query->where('is_active', $request->boolean('is_active'));
         }
 
+        // A branch's categories are the categories of the dishes it serves.
+        //
+        // `menu_items` was unified — one row per dish, sold at many branches via
+        // the pivot — but `menu_categories` still carries the old per-branch
+        // `branch_id`, so filtering on it returned nothing for any branch that
+        // was never given its own category rows. The till then showed the items
+        // with a single "All" tab and no way to narrow them, because the items
+        // are unified and their categories are not.
+        //
+        // Derived from what the branch actually serves rather than from the
+        // legacy column, so this reads correctly whether or not the categories
+        // are ever merged. Legacy rows still match on their own branch_id.
         if ($request->has('branch_id')) {
-            $query->where('branch_id', $request->integer('branch_id'));
+            $branchId = $request->integer('branch_id');
+
+            $query->where(function ($q) use ($branchId) {
+                $q->where('branch_id', $branchId)
+                    ->orWhereHas('menuItems', fn ($items) => $items->servedAt($branchId));
+            });
         }
 
         $categories = $query->orderBy('display_order')->get();

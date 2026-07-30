@@ -67,8 +67,22 @@ beforeEach(function () {
     $this->seed(RoleSeeder::class);
     app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
 
-    $this->mergedOnto = Branch::factory()->create(['is_active' => true]);
-    $this->otherBranch = Branch::factory()->create(['is_active' => true]);
+    $this->mergedOnto = Branch::factory()->create([
+        'is_active' => true,
+        // Otherwise these pass or fail depending on the time of day: posStore
+        // refuses an order at a closed branch, and the factory's operating hours
+        // are real ones.
+        'extended_staff_access' => true,
+        'extended_order_access' => true,
+    ]);
+    $this->otherBranch = Branch::factory()->create([
+        'is_active' => true,
+        // Otherwise these pass or fail depending on the time of day: posStore
+        // refuses an order at a closed branch, and the factory's operating hours
+        // are real ones.
+        'extended_staff_access' => true,
+        'extended_order_access' => true,
+    ]);
 });
 
 /**
@@ -205,4 +219,61 @@ it('names the offending dish when only one of several is unavailable', function 
         ->assertJsonFragment([
             'message' => 'Menu item Banku With Grilled Tilapia is not available at this branch',
         ]);
+});
+
+/*
+|--------------------------------------------------------------------------
+| A branch's categories are the categories of what it serves
+|--------------------------------------------------------------------------
+|
+| menu_items was unified; menu_categories still carries the old per-branch
+| branch_id. Filtering categories on it returned nothing for any branch never
+| given its own rows, so the till showed every dish under a single "All" tab
+| with no way to narrow them.
+|
+*/
+
+it('lists the categories of the dishes a branch serves', function () {
+    $category = \App\Models\MenuCategory::factory()->create([
+        'name' => 'Rice Dishes',
+        'branch_id' => $this->mergedOnto->id,
+        'is_active' => true,
+    ]);
+
+    $dish = MenuItem::factory()->create([
+        'category_id' => $category->id,
+        'branch_id' => $this->mergedOnto->id,
+        'is_available' => true,
+    ]);
+    $dish->branches()->attach($this->otherBranch->id, ['is_available' => true]);
+
+    $names = collect(
+        $this->getJson("/v1/menu-categories?branch_id={$this->otherBranch->id}&is_active=1")
+            ->assertSuccessful()
+            ->json('data')
+    )->pluck('name');
+
+    expect($names)->toContain('Rice Dishes');
+});
+
+it('does not list a category no dish at that branch belongs to', function () {
+    $category = \App\Models\MenuCategory::factory()->create([
+        'name' => 'Only Elsewhere',
+        'branch_id' => $this->mergedOnto->id,
+        'is_active' => true,
+    ]);
+
+    $dish = MenuItem::factory()->create([
+        'category_id' => $category->id,
+        'branch_id' => $this->mergedOnto->id,
+    ]);
+    $dish->branches()->attach($this->mergedOnto->id, ['is_available' => true]);
+
+    $names = collect(
+        $this->getJson("/v1/menu-categories?branch_id={$this->otherBranch->id}&is_active=1")
+            ->assertSuccessful()
+            ->json('data')
+    )->pluck('name');
+
+    expect($names)->not->toContain('Only Elsewhere');
 });
