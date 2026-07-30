@@ -3,7 +3,9 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\BranchRule;
 use App\Enums\Permission;
+use App\Enums\Role as RoleEnum;
 use App\Models\Inventory\Location;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -125,6 +127,30 @@ class User extends Authenticatable
     public function employee(): HasOne
     {
         return $this->hasOne(Employee::class);
+    }
+
+    /**
+     * Whether this user's job spans the whole company rather than a branch.
+     *
+     * Head office, the warehouse, purchasing and the call centre take no branch
+     * assignment — see Role::branchRule(). Every branch-scoped read has to know
+     * that, because "no branches assigned" and "not confined to a branch" look
+     * identical in the pivot table and mean opposite things. Read as the former,
+     * a call centre agent sees no orders at all: the scoping falls through to
+     * `whereIn('branch_id', [])`.
+     *
+     * Distinct from `inventory.view_all_locations`, which is about stock. This
+     * is about the branch a person belongs to, or does not.
+     */
+    public function isCompanyWide(): bool
+    {
+        $role = $this->getRoleNames()->first();
+
+        if (! is_string($role)) {
+            return false;
+        }
+
+        return RoleEnum::tryFrom($role)?->branchRule() === BranchRule::None;
     }
 
     /**

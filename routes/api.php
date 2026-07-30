@@ -21,7 +21,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Staff-only surfaces. `token.staff` requires a token minted by the staff
     // password login; a customer OTP token cannot reach these regardless of what
     // permissions the underlying user happens to hold. See EnsureStaffToken.
-    Route::middleware('token.staff')->group(function () {
+    // `staff.active` then requires the employment itself to still be active, so
+    // suspending someone takes effect on their next request rather than at the
+    // next login they were never going to make. See EnsureStaffActive.
+    Route::middleware(['token.staff', 'staff.active'])->group(function () {
         require __DIR__.'/employee.php';
         require __DIR__.'/manager.php';
         require __DIR__.'/admin.php';

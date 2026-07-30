@@ -82,13 +82,14 @@ class EmployeeOrderController extends Controller
      */
     public function updateStatus(UpdateOrderStatusRequest $request, Order $order): JsonResponse
     {
-        // Check if order belongs to employee's branch
+        // Check if order belongs to employee's branch. A company-wide role —
+        // head office, or the call centre taking orders for every branch — holds
+        // no branch assignment, so this check would refuse them every order.
+        // See User::isCompanyWide.
         $employee = $request->user()->employee;
         $user = $request->user();
 
-        $isAdmin = $user->hasAnyRole([\App\Enums\Role::Admin, \App\Enums\Role::TechAdmin]);
-
-        if (! $isAdmin && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
+        if (! $user->isCompanyWide() && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
             return response()->error('You can only update orders from your branch.', 403);
         }
 

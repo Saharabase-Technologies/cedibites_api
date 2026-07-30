@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\BranchRule;
 use App\Enums\EmployeeStatus;
 use App\Enums\Role;
 use App\Http\Controllers\Controller;
@@ -243,7 +244,12 @@ class PlatformController extends Controller
             return response()->json(['message' => 'Cannot modify your own platform admin status'], 422);
         }
 
-        $user->assignRole(Role::TechAdmin->value);
+        // One role per user — promotion replaces, it does not stack. Leaving the
+        // previous role attached produced accounts reporting themselves as
+        // "Branch Manager" while holding every platform permission, because every
+        // screen reads roles->first() and permissions are the union.
+        $user->syncRoles([Role::TechAdmin->value]);
+        $user->syncPermissions([]);
         $user->update(['platform_passcode' => $validated['new_passcode']]);
 
         activity('platform')
@@ -287,9 +293,18 @@ class PlatformController extends Controller
         // Canonicalise the phone so it matches at login regardless of input format.
         $phone = User::normalizePhone($validated['phone'] ?? null);
 
-        // A branch is required for every role except platform/tech admins.
-        if ($validated['role'] !== Role::TechAdmin->value && empty($validated['branch_ids'])) {
+        // Branch requirement comes from the role, not from a list kept here —
+        // see Role::branchRule(). Head office, the warehouse and the call centre
+        // are company-wide and take none; a manager takes exactly one.
+        $branchRule = Role::from($validated['role'])->branchRule();
+        $branchIds = array_values(array_unique($validated['branch_ids'] ?? []));
+
+        if ($branchRule === BranchRule::None) {
+            $branchIds = [];
+        } elseif ($branchIds === []) {
             return response()->json(['message' => 'At least one branch is required for this role.'], 422);
+        } elseif ($branchRule === BranchRule::ExactlyOne && count($branchIds) > 1) {
+            return response()->json(['message' => 'This role is assigned exactly one branch.'], 422);
         }
 
         DB::beginTransaction();
@@ -347,7 +362,11 @@ class PlatformController extends Controller
                 ]);
             }
 
-            $user->assignRole($validated['role']);
+            // One role per user — see createAdmin. Reusing an existing account
+            // (a customer being brought on staff, a former employee returning)
+            // must not leave the old role attached.
+            $user->syncRoles([$validated['role']]);
+            $user->syncPermissions([]);
 
             // Tech admins additionally get their own platform passcode.
             if ($validated['role'] === Role::TechAdmin->value) {
@@ -368,11 +387,20 @@ class PlatformController extends Controller
                 'hire_date' => now(),
                 'status' => EmployeeStatus::Active->value,
             ]);
-            $employee->branches()->sync($validated['branch_ids'] ?? []);
+            $employee->branches()->sync($branchIds);
 
             DB::commit();
 
-            $user->notify(new StaffAccountCreatedNotification($password, $validated['role']));
+            // Past the commit — a dead SMS gateway must not report the account
+            // as failed when it exists. See EmployeeController::notifyQuietly.
+            try {
+                $user->notify(new StaffAccountCreatedNotification($password, $validated['role']));
+            } catch (\Throwable $e) {
+                \Log::warning('Staff notification failed to send', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             activity('platform')
                 ->causedBy($request->user())

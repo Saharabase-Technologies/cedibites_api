@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Branch;
 use App\Models\Order;
 use App\Models\User;
 use App\Services\Analytics\AnalyticsService;
@@ -19,7 +20,11 @@ class OrderManagementService
     public function getBranchOrders(User $user, array $filters = []): Builder
     {
         $employee = $user->employee;
-        $canSeeAllOrders = $user->hasRole('admin') || $user->hasRole('tech_admin');
+        // A company-wide role is not confined to a branch — the call centre
+        // takes orders for every branch and holds no branch assignment at all,
+        // which the branch scoping below would otherwise read as "no branches,
+        // therefore no orders". See User::isCompanyWide.
+        $canSeeAllOrders = $user->isCompanyWide();
 
         // No payment filter here - admin sees all orders by default
         $query = Order::with(['customer.user', 'items.menuItemOption.menuItem', 'payments', 'branch', 'statusHistory.changedBy', 'assignedEmployee.user']);
@@ -113,7 +118,14 @@ class OrderManagementService
             return $this->emptyStats();
         }
 
-        $branchIds = $employee->branches()->pluck('branches.id')->toArray();
+        // Company-wide roles hold no branch, which is not the same as holding
+        // none of them. Passing every branch id gives the call centre the
+        // figures for the whole company, which is the scope of their job.
+        // See User::isCompanyWide.
+        $branchIds = $user->isCompanyWide()
+            ? Branch::query()->pluck('id')->toArray()
+            : $employee->branches()->pluck('branches.id')->toArray();
+
         if (empty($branchIds)) {
             return $this->emptyStats();
         }
@@ -185,7 +197,11 @@ class OrderManagementService
             return Order::query()->whereRaw('1 = 0');
         }
 
-        $branchIds = $employee->branches()->pluck('branches.id');
+        // See getBranchStats — a company-wide role covers every branch.
+        $branchIds = $user->isCompanyWide()
+            ? Branch::query()->pluck('id')
+            : $employee->branches()->pluck('branches.id');
+
         if ($branchIds->isEmpty()) {
             return Order::query()->whereRaw('1 = 0');
         }

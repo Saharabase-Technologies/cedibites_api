@@ -22,8 +22,11 @@ class EnsureBranchAccess
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        // Super admins and admins bypass branch ownership checks
-        if ($user->hasAnyRole(['tech_admin', 'admin'])) {
+        // Company-wide roles bypass branch ownership: head office, the
+        // warehouse, purchasing and the call centre hold no branch assignment,
+        // so "do you own this branch?" has no answer for them and refusing
+        // would confine them to nothing at all. See User::isCompanyWide.
+        if ($user->isCompanyWide()) {
             return $next($request);
         }
 

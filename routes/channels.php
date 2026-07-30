@@ -7,7 +7,10 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
 });
 
 Broadcast::channel('orders.branch.{branchId}', function ($user, $branchId) {
-    if ($user->hasAnyRole(['admin', 'tech_admin'])) {
+    // Company-wide roles hold no branch assignment (head office, the warehouse,
+    // the call centre), so a pivot lookup would refuse them every branch rather
+    // than allowing them all of them. See User::isCompanyWide.
+    if ($user->isCompanyWide()) {
         return true;
     }
 

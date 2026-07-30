@@ -144,13 +144,14 @@ class EmployeeController extends Controller
                 ]);
             }
 
-            // Assign role
-            $user->assignRole($request->role);
-
-            // Assign individual permissions if provided
-            if ($request->has('permissions') && is_array($request->permissions)) {
-                $user->givePermissionTo($request->permissions);
-            }
+            // One role per user. `syncRoles`, not `assignRole` — reusing an
+            // existing user (a former cashier rehired as a rider, or a customer
+            // being brought on staff) used to leave both roles attached, and
+            // every screen that reads `roles->first()` then reported whichever
+            // came back first while the permissions were the union of the two.
+            // Permissions come from that one role; nothing is granted directly.
+            $user->syncRoles([$request->role]);
+            $user->syncPermissions([]);
 
             // Create employee with all fields — derive next number from the
             // highest existing suffix inside the transaction to avoid races.
@@ -182,11 +183,19 @@ class EmployeeController extends Controller
             }
 
             $employee = Employee::create($employeeData);
-            $employee->branches()->sync($request->branch_ids);
+            // `branch_ids` is normalised to [] by the request for roles that are
+            // company-wide, so head office, the warehouse and the call centre end
+            // up with no branch rather than an arbitrary one.
+            $employee->branches()->sync($request->input('branch_ids', []));
 
             DB::commit();
 
-            $user->notify(new StaffAccountCreatedNotification($password, $request->role));
+            // Past the commit, the hire has happened. Telling them about it is a
+            // separate concern and must not be able to undo it: an SMS gateway
+            // being down used to surface as "Failed to create employee" on an
+            // employee that had already been created, so the admin would try
+            // again and hit the duplicate-phone rule.
+            $this->notifyQuietly($user, new StaffAccountCreatedNotification($password, $request->role));
 
             return response()->created([
                 'employee' => (new EmployeeResource($employee->load(['user.roles.permissions', 'user.permissions', 'branches'])))->resolve(),
@@ -236,7 +245,7 @@ class EmployeeController extends Controller
                 $employee->user->update($userData);
             }
 
-            // Update role if provided
+            // Update role if provided. One role per user — see store().
             if ($request->has('role')) {
                 $oldRole = $employee->user->getRoleNames()->first();
                 $employee->user->syncRoles([$request->role]);
@@ -254,15 +263,24 @@ class EmployeeController extends Controller
                 }
             }
 
-            // Update individual permissions if provided
-            if ($request->has('permissions') && is_array($request->permissions)) {
-                $employee->user->syncPermissions($request->permissions);
+            // Direct permission grants are gone. What a staff member can do is
+            // decided by their role and nothing else, so any grant hanging off
+            // the user itself is cleared on every edit — that is what used to
+            // quietly hand a manager back `manage_employees` after it had been
+            // taken off the role.
+            if ($employee->user->permissions()->exists()) {
+                $employee->user->syncPermissions([]);
             }
 
             // Update employee basic fields
             $employeeData = [];
+            $statusChangedTo = null;
             if ($request->has('status')) {
                 $employeeData['status'] = $request->status;
+                $newStatus = $request->enum('status', EmployeeStatus::class);
+                if ($newStatus !== $employee->status) {
+                    $statusChangedTo = $newStatus;
+                }
             }
             if ($request->has('hire_date')) {
                 $employeeData['hire_date'] = $request->hire_date;
@@ -285,15 +303,30 @@ class EmployeeController extends Controller
                 $employee->update($employeeData);
             }
 
-            // Update branch assignments
+            // Update branch assignments. The request normalises this to [] for a
+            // company-wide role, so switching a branch manager to Admin clears
+            // the branch that no longer means anything.
             if ($request->has('branch_ids')) {
-                $employee->branches()->sync($request->branch_ids);
+                $employee->branches()->sync($request->input('branch_ids', []));
+            }
+
+            // Anything other than Active means no access. Login already refused
+            // these, but nothing revoked the session already in hand, so
+            // suspending someone left them working for up to the 24h token
+            // lifetime — which is most of a shift.
+            if ($statusChangedTo !== null && $statusChangedTo !== EmployeeStatus::Active) {
+                $this->endAccess($employee);
             }
 
             DB::commit();
 
             $freshUser = $employee->fresh(['user.employee.branches', 'user.roles', 'user.permissions'])->user;
-            StaffSessionEvent::dispatch($freshUser, 'user.updated');
+            StaffSessionEvent::dispatch(
+                $freshUser,
+                $statusChangedTo !== null && $statusChangedTo !== EmployeeStatus::Active
+                    ? 'session.revoked'
+                    : 'user.updated',
+            );
 
             return response()->success(
                 new EmployeeResource($employee->fresh(['user.roles.permissions', 'user.permissions', 'branches'])),
@@ -307,17 +340,46 @@ class EmployeeController extends Controller
     }
 
     /**
+     * Send a notification without letting a delivery failure fail the request.
+     *
+     * Everything these announce has already been committed by the time they are
+     * sent, so a dead SMS gateway is news for the log, not a reason to report
+     * the work undone.
+     */
+    private function notifyQuietly(User $user, mixed $notification): void
+    {
+        try {
+            $user->notify($notification);
+        } catch (\Throwable $e) {
+            \Log::warning('Staff notification failed to send', [
+                'user_id' => $user->id,
+                'notification' => $notification::class,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Close down an employee's access: kill every token and end any open shift.
+     *
+     * Called wherever the account stops being active, whether that came through
+     * the suspend button or a status change on the edit form. Both are the same
+     * decision, and only one of them used to have any effect.
+     */
+    private function endAccess(Employee $employee): void
+    {
+        $employee->user->tokens()->delete();
+        $employee->shifts()->whereNull('logout_at')->update(['logout_at' => now()]);
+    }
+
+    /**
      * Remove the specified resource from storage.
      */
     public function destroy(Employee $employee): JsonResponse
     {
         $employee->update(['status' => EmployeeStatus::Suspended->value]);
 
-        // Revoke all tokens so suspended employee cannot continue using the API
-        $employee->user->tokens()->delete();
-
-        // End any active shifts
-        $employee->shifts()->whereNull('logout_at')->update(['logout_at' => now()]);
+        $this->endAccess($employee);
 
         StaffSessionEvent::dispatch($employee->user, 'session.revoked');
 
@@ -331,10 +393,7 @@ class EmployeeController extends Controller
     {
         StaffSessionEvent::dispatch($employee->user, 'session.revoked');
 
-        $employee->user->tokens()->delete();
-
-        // End any active shifts to keep analytics consistent
-        $employee->shifts()->whereNull('logout_at')->update(['logout_at' => now()]);
+        $this->endAccess($employee);
 
         activity('admin')
             ->causedBy(request()->user())
@@ -359,7 +418,7 @@ class EmployeeController extends Controller
             'password_reset_required_at' => now(),
         ]);
 
-        $employee->user->notify(new PasswordResetRequiredNotification);
+        $this->notifyQuietly($employee->user, new PasswordResetRequiredNotification);
 
         activity('admin')
             ->causedBy(request()->user())
