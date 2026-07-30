@@ -25,6 +25,20 @@ class CancelRequestController extends Controller
             'reason' => ['required', 'string', 'max:500'],
         ]);
 
+        // Scope the request to orders the caller has business with. There was no
+        // check here at all: anyone holding the permission could ask for any
+        // order in the company to be dropped, at any branch. A company-wide
+        // role — the call centre, who take the call the customer cancels on —
+        // legitimately reaches every branch. See User::isCompanyWide.
+        $user = $request->user();
+        $employee = $user?->employee;
+
+        if (! $user?->isCompanyWide() && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
+            return response()->json([
+                'message' => 'You can only request cancellation for orders from your branch.',
+            ], 403);
+        }
+
         if (! $order->canTransitionTo('cancel_requested')) {
             return response()->json([
                 'message' => "Cannot request cancellation for an order with status '{$order->status}'.",

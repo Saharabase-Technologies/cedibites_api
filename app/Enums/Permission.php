@@ -14,6 +14,13 @@ enum Permission: string
     case UpdateOrders = 'update_orders';
     case DeleteOrders = 'delete_orders';
 
+    // Orders — ask for a cancellation, without the power to grant one.
+    // Split out of `update_orders`, which bundled "move this order through the
+    // kitchen" together with "ask for it to be dropped". The call centre needs
+    // the second and must not have the first: they take the call, place the
+    // order, and it belongs to the branch from then on. An admin still approves.
+    case OrderCancelRequest = 'order.cancel.request';
+
     // Menu permissions
     case ViewMenu = 'view_menu';
     case ManageMenu = 'manage_menu';

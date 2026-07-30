@@ -427,14 +427,20 @@ describe('a company-wide role is not confined to a branch', function () {
         expect($response->json('data.data'))->toHaveCount(2);
     });
 
-    it('lets a branchless call centre agent advance an order at any branch', function () {
-        ['user' => $agent] = ruleStaff(RoleEnum::CallCenter->value);
+    /**
+     * The call centre deliberately cannot do this — placing an order is not
+     * running one, and they hold no `update_orders`; see
+     * Orders\CallCenterOrderingTest. This covers the same branch check with a
+     * company-wide role that does advance orders, so the scoping stays proven.
+     */
+    it('lets a branchless admin advance an order at any branch', function () {
+        ['user' => $admin] = ruleStaff(RoleEnum::Admin->value);
         $order = Order::factory()->create([
             'branch_id' => $this->branch->id,
             'status' => 'received',
         ]);
 
-        $this->actingAs($agent)
+        $this->actingAs($admin)
             ->patchJson("/v1/employee/orders/{$order->id}/status", ['status' => 'accepted'])
             ->assertSuccessful();
 

@@ -99,6 +99,7 @@ class RoleSeeder extends Seeder
             Permission::ViewOrders->value,
             Permission::CreateOrders->value,
             Permission::UpdateOrders->value,
+            Permission::OrderCancelRequest->value,
             Permission::ViewMenu->value,
             Permission::MenuAvailabilityManage->value,
             Permission::ViewBranches->value,
@@ -133,7 +134,20 @@ class RoleSeeder extends Seeder
             Permission::InventoryStockGateOverride->value,
         ]);
 
-        // Create Call Center role (order placement)
+        // Create Call Center role (order placement).
+        // Scope: they pick up the phone, talk to the customer, and place the
+        // order against the branch that will cook it. That is the whole job —
+        // from the moment it is placed the order belongs to that branch, and the
+        // branch moves it through the kitchen. So no `update_orders`: the call
+        // centre does not accept, prepare or complete anything. When a customer
+        // rings back to cancel they raise a request and an admin decides.
+        //
+        // The role is company-wide (Role::branchRule) because the branch is a
+        // property of each order, not of the agent — they take a call for
+        // Ashaiman and the next one for Spintex.
+        //
+        // See CallCenterScopeCleanupSeeder for revoking `update_orders` on
+        // environments seeded before this scoping — addPermissions only adds.
         $callCenter = Role::updateOrCreate(
             ['name' => RoleEnum::CallCenter->value, 'guard_name' => 'api'],
             ['name' => RoleEnum::CallCenter->value, 'guard_name' => 'api']
@@ -141,7 +155,7 @@ class RoleSeeder extends Seeder
         $this->addPermissions($callCenter, [
             Permission::ViewOrders->value,
             Permission::CreateOrders->value,
-            Permission::UpdateOrders->value,
+            Permission::OrderCancelRequest->value,
             Permission::ViewMenu->value,
             Permission::ViewBranches->value,
             Permission::ViewCustomers->value,
@@ -160,6 +174,8 @@ class RoleSeeder extends Seeder
         $this->addPermissions($kitchen, [
             Permission::ViewOrders->value,
             Permission::UpdateOrders->value,
+            // The kitchen finds out first when an order cannot be made.
+            Permission::OrderCancelRequest->value,
             Permission::ViewMenu->value,
             Permission::AccessKitchen->value,
         ]);
@@ -172,6 +188,8 @@ class RoleSeeder extends Seeder
         $this->addPermissions($rider, [
             Permission::ViewOrders->value,
             Permission::UpdateOrders->value,
+            // A rider who cannot reach the customer raises the request.
+            Permission::OrderCancelRequest->value,
             Permission::ViewCustomers->value,
             Permission::AccessOrderManager->value,
         ]);
@@ -185,6 +203,7 @@ class RoleSeeder extends Seeder
             Permission::ViewOrders->value,
             Permission::CreateOrders->value,
             Permission::UpdateOrders->value,
+            Permission::OrderCancelRequest->value,
             Permission::ViewMenu->value,
             Permission::ViewBranches->value,
             Permission::ViewCustomers->value,

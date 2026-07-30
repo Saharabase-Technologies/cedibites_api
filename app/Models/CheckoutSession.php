@@ -15,6 +15,9 @@ class CheckoutSession extends Model
         'session_token',
         'branch_id',
         'session_type',
+        // The channel the order came through — phone, WhatsApp, social, or the
+        // till. Distinct from session_type, which is only online vs POS.
+        'order_source',
         'status',
         'customer_name',
         'customer_phone',

@@ -356,6 +356,12 @@ class CheckoutSessionController extends Controller
             'delivery_fee' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
 
+            // The channel this order came through. Optional, defaulting to the
+            // till, so an existing POS client that does not send it keeps
+            // recording `pos`. The call centre sends the channel it took the
+            // call on. See OrderCreationService::resolveOrderSource.
+            'order_source' => ['nullable', 'string', 'in:pos,phone,whatsapp,social_media'],
+
             // No stock, no sale — and its exception. Honoured only for a holder
             // of inventory.stock_gate.override.
             'override_stock_gate' => ['sometimes', 'boolean'],
@@ -479,6 +485,8 @@ class CheckoutSessionController extends Controller
             'session_token' => $sessionToken,
             'branch_id' => $branchId,
             'session_type' => 'pos',
+            // Which channel, as opposed to session_type's online-or-not.
+            'order_source' => $validated['order_source'] ?? 'pos',
             'status' => 'pending',
             'customer_name' => $validated['contact_name'],
             'customer_phone' => PhoneHelper::normalize($validated['contact_phone']),
@@ -1037,7 +1045,10 @@ class CheckoutSessionController extends Controller
             );
         }
 
-        if ($employee->user->hasAnyRole([Role::Admin, Role::TechAdmin, Role::CallCenter])) {
+        // Company-wide roles place orders against any branch — the call centre
+        // takes a call for Ashaiman and the next one for Spintex, so the branch
+        // belongs to the order, not to the agent. See User::isCompanyWide.
+        if ($employee->user->isCompanyWide()) {
             return;
         }
 

@@ -187,10 +187,23 @@ class OrderCreationService
         });
     }
 
+    /**
+     * The channel this order came through.
+     *
+     * Prefers what the session was told. The staff order screen has always asked
+     * — phone, WhatsApp, social — and the answer used to be discarded here,
+     * which recorded every call-centre order as a walk-in at the till and made
+     * the channel breakdown in analytics meaningless. `pos` remains the fallback
+     * for anything that does not say, which is what a branch till is.
+     */
     protected function resolveOrderSource($session): string
     {
         if ($session->is_manual_entry) {
             return 'manual_entry';
+        }
+
+        if ($session->order_source) {
+            return $session->order_source;
         }
 
         return $session->session_type === 'online' ? 'online' : 'pos';

@@ -16,7 +16,14 @@ Route::prefix('employee')->group(function () {
 
 // All remaining employee routes require password reset to be cleared
 Route::middleware('password.reset')->group(function () {
-    Route::prefix('pos')->middleware('permission:access_pos')->group(function () {
+    // Staff order entry. The `pos` prefix is historical — this is the path every
+    // staff-placed order takes, whether it was rung up at a till or taken over
+    // the phone by the call centre. Gated on `create_orders`, the permission that
+    // actually means "may place an order", rather than `access_pos`, which is
+    // about reaching the terminal UI. The call centre places orders and never
+    // touches a till, so gating the two on the same permission kept them out of
+    // the only endpoint that can record their work.
+    Route::prefix('pos')->middleware('permission:create_orders')->group(function () {
         Route::post('orders', [PosOrderController::class, 'store']);
         Route::post('verify-momo', [PosOrderController::class, 'verifyMomo']);
 
@@ -58,8 +65,11 @@ Route::middleware('password.reset')->group(function () {
         Route::get('orders/pending', [EmployeeOrderController::class, 'pending']);
         Route::patch('orders/{order}/status', [EmployeeOrderController::class, 'updateStatus'])
             ->middleware('permission:update_orders');
+        // Asking for a cancellation is not the same power as moving an order
+        // through the kitchen, and the call centre needs exactly one of the two.
+        // See Permission::OrderCancelRequest.
         Route::post('orders/{order}/request-cancel', [\App\Http\Controllers\Api\CancelRequestController::class, 'requestCancel'])
-            ->middleware('permission:update_orders');
+            ->middleware('permission:order.cancel.request');
     });
 });
 
