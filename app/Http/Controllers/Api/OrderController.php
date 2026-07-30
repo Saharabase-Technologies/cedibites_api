@@ -43,7 +43,12 @@ class OrderController extends Controller
             return false;
         }
 
-        if ($user->hasAnyRole([Role::Admin, Role::TechAdmin])) {
+        // Whoever works across the whole company: head office, and the call
+        // centre, who take the call a customer rings in on about an order at any
+        // branch. They hold no branch assignment, so the branch check below reads
+        // their empty set as "no branches" and returns a 404 for every order in
+        // the business. See User::isCompanyWide.
+        if ($user->isCompanyWide()) {
             return true;
         }
 

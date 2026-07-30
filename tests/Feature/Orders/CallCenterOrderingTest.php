@@ -71,6 +71,103 @@ beforeEach(function () {
 
 /*
 |--------------------------------------------------------------------------
+| The three things the call centre must be able to do
+|--------------------------------------------------------------------------
+|
+| Stated plainly so nothing quietly takes one of them away: place an order to
+| any branch, read orders from any branch, and see the status of any order at
+| any branch. They hold no branch assignment, which is what makes all three
+| true — and also what breaks them one call site at a time, because
+| `employee_branch` cannot tell "not confined to a branch" apart from "assigned
+| no branches". Every reader has to be told which one it means.
+|
+*/
+
+describe('the call centre reaches every branch', function () {
+    it('1. places an order to any branch', function (string $branchKey) {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+        $branch = $this->{$branchKey};
+        $dish = ccDish($branch);
+
+        $this->actingAs($agent)
+            ->postJson('/v1/pos/checkout-sessions', [
+                'branch_id' => $branch->id,
+                'items' => [[
+                    'menu_item_id' => $dish->id,
+                    'menu_item_option_id' => $dish->options->first()->id,
+                    'quantity' => 1,
+                    'unit_price' => 20,
+                ]],
+                'payment_method' => 'cash',
+                'fulfillment_type' => 'delivery',
+                'contact_name' => 'Ama',
+                'contact_phone' => '+233541234567',
+                'order_source' => 'phone',
+            ])
+            ->assertSuccessful();
+    })->with(['branch', 'otherBranch']);
+
+    it('2. reads orders from every branch in one list', function () {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+        Order::factory()->create(['branch_id' => $this->branch->id]);
+        Order::factory()->create(['branch_id' => $this->otherBranch->id]);
+
+        $response = $this->actingAs($agent)
+            ->getJson('/v1/employee/orders')
+            ->assertSuccessful();
+
+        expect($response->json('data.data'))->toHaveCount(2);
+    });
+
+    /**
+     * This one was returning 404 for every order in the business.
+     * OrderController::canAccessOrder asked the branch pivot and read the empty
+     * set as "no branches" — so an agent taking a call about an order could not
+     * open it to say what was happening to it.
+     */
+    it('3. sees the status of an order at any branch', function (string $branchKey) {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+        $order = Order::factory()->create([
+            'branch_id' => $this->{$branchKey}->id,
+            'status' => 'preparing',
+        ]);
+
+        $this->actingAs($agent)
+            ->getJson("/v1/orders/{$order->id}")
+            ->assertSuccessful()
+            ->assertJsonPath('data.status', 'preparing');
+    })->with(['branch', 'otherBranch']);
+
+    it('still hides another branch\'s order from a cashier', function () {
+        ['user' => $cashier] = ccStaff(RoleEnum::SalesStaff->value, $this->branch);
+        $order = Order::factory()->create(['branch_id' => $this->otherBranch->id]);
+
+        $this->actingAs($cashier)
+            ->getJson("/v1/orders/{$order->id}")
+            ->assertNotFound();
+    });
+
+    /**
+     * Reading is not editing. Widening the order read to company-wide roles must
+     * not hand the call centre the edit and delete paths that share the same
+     * access check — they are gated on permissions the role does not hold.
+     */
+    it('cannot edit or delete the order it can read', function () {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+        $order = Order::factory()->create(['branch_id' => $this->otherBranch->id]);
+
+        $this->actingAs($agent)
+            ->patchJson("/v1/orders/{$order->id}", ['contact_name' => 'Changed'])
+            ->assertForbidden();
+
+        $this->actingAs($agent)
+            ->deleteJson("/v1/orders/{$order->id}")
+            ->assertForbidden();
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
 | The permission split
 |--------------------------------------------------------------------------
 */
