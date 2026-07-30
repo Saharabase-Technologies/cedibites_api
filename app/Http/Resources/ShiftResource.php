@@ -31,7 +31,9 @@ class ShiftResource extends JsonResource
             'id' => (string) $this->id,
             'staffId' => (string) $this->employee_id,
             'staffName' => $this->employee?->user?->name ?? '',
-            'branchId' => (string) $this->branch_id,
+            // Null for a call-centre shift, which belongs to no branch — its
+            // takings break down by the branches its orders went to.
+            'branchId' => $this->branch_id === null ? null : (string) $this->branch_id,
             'branchName' => $this->branch?->name ?? '',
             'loginAt' => $this->login_at->getTimestamp() * 1000,
             'logoutAt' => $this->logout_at?->getTimestamp() * 1000,

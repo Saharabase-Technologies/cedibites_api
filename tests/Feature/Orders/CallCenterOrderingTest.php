@@ -427,3 +427,53 @@ describe('CallCenterScopeCleanupSeeder', function () {
             ->and($agent->can(Permission::UpdateOrders->value))->toBeFalse();
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| The call centre works a shift too
+|--------------------------------------------------------------------------
+|
+| They sit down, take calls and go home like everyone else — they just do not
+| sit in a branch. `shifts.branch_id` being NOT NULL meant they could not start
+| one at all, so they had no shifts, and therefore no My Shifts and no My Sales.
+|
+*/
+
+describe('shifts without a branch', function () {
+    it('starts a shift for an agent who belongs to no branch', function () {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+
+        $this->actingAs($agent)
+            ->postJson('/v1/shifts', [])
+            ->assertSuccessful()
+            ->assertJsonPath('data.branchId', null);
+    });
+
+    it('lets the agent read the shift back', function () {
+        ['user' => $agent] = ccStaff(RoleEnum::CallCenter->value);
+
+        $this->actingAs($agent)->postJson('/v1/shifts', [])->assertSuccessful();
+
+        $response = $this->actingAs($agent)->getJson('/v1/shifts')->assertSuccessful();
+
+        expect($response->json('data'))->toHaveCount(1);
+    });
+
+    it('still requires a branch of someone who works at one', function () {
+        ['user' => $cashier] = ccStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->postJson('/v1/shifts', [])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('branch_id');
+    });
+
+    it('accepts a branch from someone who works at one', function () {
+        ['user' => $cashier] = ccStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->postJson('/v1/shifts', ['branch_id' => $this->branch->id])
+            ->assertSuccessful()
+            ->assertJsonPath('data.branchId', (string) $this->branch->id);
+    });
+});

@@ -348,7 +348,13 @@ class CheckoutSessionController extends Controller
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
             'momo_reference' => ['nullable', 'string', 'max:100'],
-            'fulfillment_type' => ['required', 'string', 'in:dine_in,takeaway,delivery'],
+            // `pickup` was missing, though it is one of the two types a branch can
+            // actually enable (branch_order_types) and one of the four the orders
+            // table allows. A till only ever sends dine_in or takeaway, so nothing
+            // noticed — but a phone order the caller collects themselves is a
+            // pickup, and calling it a takeaway loses the distinction the branch
+            // needs to know whether anyone is coming.
+            'fulfillment_type' => ['required', 'string', 'in:dine_in,takeaway,pickup,delivery'],
             'contact_name' => ['required', 'string', 'max:255'],
             'contact_phone' => ['required', 'string', 'max:20'],
             'customer_notes' => ['nullable', 'string'],

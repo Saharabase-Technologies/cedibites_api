@@ -95,12 +95,15 @@ class ShiftController extends Controller
 
         $shift->load(['employee.user', 'branch']);
 
+        // A call-centre shift has no branch — they work across all of them.
+        $where = $shift->branch?->name ?? 'the call centre';
+
         activity('shifts')
             ->causedBy($request->user())
             ->performedOn($shift)
             ->event('shift_started')
-            ->withProperties(['branch' => $shift->branch->name])
-            ->log("Shift started: {$request->user()->name} at {$shift->branch->name}");
+            ->withProperties(['branch' => $shift->branch?->name])
+            ->log("Shift started: {$request->user()->name} at {$where}");
 
         return response()->created(new ShiftResource($shift));
     }
@@ -131,11 +134,11 @@ class ShiftController extends Controller
             ->performedOn($shift)
             ->event('shift_ended')
             ->withProperties([
-                'branch' => $shift->branch->name,
+                'branch' => $shift->branch?->name,
                 'total_sales' => $shift->total_sales,
                 'order_count' => $shift->order_count,
             ])
-            ->log("Shift ended: {$request->user()->name} at {$shift->branch->name}");
+            ->log("Shift ended: {$request->user()->name} at ".($shift->branch?->name ?? 'the call centre'));
 
         return response()->success(new ShiftResource($shift));
     }
