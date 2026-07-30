@@ -386,15 +386,16 @@ class PosOrderController extends Controller
             }
         }
 
-        // Verify all menu items belong to the specified branch
-        foreach ($menuItems as $menuItem) {
-            if ($menuItem->branch_id !== $branchId) {
-                throw new \Illuminate\Http\Exceptions\HttpResponseException(
-                    response()->json([
-                        'message' => "Menu item {$menuItem->name} is not available at this branch",
-                    ], 422)
-                );
-            }
+        // Verify every dish is one this branch is actually selling. See
+        // MenuItem::firstNotOnSaleAt — comparing the legacy `branch_id` column
+        // refused every branch but the one the dish was consolidated onto when
+        // the menu was merged.
+        if ($offender = MenuItem::firstNotOnSaleAt($menuItemIds, $branchId)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json([
+                    'message' => "Menu item {$offender->name} is not available at this branch",
+                ], 422)
+            );
         }
 
         foreach ($items as $item) {

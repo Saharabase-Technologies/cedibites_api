@@ -1082,12 +1082,14 @@ class CheckoutSessionController extends Controller
             }
         }
 
-        foreach ($menuItems as $mi) {
-            if ($mi->branch_id !== $branchId) {
-                throw new \Illuminate\Http\Exceptions\HttpResponseException(
-                    response()->json(['message' => "Menu item {$mi->name} is not available at this branch"], 422)
-                );
-            }
+        // A dish is one row served at many branches — see
+        // MenuItem::firstNotOnSaleAt. This used to compare the legacy
+        // `branch_id` column, which after the menu merge refused every branch
+        // except the one the dish happened to be consolidated onto.
+        if ($offender = MenuItem::firstNotOnSaleAt($menuItemIds, $branchId)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json(['message' => "Menu item {$offender->name} is not available at this branch"], 422)
+            );
         }
 
         foreach ($items as $item) {

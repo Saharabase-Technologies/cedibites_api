@@ -114,6 +114,44 @@ class MenuItem extends Model
                 ->where('menu_item_branches.is_available', false));
     }
 
+    /**
+     * The first of these dishes the branch is not currently selling, if any.
+     *
+     * The order paths used to answer this themselves, with
+     * `$item->branch_id !== $branchId` — the pre-unification model, where a
+     * dish was a separate row per branch. After `menu:unify` a dish is one row
+     * sold at many branches, and `branch_id` holds only whichever branch it
+     * happened to be consolidated onto. So every branch except that one started
+     * refusing items it was genuinely serving: the menu listed them, because
+     * listing goes through onSaleAt, and the order refused them, because
+     * ordering did not.
+     *
+     * Expressed once here rather than in each controller, which is how the two
+     * copies came to disagree with the rest of the system in the first place.
+     * Uses onSaleAt, not servedAt, so the order path also honours the branch's
+     * own sold-out flag — the till was already hiding those dishes, but nothing
+     * stopped an order for one arriving by another route.
+     *
+     * @param  array<int, int|string>  $menuItemIds
+     */
+    public static function firstNotOnSaleAt(array $menuItemIds, int|string $branchId): ?self
+    {
+        if ($menuItemIds === []) {
+            return null;
+        }
+
+        $onSale = static::query()
+            ->onSaleAt($branchId)
+            ->whereIn('id', $menuItemIds)
+            ->pluck('id')
+            ->all();
+
+        $offender = collect($menuItemIds)
+            ->first(fn ($id) => ! in_array($id, $onSale));
+
+        return $offender === null ? null : static::find($offender);
+    }
+
     public function category(): BelongsTo
     {
         return $this->belongsTo(MenuCategory::class, 'category_id');
