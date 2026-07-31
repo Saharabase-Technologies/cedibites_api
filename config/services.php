@@ -44,6 +44,22 @@ return [
         'secret_key' => env('PAYSTACK_SECRET_KEY'),
     ],
 
+    /*
+     * Plain-English explanations for errors the hand-written table in
+     * ErrorExplainer does not recognise. Reuses the Groq key already set up for
+     * feedback voice-note transcription — same account, same key, but a text
+     * model rather than Whisper. Groq's API is OpenAI-compatible, so pointing
+     * base_url at OpenAI and supplying an OpenAI key works unchanged.
+     *
+     * Leave the key unset to disable: known errors are still explained from the
+     * table, and unknown ones fall back to the raw message.
+     */
+    'error_explainer' => [
+        'key' => env('ERROR_EXPLAINER_KEY', env('GROQ_API_KEY')),
+        'model' => env('ERROR_EXPLAINER_MODEL', 'llama-3.3-70b-versatile'),
+        'base_url' => env('ERROR_EXPLAINER_BASE_URL', 'https://api.groq.com/openai/v1'),
+    ],
+
     'sms' => [
         // NOTE: not currently read by anything. SmsChannel always calls
         // HubtelSmsService directly, so setting this to 'log' does NOT stop

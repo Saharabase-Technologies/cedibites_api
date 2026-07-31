@@ -9,6 +9,10 @@ use Spatie\Activitylog\Models\Activity;
 
 class SmartErrorService
 {
+    public function __construct(
+        private readonly ErrorExplainer $explainer,
+    ) {}
+
     /**
      * Get business-friendly error feed with categories and severity.
      *
@@ -59,31 +63,52 @@ class SmartErrorService
             // Check for burst patterns (3+ failures in 5 minutes)
             $recentAttempts = $attempts->filter(fn ($a) => $a->created_at->gt(now()->subMinutes(5)));
 
+            $props = $attempts->first()->properties;
+            $reason = $props['reason'] ?? null;
+            $userName = $props['name'] ?? $props['identifier'] ?? $identifier;
+
+            // Who they are, so the reader does not have to look up a phone number.
+            $who = collect([
+                $props['employee_no'] ?? null,
+                $props['role'] ?? null,
+                empty($props['branches']) ? null : implode(', ', (array) $props['branches']),
+            ])->filter()->implode(' · ');
+
             if ($recentAttempts->count() >= 3) {
-                $userName = $attempts->first()->properties['name']
-                    ?? $attempts->first()->properties['identifier']
-                    ?? $identifier;
                 $errors->push([
                     'id' => 'login-burst-'.$identifier,
                     'category' => 'authentication',
                     'severity' => 'warning',
-                    'title' => "{$userName} failed to login {$recentAttempts->count()} times in the last 5 minutes",
-                    'description' => 'Probably forgot their password. Consider resetting it for them.',
+                    'title' => "{$userName} failed to sign in {$recentAttempts->count()} times in 5 minutes",
+                    'description' => $this->explainLoginReason($reason, $identifier, $who),
+                    'cause' => $this->explainLoginReason($reason, $identifier, $who),
+                    'fix' => $this->fixForLoginReason($reason),
+                    'reason' => $reason,
+                    'name' => $props['name'] ?? null,
+                    'employee_no' => $props['employee_no'] ?? null,
+                    'role' => $props['role'] ?? null,
+                    'account_status' => $props['account_status'] ?? null,
+                    'ips' => $attempts->pluck('properties.ip')->filter()->unique()->values()->all(),
                     'phone' => $identifier,
                     'timestamp' => $recentAttempts->first()->created_at->toIso8601String(),
                     'count' => $recentAttempts->count(),
                     'action' => 'reset_password',
                 ]);
             } elseif ($attempts->count() >= 5) {
-                $userName = $attempts->first()->properties['name']
-                    ?? $attempts->first()->properties['identifier']
-                    ?? $identifier;
                 $errors->push([
                     'id' => 'login-repeated-'.$identifier,
                     'category' => 'authentication',
                     'severity' => 'info',
-                    'title' => "{$userName} has had {$attempts->count()} failed logins today",
-                    'description' => 'Spread across the day — may be entering wrong credentials.',
+                    'title' => "{$userName} has had {$attempts->count()} failed sign-ins today",
+                    'description' => $this->explainLoginReason($reason, $identifier, $who),
+                    'cause' => $this->explainLoginReason($reason, $identifier, $who),
+                    'fix' => $this->fixForLoginReason($reason),
+                    'reason' => $reason,
+                    'name' => $props['name'] ?? null,
+                    'employee_no' => $props['employee_no'] ?? null,
+                    'role' => $props['role'] ?? null,
+                    'account_status' => $props['account_status'] ?? null,
+                    'ips' => $attempts->pluck('properties.ip')->filter()->unique()->values()->all(),
                     'phone' => $identifier,
                     'timestamp' => $attempts->first()->created_at->toIso8601String(),
                     'count' => $attempts->count(),
@@ -100,12 +125,135 @@ class SmartErrorService
                 'severity' => 'info',
                 'title' => "{$failures->count()} failed login attempts in the last 24 hours",
                 'description' => "Across {$grouped->count()} different accounts.",
+                'cause' => $this->describeLoginReasons($failures),
+                'fix' => $this->adviseOnLoginReasons($failures),
+                'accounts' => $this->accountBreakdown($grouped),
                 'timestamp' => $failures->first()->created_at->toIso8601String(),
                 'count' => $failures->count(),
             ]);
         }
 
         return $errors;
+    }
+
+    /**
+     * One account's failure, in a sentence a manager can act on.
+     */
+    private function explainLoginReason(?string $reason, string $identifier, string $who): string
+    {
+        $suffix = $who === '' ? '' : " ({$who})";
+
+        return match ($reason) {
+            'wrong_password' => "The account exists but the password was wrong{$suffix}. Almost always a forgotten password rather than anything sinister.",
+            'unknown_account' => "No staff account exists for {$identifier}. Either they are typing the wrong phone or email, or someone is guessing at addresses.",
+            'no_employee_record' => "The password was correct, but this person has no staff record{$suffix}, so the staff app will not let them in.",
+            'account_suspended' => "The password was correct but the account is suspended{$suffix}, so sign-in was refused.",
+            'account_inactive' => "The password was correct but the account is not active{$suffix}, so sign-in was refused.",
+            default => "Repeated failed sign-ins for {$identifier}{$suffix}. This attempt predates reason tracking, so the cause was not recorded.",
+        };
+    }
+
+    private function fixForLoginReason(?string $reason): string
+    {
+        return match ($reason) {
+            'wrong_password' => 'Reset their password from Platform → Passwords, then read them the new one. They must change it at first sign-in.',
+            'unknown_account' => 'Confirm the phone number or email on their staff record. If you do not recognise the identifier at all, treat it as an intrusion attempt and note the IP below.',
+            'no_employee_record' => 'They have a customer account, not a staff one. Create a staff record for them, or point them at the customer app instead.',
+            'account_suspended', 'account_inactive' => 'If they should be working, set the account back to Active on their staff record. If the suspension was intended, tell them so they stop trying.',
+            default => 'Ask the person what they are seeing. Future attempts will record the exact reason.',
+        };
+    }
+
+    /**
+     * Say what actually went wrong, grouped by cause.
+     *
+     * "3 failed logins" is a number, not information. Whether those were one
+     * person mistyping a password, a suspended account still trying to get in,
+     * or attempts against addresses that do not exist calls for three completely
+     * different responses.
+     *
+     * @param  Collection<int, Activity>  $failures
+     */
+    private function describeLoginReasons(Collection $failures): string
+    {
+        $byReason = $failures->countBy(fn ($a) => $a->properties['reason'] ?? 'unrecorded');
+
+        $phrase = [
+            'wrong_password' => 'wrong password on an account that exists',
+            'unknown_account' => 'no account with that phone or email',
+            'no_employee_record' => 'signed in but has no staff record',
+            'account_suspended' => 'account suspended',
+            'account_inactive' => 'account not active',
+            'unrecorded' => 'recorded before reasons were tracked',
+        ];
+
+        $parts = $byReason
+            ->map(fn ($count, $reason) => $count.' × '.($phrase[$reason] ?? str_replace('_', ' ', $reason)))
+            ->values()
+            ->all();
+
+        return implode('; ', $parts).'.';
+    }
+
+    /**
+     * @param  Collection<int, Activity>  $failures
+     */
+    private function adviseOnLoginReasons(Collection $failures): string
+    {
+        $reasons = $failures->map(fn ($a) => $a->properties['reason'] ?? null)->filter()->unique();
+
+        $advice = [];
+
+        if ($reasons->contains('wrong_password')) {
+            $advice[] = 'For staff who forgot a password, reset it from Platform → Passwords.';
+        }
+
+        if ($reasons->contains('unknown_account')) {
+            $advice[] = 'Attempts against addresses with no account are usually a staff member using the wrong phone number — check the identifier below before assuming an intrusion.';
+        }
+
+        if ($reasons->contains('no_employee_record')) {
+            $advice[] = 'Someone with a customer account is trying the staff app; they need a staff record before they can sign in.';
+        }
+
+        if ($reasons->filter(fn ($r) => str_starts_with((string) $r, 'account_'))->isNotEmpty()) {
+            $advice[] = 'A suspended or inactive account is still trying to sign in — reactivate it if that was not intended.';
+        }
+
+        return $advice === []
+            ? 'Nothing to act on unless the same account keeps appearing.'
+            : implode(' ', $advice);
+    }
+
+    /**
+     * Per-account detail: who, how many times, why, and from where.
+     *
+     * @param  Collection<string, Collection<int, Activity>>  $grouped
+     * @return array<int, array<string, mixed>>
+     */
+    private function accountBreakdown(Collection $grouped): array
+    {
+        return $grouped
+            ->map(function (Collection $attempts, string $identifier) {
+                $latest = $attempts->first();
+                $props = $latest->properties;
+
+                return [
+                    'identifier' => $identifier,
+                    'name' => $props['name'] ?? null,
+                    'employee_no' => $props['employee_no'] ?? null,
+                    'role' => $props['role'] ?? null,
+                    'branches' => $props['branches'] ?? [],
+                    'account_status' => $props['account_status'] ?? null,
+                    'reason' => $props['reason'] ?? null,
+                    'attempts' => $attempts->count(),
+                    'ips' => $attempts->pluck('properties.ip')->filter()->unique()->values()->all(),
+                    'last_attempt' => $latest->created_at->toIso8601String(),
+                ];
+            })
+            ->sortByDesc('attempts')
+            ->values()
+            ->all();
     }
 
     /**
@@ -232,13 +380,18 @@ class SmartErrorService
             $level = strtolower($match[2]);
             $message = trim(explode("\n", $match[3])[0]);
             $translated = $this->translateException($message);
+            $explained = $this->explainer->explain($message, $translated['category']);
 
             $errors->push([
                 'id' => 'exception-'.$i.'-'.$timestamp->timestamp,
-                'category' => $translated['category'],
+                'category' => $explained['category'],
                 'severity' => $level === 'critical' || $level === 'emergency' ? 'critical' : 'error',
-                'title' => $translated['title'],
-                'description' => $translated['detail'],
+                'title' => $explained['title'],
+                // Kept for older clients that only render `description`.
+                'description' => $explained['cause'],
+                'cause' => $explained['cause'],
+                'fix' => $explained['fix'],
+                'explanation_source' => $explained['source'],
                 'timestamp' => $timestamp->toIso8601String(),
                 'raw' => mb_substr($message, 0, 200),
             ]);

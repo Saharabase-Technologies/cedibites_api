@@ -1,8 +1,10 @@
 <?php
 
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -14,6 +16,24 @@ return Application::configure(basePath: dirname(__DIR__))
         apiPrefix: 'v1',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        /*
+         * Stop the auth middleware reaching for a sign-in page that does not exist.
+         *
+         * Laravel defaults this to `fn () => route('login')` (see
+         * ApplicationBuilder::withMiddleware). This app is API-only and defines
+         * no `login` route, so on every request without a valid token the
+         * middleware threw RouteNotFoundException — "Route [login] not defined"
+         * — while *building* the AuthenticationException. The result was a 500
+         * for what is simply an expired session, and it never reached the
+         * exception handler as an auth failure at all.
+         *
+         * Returning null leaves the exception as a plain AuthenticationException,
+         * which the handler below turns into a 401. Both halves are required:
+         * without this the handler is unreachable, and without the handler this
+         * still ends at `?? route('login')` inside Handler::unauthenticated.
+         */
+        $middleware->redirectGuestsTo(fn () => null);
+
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureUserHasRole::class,
             'permission' => \App\Http\Middleware\EnsureUserHasPermission::class,
@@ -34,5 +54,27 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        /*
+         * Answer unauthenticated API requests with a 401 instead of redirecting.
+         *
+         * Laravel's default handler sends an unauthenticated request to
+         * route('login'). This app is API-only (apiPrefix 'v1') and defines no
+         * such route, so every expired or missing token raised
+         * RouteNotFoundException: "Route [login] not defined" and returned 500.
+         *
+         * The cost was not just the wrong status code. A routine expired session
+         * — the most ordinary event there is — surfaced in the platform error
+         * feed as an unexplained application error, several times an hour, which
+         * is how a feed stops being read at all. Clients also could not tell
+         * "log in again" from "the server broke", so they had no way to recover.
+         *
+         * The redirect only applies when the request does not expect JSON, so
+         * this mainly bites callers that omit `Accept: application/json`.
+         */
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
+            return response()->unauthorized(
+                'Your session has expired. Please sign in again.',
+                'unauthenticated',
+            );
+        });
     })->create();

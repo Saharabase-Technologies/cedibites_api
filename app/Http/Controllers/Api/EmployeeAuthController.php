@@ -39,20 +39,10 @@ class EmployeeAuthController extends Controller
         }
 
         if (! Auth::attempt([$field => $value, 'password' => $password])) {
-            if ($field === 'phone' && $value !== $identifier) {
-                if (! Auth::attempt(['phone' => $identifier, 'password' => $password])) {
-                    activity('auth')
-                        ->withProperties(['identifier' => $identifier, 'ip' => $request->ip()])
-                        ->event('staff_login_failed')
-                        ->log("Failed staff login attempt for: {$identifier}");
+            $normalisedFailed = $field === 'phone' && $value !== $identifier;
 
-                    return response()->unauthorized('The credentials you entered are incorrect. Please try again.', 'invalid_credentials');
-                }
-            } else {
-                activity('auth')
-                    ->withProperties(['identifier' => $identifier, 'ip' => $request->ip()])
-                    ->event('staff_login_failed')
-                    ->log("Failed staff login attempt for: {$identifier}");
+            if (! $normalisedFailed || ! Auth::attempt(['phone' => $identifier, 'password' => $password])) {
+                $this->logLoginFailure($request, $identifier);
 
                 return response()->unauthorized('The credentials you entered are incorrect. Please try again.', 'invalid_credentials');
             }
@@ -62,12 +52,14 @@ class EmployeeAuthController extends Controller
 
         if (! $user->employee) {
             Auth::logout();
+            $this->logLoginFailure($request, $identifier, 'no_employee_record', $user);
 
             return response()->forbidden('User is not an employee');
         }
 
         if ($user->employee->status !== EmployeeStatus::Active) {
             Auth::logout();
+            $this->logLoginFailure($request, $identifier, 'account_'.$user->employee->status->value, $user);
 
             return response()->forbidden('Your account is currently '.$user->employee->status->value.'. Please contact your administrator.');
         }
@@ -283,6 +275,47 @@ class EmployeeAuthController extends Controller
         DB::table('password_reset_tokens')->where('email', $identifier)->delete();
 
         return response()->success(['message' => 'Password reset successfully. You can now log in.']);
+    }
+
+    /**
+     * Record a failed staff sign-in with enough context to act on it.
+     *
+     * Previously this stored only the identifier and IP, so the platform error
+     * feed could say "3 failed logins" but never who, or why — which made it
+     * unactionable. A forgotten password, a suspended account and someone
+     * guessing at an address that does not exist all looked identical, and the
+     * last two were not recorded at all: they returned 403 further down and
+     * logged nothing.
+     *
+     * The diagnosed reason is written to the activity log only. The HTTP
+     * response stays deliberately vague so this does not become an account
+     * enumeration oracle.
+     */
+    private function logLoginFailure(Request $request, string $identifier, ?string $reason = null, ?User $user = null): void
+    {
+        $user ??= $this->findUserByIdentifier($identifier);
+
+        // Nothing passed in means we got here on a failed password check, so the
+        // question is only whether the account exists at all.
+        $reason ??= $user ? 'wrong_password' : 'unknown_account';
+
+        $employee = $user?->employee;
+
+        activity('auth')
+            ->withProperties([
+                'identifier' => $identifier,
+                'ip' => $request->ip(),
+                'user_agent' => mb_substr((string) $request->userAgent(), 0, 255),
+                'reason' => $reason,
+                'user_id' => $user?->id,
+                'name' => $user?->name,
+                'employee_no' => $employee?->employee_no,
+                'role' => $user?->roles->pluck('name')->first(),
+                'branches' => $employee?->branches->pluck('name')->all(),
+                'account_status' => $employee?->status->value,
+            ])
+            ->event('staff_login_failed')
+            ->log("Failed staff login for {$identifier} ({$reason})");
     }
 
     /**
