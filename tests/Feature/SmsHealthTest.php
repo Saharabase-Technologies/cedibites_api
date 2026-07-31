@@ -1,0 +1,340 @@
+<?php
+
+use App\Channels\SmsChannel;
+use App\Enums\SmsFailureReason;
+use App\Models\SmsDeliveryAttempt;
+use App\Models\User;
+use App\Notifications\SmsHealthAlertNotification;
+use App\Services\HubtelSmsService;
+use App\Services\SmsHealthService;
+use Database\Seeders\PermissionSeeder;
+use Database\Seeders\RoleSeeder;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Notification;
+
+beforeEach(function () {
+    Cache::flush();
+    config()->set('services.hubtel.client_id', 'test-id');
+    config()->set('services.hubtel.client_secret', 'test-secret');
+});
+
+/**
+ * @param  array<string, mixed>  $attributes
+ */
+function attempt(array $attributes = []): SmsDeliveryAttempt
+{
+    return SmsDeliveryAttempt::create(array_merge([
+        'notification' => 'StaffPasswordResetNotification',
+        'recipient' => '233241234567',
+        'succeeded' => false,
+        'failure_reason' => SmsFailureReason::NoCredit->value,
+        'error_message' => 'SMS API Error: Payment required on account',
+    ], $attributes));
+}
+
+/*
+|--------------------------------------------------------------------------
+| Classification
+|--------------------------------------------------------------------------
+*/
+
+it('classifies the Hubtel out-of-credit rejection as no_credit', function () {
+    // The exact string production returned for three weeks.
+    expect(SmsFailureReason::classify('SMS API Error: Payment required on account'))
+        ->toBe(SmsFailureReason::NoCredit);
+});
+
+it('classifies the other provider failures it must tell apart', function () {
+    expect(SmsFailureReason::classify('Hubtel SMS is not properly configured'))->toBe(SmsFailureReason::ConfigMissing)
+        ->and(SmsFailureReason::classify('401 Unauthorized'))->toBe(SmsFailureReason::AuthFailed)
+        ->and(SmsFailureReason::classify('Invalid phone number format'))->toBe(SmsFailureReason::InvalidRecipient)
+        ->and(SmsFailureReason::classify('Failed to connect to Hubtel SMS API'))->toBe(SmsFailureReason::Connection)
+        ->and(SmsFailureReason::classify('something we have never seen'))->toBe(SmsFailureReason::Unknown)
+        ->and(SmsFailureReason::classify(null))->toBe(SmsFailureReason::Unknown);
+});
+
+it('treats only the causes that need a human as systemic', function () {
+    expect(SmsFailureReason::NoCredit->isSystemic())->toBeTrue()
+        ->and(SmsFailureReason::AuthFailed->isSystemic())->toBeTrue()
+        ->and(SmsFailureReason::ConfigMissing->isSystemic())->toBeTrue()
+        ->and(SmsFailureReason::InvalidRecipient->isSystemic())->toBeFalse()
+        ->and(SmsFailureReason::Connection->isSystemic())->toBeFalse();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Recording
+|--------------------------------------------------------------------------
+*/
+
+it('records a failed send with the provider reason', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'messageId' => null,
+        'statusDescription' => 'Payment required on account',
+    ], 200)]);
+
+    expect(fn () => app(HubtelSmsService::class)->sendSingle('233241234567', 'hi', 'OrderReadyNotification'))
+        ->toThrow(Exception::class);
+
+    $row = SmsDeliveryAttempt::sole();
+
+    expect($row->succeeded)->toBeFalse()
+        ->and($row->failure_reason)->toBe(SmsFailureReason::NoCredit)
+        ->and($row->notification)->toBe('OrderReadyNotification');
+});
+
+it('records a successful send', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'messageId' => 'abc-123',
+        'status' => 0,
+    ], 200)]);
+
+    app(HubtelSmsService::class)->sendSingle('233241234567', 'hi', 'OrderReadyNotification');
+
+    $row = SmsDeliveryAttempt::sole();
+
+    expect($row->succeeded)->toBeTrue()
+        ->and($row->message_id)->toBe('abc-123')
+        ->and($row->failure_reason)->toBeNull();
+});
+
+it('records an invalid recipient without calling the provider', function () {
+    Http::fake();
+
+    expect(fn () => app(HubtelSmsService::class)->sendSingle('12345', 'hi'))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(SmsDeliveryAttempt::sole()->failure_reason)->toBe(SmsFailureReason::InvalidRecipient);
+    Http::assertNothingSent();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Verdict
+|--------------------------------------------------------------------------
+*/
+
+it('reports unknown rather than healthy when nothing has been sent', function () {
+    // Silence is not proof of health, and must not be shown as green.
+    expect(app(SmsHealthService::class)->check()['status'])->toBe('unknown');
+});
+
+it('goes critical on a single systemic failure', function () {
+    // No credit fails every subsequent message; waiting for a rate to build is
+    // waiting for customers to miss messages.
+    attempt();
+
+    $health = app(SmsHealthService::class)->check();
+
+    expect($health['status'])->toBe('critical')
+        ->and($health['reason'])->toBe('no_credit')
+        ->and($health['systemic'])->toBeTrue()
+        ->and($health['remedy'])->toContain('Top up');
+});
+
+it('does not go critical over a couple of bad phone numbers', function () {
+    // One malformed number among healthy traffic is a data problem, not an
+    // outage — the next message goes out fine.
+    attempt(['failure_reason' => SmsFailureReason::InvalidRecipient->value, 'error_message' => 'Invalid phone number format']);
+
+    foreach (range(1, 19) as $i) {
+        SmsDeliveryAttempt::create(['recipient' => "23324123456{$i}", 'succeeded' => true]);
+    }
+
+    expect(app(SmsHealthService::class)->check()['status'])->toBe('healthy');
+});
+
+it('diagnoses from the current streak, not from errors before the last success', function () {
+    // An old, resolved outage must not be the diagnosis for what is wrong now.
+    attempt(['failure_reason' => SmsFailureReason::NoCredit->value, 'created_at' => now()->subHours(6)]);
+    SmsDeliveryAttempt::create(['recipient' => 'x', 'succeeded' => true, 'created_at' => now()->subHours(4)]);
+    attempt([
+        'failure_reason' => SmsFailureReason::Connection->value,
+        'error_message' => 'Failed to connect to Hubtel SMS API',
+        'created_at' => now()->subMinutes(5),
+    ]);
+
+    $health = app(SmsHealthService::class)->check();
+
+    expect($health['reason'])->toBe('connection')
+        ->and($health['consecutive_failures'])->toBe(1);
+});
+
+it('counts which notifications are being lost', function () {
+    attempt(['notification' => 'OrderReadyNotification']);
+    attempt(['notification' => 'OrderReadyNotification']);
+    attempt(['notification' => 'StaffPasswordResetNotification']);
+
+    $affected = app(SmsHealthService::class)->check()['affected'];
+
+    expect($affected[0]['notification'])->toBe('OrderReadyNotification')
+        ->and($affected[0]['failures'])->toBe(2);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Alerting
+|--------------------------------------------------------------------------
+*/
+
+it('alerts a user who can view system health', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    attempt();
+
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    Notification::assertSentTo($admin, SmsHealthAlertNotification::class);
+});
+
+it('never sends the alert over SMS', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    attempt();
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    // The whole point: an alert about a dead SMS pipe must not be routed down it.
+    Notification::assertSentTo($admin, SmsHealthAlertNotification::class, function ($notification, array $channels) {
+        return ! in_array(SmsChannel::class, $channels, true)
+            && in_array('mail', $channels, true)
+            && in_array('database', $channels, true);
+    });
+});
+
+it('falls back to configured emails when nobody holds the permission', function () {
+    // Production had zero users with view_system_health until 2026-07-31.
+    Notification::fake();
+    config()->set('services.sms.alert_emails', 'ops@cedibites.com, bad-address, second@cedibites.com');
+
+    attempt();
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    Notification::assertSentOnDemand(SmsHealthAlertNotification::class);
+    Notification::assertCount(2); // the malformed address is dropped
+});
+
+it('does not re-alert the same incident inside the cooldown', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    attempt();
+
+    $this->artisan('sms:health-check')->assertSuccessful();
+    $this->artisan('sms:health-check')->assertSuccessful();
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    // A monitor that mails every run gets filtered, and then it is not a monitor.
+    Notification::assertSentToTimes($admin, SmsHealthAlertNotification::class, 1);
+});
+
+it('re-alerts immediately when the cause changes', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    attempt();
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    SmsDeliveryAttempt::query()->delete();
+    attempt(['failure_reason' => SmsFailureReason::AuthFailed->value, 'error_message' => '401 Unauthorized']);
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    Notification::assertSentToTimes($admin, SmsHealthAlertNotification::class, 2);
+});
+
+it('sends a recovery notice once SMS works again', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    attempt();
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    SmsDeliveryAttempt::query()->delete();
+    foreach (range(1, 6) as $i) {
+        SmsDeliveryAttempt::create(['recipient' => "23324123456{$i}", 'succeeded' => true]);
+    }
+
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    Notification::assertSentTo($admin, SmsHealthAlertNotification::class, fn ($n) => $n->recovered === true);
+});
+
+it('stays quiet about recovery when it never raised an alarm', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+    Notification::fake();
+
+    $admin = User::factory()->create(['email' => 'tech@cedibites.com']);
+    $admin->assignRole('tech_admin');
+
+    SmsDeliveryAttempt::create(['recipient' => '233241234567', 'succeeded' => true]);
+
+    $this->artisan('sms:health-check')->assertSuccessful();
+
+    Notification::assertNothingSent();
+});
+
+it('prunes attempt rows past the retention window', function () {
+    attempt(['created_at' => now()->subDays(40)]);
+    attempt(['created_at' => now()->subDays(2)]);
+
+    $this->artisan('sms:health-check --dry --prune-days=30')->assertSuccessful();
+
+    expect(SmsDeliveryAttempt::count())->toBe(1);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Endpoint
+|--------------------------------------------------------------------------
+*/
+
+it('exposes sms health to a platform admin and masks the numbers', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+
+    $admin = User::factory()->create();
+    $admin->assignRole('tech_admin');
+
+    attempt(['recipient' => '233241234567']);
+
+    $response = $this->actingAs($admin, 'sanctum')->getJson('/v1/platform/sms-health');
+
+    $response->assertOk()
+        ->assertJsonPath('data.status', 'critical')
+        ->assertJsonPath('data.reason', 'no_credit');
+
+    expect($response->json('data.recent_failures.0.recipient'))->not->toContain('241234');
+});
+
+it('refuses sms health to a non-platform user', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+
+    $manager = User::factory()->create();
+    $manager->assignRole('manager');
+
+    $this->actingAs($manager, 'sanctum')->getJson('/v1/platform/sms-health')->assertForbidden();
+});

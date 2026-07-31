@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\Enums\SmsFailureReason;
+use App\Models\SmsDeliveryAttempt;
+
 class HubtelSmsService
 {
     protected ?string $clientId;
@@ -136,23 +139,54 @@ class HubtelSmsService
     }
 
     /**
+     * Record the outcome of one send attempt.
+     *
+     * Every path out of a send routes through here, so SmsHealthService can
+     * measure a failure *rate* rather than just count failures. Recording must
+     * never be the reason a message fails to go out, hence the blanket catch:
+     * losing a health datapoint is survivable, losing the SMS is not.
+     */
+    private function record(?string $to, bool $succeeded, ?string $error = null, ?string $messageId = null, ?string $notification = null): void
+    {
+        try {
+            SmsDeliveryAttempt::create([
+                'notification' => $notification,
+                'recipient' => $to,
+                'succeeded' => $succeeded,
+                'failure_reason' => $succeeded ? null : SmsFailureReason::classify($error)->value,
+                'error_message' => $succeeded ? null : mb_substr((string) $error, 0, 500),
+                'message_id' => $messageId,
+            ]);
+        } catch (\Throwable) {
+            // Table missing (pre-migration) or DB hiccup — not worth failing a send over.
+        }
+    }
+
+    /**
      * Send a single SMS message to one recipient.
      *
      * @param  string  $to  Recipient phone number in format 233XXXXXXXXX
      * @param  string  $message  SMS message content
+     * @param  string|null  $notification  Notification class recorded against the attempt
      * @return array Array with messageId, status, and responseCode
      *
      * @throws \RuntimeException When configuration is invalid
      * @throws \InvalidArgumentException When phone number format is invalid
      * @throws \Exception When API request fails
      */
-    public function sendSingle(string $to, string $message): array
+    public function sendSingle(string $to, string $message, ?string $notification = null): array
     {
-        // Validate configuration
-        $this->validateConfiguration();
+        try {
+            // Validate configuration
+            $this->validateConfiguration();
 
-        // Validate phone number
-        $this->validatePhoneNumber($to);
+            // Validate phone number
+            $this->validatePhoneNumber($to);
+        } catch (\Throwable $e) {
+            $this->record($to, false, $e->getMessage(), null, $notification);
+
+            throw $e;
+        }
 
         // Build request payload
         $payload = [
@@ -181,6 +215,8 @@ class HubtelSmsService
                     'response' => $this->sanitizeForLogging($responseData),
                 ]);
 
+                $this->record($to, false, $errorMessage, null, $notification);
+
                 throw new \Exception("Failed to send SMS: {$errorMessage}");
             }
 
@@ -192,6 +228,8 @@ class HubtelSmsService
                 'timestamp' => now()->toIso8601String(),
             ]);
 
+            $this->record($to, true, null, (string) $result['messageId'], $notification);
+
             return $result;
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
             // Handle connection errors with logging
@@ -200,7 +238,18 @@ class HubtelSmsService
                 'error' => $e->getMessage(),
             ]);
 
+            $this->record($to, false, 'Failed to connect to Hubtel SMS API', null, $notification);
+
             throw new \Exception('Failed to connect to Hubtel SMS API');
+        } catch (\Throwable $e) {
+            // parseResponse rejects a malformed or error-shaped body from here.
+            // The explicit-failure branch above already recorded; anything else
+            // reaching this point has not been.
+            if (! str_starts_with($e->getMessage(), 'Failed to send SMS: ')) {
+                $this->record($to, false, $e->getMessage(), null, $notification);
+            }
+
+            throw $e;
         }
     }
 
@@ -215,14 +264,20 @@ class HubtelSmsService
      * @throws \InvalidArgumentException When any phone number format is invalid
      * @throws \Exception When API request fails
      */
-    public function sendBatch(array $recipients, string $message): array
+    public function sendBatch(array $recipients, string $message, ?string $notification = null): array
     {
-        // Validate configuration
-        $this->validateConfiguration();
+        try {
+            // Validate configuration
+            $this->validateConfiguration();
 
-        // Validate all phone numbers in recipients array
-        foreach ($recipients as $phone) {
-            $this->validatePhoneNumber($phone);
+            // Validate all phone numbers in recipients array
+            foreach ($recipients as $phone) {
+                $this->validatePhoneNumber($phone);
+            }
+        } catch (\Throwable $e) {
+            $this->recordBatch($recipients, false, $e->getMessage(), $notification);
+
+            throw $e;
         }
 
         // Build request payload
@@ -246,11 +301,16 @@ class HubtelSmsService
                     'response' => $this->sanitizeForLogging($response->json() ?? []),
                 ]);
 
+                $body = $response->json() ?? [];
+                $this->recordBatch($recipients, false, $body['statusDescription'] ?? $response->body(), $notification);
+
                 throw new \Exception('Failed to send batch SMS: '.$response->body());
             }
 
             // Parse and return response with messageIds array
             $result = $this->parseResponse($response);
+
+            $this->recordBatch($recipients, true, null, $notification);
 
             // Log success with recipient count and sanitized data
             \Illuminate\Support\Facades\Log::info('Batch SMS sent successfully', [
@@ -268,7 +328,22 @@ class HubtelSmsService
                 'error' => $e->getMessage(),
             ]);
 
+            $this->recordBatch($recipients, false, 'Failed to connect to Hubtel SMS API', $notification);
+
             throw new \Exception('Failed to connect to Hubtel SMS API');
+        }
+    }
+
+    /**
+     * One attempt row per recipient, so a batch of 50 counts as 50 in the
+     * failure rate rather than as a single event.
+     *
+     * @param  array<int, string>  $recipients
+     */
+    private function recordBatch(array $recipients, bool $succeeded, ?string $error = null, ?string $notification = null): void
+    {
+        foreach ($recipients as $phone) {
+            $this->record((string) $phone, $succeeded, $error, null, $notification);
         }
     }
 }

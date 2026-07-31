@@ -7,33 +7,49 @@ use Illuminate\Support\Facades\DB;
 
 class SystemHealthService
 {
+    public function __construct(
+        private readonly SmsHealthService $smsHealth,
+    ) {}
+
     /**
      * @return array<string, mixed>
      */
     public function check(): array
     {
+        $sms = $this->smsHealth->check();
+
         return [
-            'status' => $this->overallStatus(),
+            'status' => $this->overallStatus($sms),
             'php' => $this->phpInfo(),
             'laravel' => $this->laravelInfo(),
             'database' => $this->databaseHealth(),
             'cache' => $this->cacheHealth(),
             'queue' => $this->queueHealth(),
+            'sms' => $sms,
             'disk' => $this->diskUsage(),
             'uptime' => $this->serverUptime(),
         ];
     }
 
-    private function overallStatus(): string
+    /**
+     * @param  array<string, mixed>  $sms
+     */
+    private function overallStatus(array $sms): string
     {
         try {
             DB::select('SELECT 1');
             Cache::store()->get('health-check');
-
-            return 'healthy';
         } catch (\Throwable) {
             return 'degraded';
         }
+
+        // A platform that cannot send a password reset or an order update is not
+        // "All Systems Operational", however green the database is.
+        if (($sms['status'] ?? null) === 'critical') {
+            return 'degraded';
+        }
+
+        return 'healthy';
     }
 
     /**

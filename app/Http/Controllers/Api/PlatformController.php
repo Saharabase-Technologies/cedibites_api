@@ -7,9 +7,11 @@ use App\Enums\EmployeeStatus;
 use App\Enums\Role;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\SmsDeliveryAttempt;
 use App\Models\User;
 use App\Notifications\StaffAccountCreatedNotification;
 use App\Services\SmartErrorService;
+use App\Services\SmsHealthService;
 use App\Services\SystemHealthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +26,7 @@ class PlatformController extends Controller
     public function __construct(
         private SystemHealthService $healthService,
         private SmartErrorService $errorService,
+        private SmsHealthService $smsHealthService,
     ) {}
 
     /**
@@ -34,6 +37,33 @@ class PlatformController extends Controller
         return response()->json([
             'data' => $this->healthService->check(),
         ]);
+    }
+
+    /**
+     * SMS delivery health, with the recent failures behind the verdict.
+     */
+    public function smsHealth(Request $request): JsonResponse
+    {
+        $window = min(max((int) ($request->window ?? 24), 1), 24 * 30);
+
+        $health = $this->smsHealthService->check($window);
+
+        $health['recent_failures'] = SmsDeliveryAttempt::query()
+            ->where('succeeded', false)
+            ->orderByDesc('id')
+            ->limit(25)
+            ->get()
+            ->map(fn (SmsDeliveryAttempt $a) => [
+                'id' => $a->id,
+                'notification' => $a->notification,
+                'recipient' => $this->maskPhone((string) $a->recipient),
+                'reason' => $a->failure_reason?->value,
+                'error' => $a->error_message,
+                'failed_at' => $a->created_at?->toIso8601String(),
+            ])
+            ->all();
+
+        return response()->json(['data' => $health]);
     }
 
     /**
@@ -561,6 +591,19 @@ class PlatformController extends Controller
             ]);
 
         return response()->json(['data' => $tokens]);
+    }
+
+    /**
+     * Mask a phone for display, e.g. "+233241234567" → "+2332•••••67".
+     * Enough to recognise a number you already know, not enough to harvest one.
+     */
+    private function maskPhone(string $phone): string
+    {
+        if (mb_strlen($phone) < 6) {
+            return $phone;
+        }
+
+        return mb_substr($phone, 0, 5).str_repeat('•', 5).mb_substr($phone, -2);
     }
 
     /**

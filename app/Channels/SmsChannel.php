@@ -46,7 +46,7 @@ class SmsChannel
                 $hubtelPhone = '233' . $hubtelPhone;
             }
 
-            $result = $this->smsService->sendSingle($hubtelPhone, $message);
+            $result = $this->smsService->sendSingle($hubtelPhone, $message, class_basename($notification));
 
             Log::info('SMS notification sent', [
                 'notifiable_id' => $notifiable->id,

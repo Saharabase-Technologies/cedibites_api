@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
     // System health
     Route::get('health', [PlatformController::class, 'health'])->middleware('permission:view_system_health');
+    Route::get('sms-health', [PlatformController::class, 'smsHealth'])->middleware('permission:view_system_health');
 
     // Smart error feed
     Route::get('errors', [PlatformController::class, 'errors'])->middleware('permission:view_error_logs');

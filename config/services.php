@@ -45,7 +45,19 @@ return [
     ],
 
     'sms' => [
+        // NOTE: not currently read by anything. SmsChannel always calls
+        // HubtelSmsService directly, so setting this to 'log' does NOT stop
+        // real messages going out. Left in place pending a real driver switch.
         'driver' => env('SMS_DRIVER', 'log'), // log, africastalking, hubtel
+
+        // Health alerting (see CheckSmsHealth).
+        // Hours before the same ongoing incident is re-alerted. A changed cause
+        // or an escalation to critical alerts immediately regardless.
+        'alert_cooldown_hours' => env('SMS_ALERT_COOLDOWN_HOURS', 6),
+
+        // Comma-separated fallback recipients, for when no user holds
+        // view_system_health (which was the case in production until 2026-07-31).
+        'alert_emails' => env('SMS_ALERT_EMAILS', ''),
     ],
 
     'africastalking' => [
