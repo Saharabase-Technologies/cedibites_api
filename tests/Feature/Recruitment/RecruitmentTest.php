@@ -212,6 +212,22 @@ describe('the form a recruit fills in', function () {
             ->and($application->link->branch_id)->toBe($this->branch->id);
     });
 
+    it('does not collect SSNIT or TIN', function () {
+        $link = branchLink($this->branch, $this->admin);
+
+        // An applicant is not on payroll and often has neither yet. Both stay on
+        // `employees`, filled in by the staff editor after the hire.
+        $this->postJson("/v1/recruit/{$link->token}", applicationPayload([
+            'ssnit_number' => 'SSN-123',
+            'tin_number' => 'TIN-456',
+        ]))->assertCreated();
+
+        $stored = RecruitmentApplication::first()->getAttributes();
+
+        expect($stored)->not->toHaveKey('ssnit_number')
+            ->and($stored)->not->toHaveKey('tin_number');
+    });
+
     it('turns away someone who already has a staff account', function () {
         $link = branchLink($this->branch, $this->admin);
         ['user' => $existing] = recruitStaff(RoleEnum::SalesStaff->value, $this->branch);
@@ -380,6 +396,118 @@ describe('creating a link', function () {
             ->and($branchRoles)->not->toContain(RoleEnum::Admin->value)
             ->and($branchRoles)->not->toContain(RoleEnum::TechAdmin->value)
             ->and($callCentreRoles)->toBe([RoleEnum::CallCenter->value]);
+    });
+});
+
+describe('editing a posting', function () {
+    it('renames it', function () {
+        $link = branchLink($this->branch, $this->admin, ['label' => 'Old name']);
+
+        $this->actingAs($this->admin)
+            ->patchJson("/v1/admin/recruitment-links/{$link->id}", ['label' => 'November intake'])
+            ->assertOk()
+            ->assertJsonPath('data.label', 'November intake');
+    });
+
+    it('closes it by moving the date into the past', function () {
+        $link = branchLink($this->branch, $this->admin);
+
+        $this->actingAs($this->admin)
+            ->patchJson("/v1/admin/recruitment-links/{$link->id}", [
+                'expires_at' => now()->subMinute()->toIso8601String(),
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.is_expired', true);
+
+        // Which is the whole point: the form stops taking submissions.
+        $this->postJson("/v1/recruit/{$link->token}", applicationPayload())->assertNotFound();
+    });
+
+    it('reopens one that was closed', function () {
+        $link = branchLink($this->branch, $this->admin, ['expires_at' => now()->subDay()]);
+
+        $this->actingAs($this->admin)
+            ->patchJson("/v1/admin/recruitment-links/{$link->id}", [
+                'expires_at' => now()->addDays(14)->toIso8601String(),
+            ])
+            ->assertOk();
+
+        $this->postJson("/v1/recruit/{$link->token}", applicationPayload())->assertCreated();
+    });
+
+    it('will not move the branch out from under people who already applied', function () {
+        $other = Branch::factory()->create(['name' => 'Ashaiman']);
+        $link = branchLink($this->branch, $this->admin);
+        apply($link, $this->admin);
+
+        $this->actingAs($this->admin)
+            ->patchJson("/v1/admin/recruitment-links/{$link->id}", [
+                'branch_id' => $other->id,
+                'kind' => RecruitmentLinkKind::CallCenter->value,
+            ])
+            ->assertOk();
+
+        // Neither field is validated, so neither is written. Changing them would
+        // send pending applicants to a branch they never applied to, and nothing
+        // on screen would look wrong.
+        expect($link->fresh()->branch_id)->toBe($this->branch->id)
+            ->and($link->fresh()->kind)->toBe(RecruitmentLinkKind::Branch);
+    });
+
+    it('is closed to staff who cannot manage employees', function () {
+        $link = branchLink($this->branch, $this->admin);
+        ['user' => $cashier] = recruitStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->patchJson("/v1/admin/recruitment-links/{$link->id}", ['label' => 'Mine now'])
+            ->assertForbidden();
+    });
+});
+
+describe('deleting a posting', function () {
+    it('deletes one nobody has applied to', function () {
+        $link = branchLink($this->branch, $this->admin);
+
+        $this->actingAs($this->admin)
+            ->deleteJson("/v1/admin/recruitment-links/{$link->id}")
+            ->assertNoContent();
+
+        expect(RecruitmentLink::count())->toBe(0);
+    });
+
+    it('refuses to delete one that has applications', function () {
+        $link = branchLink($this->branch, $this->admin);
+        apply($link, $this->admin);
+
+        // The foreign key cascades, so this would take the applications with it
+        // — including approved ones carrying created_user_id, the only record of
+        // which form a staff account came from.
+        $this->actingAs($this->admin)
+            ->deleteJson("/v1/admin/recruitment-links/{$link->id}")
+            ->assertUnprocessable();
+
+        expect(RecruitmentLink::count())->toBe(1)
+            ->and(RecruitmentApplication::count())->toBe(1);
+    });
+
+    it('still refuses when the only application was rejected', function () {
+        $link = branchLink($this->branch, $this->admin);
+        apply($link, $this->admin, ['status' => RecruitmentApplicationStatus::Rejected]);
+
+        $this->actingAs($this->admin)
+            ->deleteJson("/v1/admin/recruitment-links/{$link->id}")
+            ->assertUnprocessable();
+    });
+
+    it('is closed to staff who cannot manage employees', function () {
+        $link = branchLink($this->branch, $this->admin);
+        ['user' => $cashier] = recruitStaff(RoleEnum::SalesStaff->value, $this->branch);
+
+        $this->actingAs($cashier)
+            ->deleteJson("/v1/admin/recruitment-links/{$link->id}")
+            ->assertForbidden();
+
+        expect(RecruitmentLink::count())->toBe(1);
     });
 });
 

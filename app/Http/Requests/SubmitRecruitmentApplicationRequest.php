@@ -113,9 +113,10 @@ class SubmitRecruitmentApplicationRequest extends FormRequest
             'password_confirmation' => ['required', 'string'],
 
             // HR information — all optional. Nothing here blocks an application.
-            'ssnit_number' => ['nullable', 'string', 'max:255'],
+            //
+            // No SSNIT and no TIN: an applicant is not on payroll and often does
+            // not have them yet. They belong to the staff editor, after the hire.
             'ghana_card_id' => ['nullable', 'string', 'max:255'],
-            'tin_number' => ['nullable', 'string', 'max:255'],
             'date_of_birth' => ['nullable', 'date', 'before:today'],
             'nationality' => ['nullable', 'string', 'max:255'],
 

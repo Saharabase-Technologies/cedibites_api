@@ -8,6 +8,7 @@ use App\Enums\RecruitmentApplicationStatus;
 use App\Enums\Role;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CreateRecruitmentLinkRequest;
+use App\Http\Requests\UpdateRecruitmentLinkRequest;
 use App\Http\Resources\RecruitmentApplicationResource;
 use App\Http\Resources\RecruitmentLinkResource;
 use App\Models\RecruitmentApplication;
@@ -57,6 +58,53 @@ class RecruitmentAdminController extends Controller
         return response()->created(
             (new RecruitmentLinkResource($link->load('branch', 'createdBy')))->resolve(),
         );
+    }
+
+    /**
+     * Rename a posting, or change when it closes.
+     *
+     * Setting the date to now is how a link is shut — see
+     * UpdateRecruitmentLinkRequest for why the kind and branch cannot move.
+     */
+    public function updateLink(UpdateRecruitmentLinkRequest $request, RecruitmentLink $link): JsonResponse
+    {
+        $this->assertLinkVisible($request->user(), $link);
+
+        $link->update($request->safe()->only(['label', 'expires_at']));
+
+        return response()->success(
+            (new RecruitmentLinkResource(
+                $link->fresh(['branch', 'createdBy'])->loadCount(['applications', 'pendingApplications'])
+            ))->resolve(),
+            'Posting updated.'
+        );
+    }
+
+    /**
+     * Delete a posting — but only one nobody has applied to.
+     *
+     * `recruitment_link_id` cascades, so deleting a link with applications takes
+     * every application with it, including approved ones that carry
+     * `created_user_id` — the only record of which form a staff account came
+     * from. That trail is worth more than the tidiness of a short list, so a
+     * posting with applications is closed rather than deleted.
+     */
+    public function deleteLink(Request $request, RecruitmentLink $link): JsonResponse
+    {
+        $this->assertLinkVisible($request->user(), $link);
+
+        $applications = $link->applications()->count();
+
+        if ($applications > 0) {
+            return response()->unprocessable(
+                "This posting has {$applications} application".($applications === 1 ? '' : 's')
+                .' attached and deleting it would take them with it. Close it instead by setting the closing date to today.'
+            );
+        }
+
+        $link->delete();
+
+        return response()->deleted();
     }
 
     public function applications(Request $request): JsonResponse
@@ -255,8 +303,14 @@ class RecruitmentAdminController extends Controller
     /** 404 rather than 403 — an application they cannot see does not exist to them. */
     private function assertVisible(?User $user, RecruitmentApplication $application): void
     {
+        $this->assertLinkVisible($user, $application->recruitment_link_id);
+    }
+
+    /** Same rule for the posting itself. */
+    private function assertLinkVisible(?User $user, RecruitmentLink|int $link): void
+    {
         $visible = $this->scopeToViewer(
-            RecruitmentLink::whereKey($application->recruitment_link_id),
+            RecruitmentLink::whereKey($link instanceof RecruitmentLink ? $link->id : $link),
             $user,
         )->exists();
 

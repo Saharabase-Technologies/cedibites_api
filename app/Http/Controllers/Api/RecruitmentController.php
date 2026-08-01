@@ -61,9 +61,9 @@ class RecruitmentController extends Controller
             // Cast 'hashed' on the model — the plaintext stops here.
             'password_hash' => $request->input('password'),
             ...$request->safe()->only([
-                'ssnit_number', 'ghana_card_id', 'tin_number',
-                'date_of_birth', 'nationality', 'emergency_contact_name',
-                'emergency_contact_phone', 'emergency_contact_relationship',
+                'ghana_card_id', 'date_of_birth', 'nationality',
+                'emergency_contact_name', 'emergency_contact_phone',
+                'emergency_contact_relationship',
             ]),
         ]);
 

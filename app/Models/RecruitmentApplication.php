@@ -19,9 +19,7 @@ class RecruitmentApplication extends Model
         'phone',
         'email',
         'password_hash',
-        'ssnit_number',
         'ghana_card_id',
-        'tin_number',
         'date_of_birth',
         'nationality',
         'emergency_contact_name',
@@ -47,10 +45,8 @@ class RecruitmentApplication extends Model
             'date_of_birth' => 'date',
             'reviewed_at' => 'datetime',
             'password_hash' => 'hashed',
-            // Same encryption as the employees table these fields end up in.
-            'ssnit_number' => 'encrypted',
+            // Same encryption as the employees table this field ends up in.
             'ghana_card_id' => 'encrypted',
-            'tin_number' => 'encrypted',
         ];
     }
 
@@ -94,9 +90,7 @@ class RecruitmentApplication extends Model
     public function employeeDetails(): array
     {
         return array_filter([
-            'ssnit_number' => $this->ssnit_number,
             'ghana_card_id' => $this->ghana_card_id,
-            'tin_number' => $this->tin_number,
             'date_of_birth' => $this->date_of_birth?->toDateString(),
             'nationality' => $this->nationality,
             'emergency_contact_name' => $this->emergency_contact_name,

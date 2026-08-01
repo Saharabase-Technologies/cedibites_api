@@ -38,9 +38,7 @@ class RecruitmentApplicationResource extends JsonResource
             ]),
 
             $this->mergeWhen($canViewPii, fn () => [
-                'ssnit_number' => $this->ssnit_number,
                 'ghana_card_id' => $this->ghana_card_id,
-                'tin_number' => $this->tin_number,
                 'date_of_birth' => $this->date_of_birth?->toDateString(),
                 'nationality' => $this->nationality,
                 'emergency_contact_name' => $this->emergency_contact_name,

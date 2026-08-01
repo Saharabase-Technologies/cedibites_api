@@ -70,6 +70,10 @@ Route::prefix('admin')->group(function () {
         // reading every HR record in the company.
         Route::get('recruitment-links', [RecruitmentAdminController::class, 'links']);
         Route::post('recruitment-links', [RecruitmentAdminController::class, 'createLink']);
+        // Label and closing date only — the kind and branch cannot move once the
+        // URL is out there. See UpdateRecruitmentLinkRequest.
+        Route::patch('recruitment-links/{link}', [RecruitmentAdminController::class, 'updateLink']);
+        Route::delete('recruitment-links/{link}', [RecruitmentAdminController::class, 'deleteLink']);
         Route::get('recruitment-applications', [RecruitmentAdminController::class, 'applications']);
         Route::get('recruitment-applications/{application}', [RecruitmentAdminController::class, 'showApplication']);
         Route::post('recruitment-applications/{application}/approve', [RecruitmentAdminController::class, 'approve']);
