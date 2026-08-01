@@ -9,11 +9,13 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
 
 /**
- * The recruitment form, as filled in by a member of the public.
+ * The joining form, as filled in by a new member of staff.
  *
- * Mirrors CreateEmployeeRequest minus everything that is not the applicant's to
- * decide: no role, no branch, no status, no password_mode. The role is chosen by
- * the reviewer at approval and the branch comes from the link.
+ * These are people who have already been taken on; the form is how their details
+ * reach the system, not a job application. It mirrors CreateEmployeeRequest minus
+ * everything that is not theirs to decide: no role, no branch, no status, no
+ * password_mode. The role is chosen by whoever checks the details, and the branch
+ * comes from the link.
  */
 class SubmitRecruitmentApplicationRequest extends FormRequest
 {
@@ -42,7 +44,7 @@ class SubmitRecruitmentApplicationRequest extends FormRequest
     protected function failedAuthorization(): void
     {
         throw new HttpResponseException(
-            response()->error('This recruitment link is no longer open.', 404)
+            response()->error('This link has expired.', 404)
         );
     }
 
@@ -95,11 +97,11 @@ class SubmitRecruitmentApplicationRequest extends FormRequest
                     // — that is the reuse path. Only an existing staff account
                     // is a collision.
                     if ($existing && $existing->employee) {
-                        $fail('This phone number already belongs to a staff account. Speak to your manager instead of applying.');
+                        $fail('This phone number already has a staff account. Speak to your manager — you do not need to fill this in.');
                     }
 
                     if ($this->hasOpenApplication($value)) {
-                        $fail('You have already applied for this position. We have your details.');
+                        $fail('We already have your details. There is nothing more for you to do.');
                     }
                 },
             ],

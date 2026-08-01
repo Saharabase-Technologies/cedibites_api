@@ -73,7 +73,7 @@ class CreateRecruitmentLinkRequest extends FormRequest
             }
 
             if ($kind === RecruitmentLinkKind::CallCenter) {
-                $v->errors()->add('kind', 'Only an administrator can recruit for the call centre.');
+                $v->errors()->add('kind', 'Only an administrator can add call centre staff.');
 
                 return;
             }
@@ -83,7 +83,7 @@ class CreateRecruitmentLinkRequest extends FormRequest
                 : [];
 
             if (! in_array((int) $this->input('branch_id'), $ownBranches, true)) {
-                $v->errors()->add('branch_id', 'You can only recruit for a branch you are assigned to.');
+                $v->errors()->add('branch_id', 'You can only add staff to a branch you are assigned to.');
             }
         });
     }
@@ -92,7 +92,7 @@ class CreateRecruitmentLinkRequest extends FormRequest
     {
         return [
             'branch_id.required' => 'A branch link needs a branch.',
-            'expires_at.required' => 'Give the link a closing date — it is the only thing that shuts it.',
+            'expires_at.required' => 'Give the link a closing date.',
             'expires_at.after' => 'The closing date must be in the future.',
             'expires_at.before' => 'Keep the closing date within a year.',
         ];

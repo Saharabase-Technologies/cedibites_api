@@ -9,12 +9,12 @@ use App\Models\RecruitmentLink;
 use Illuminate\Http\JsonResponse;
 
 /**
- * The public end of recruitment: what the recruit sees, and what they submit.
+ * The public end of onboarding: what a new staff member sees, and what they send.
  *
  * Unauthenticated by design — the token in the URL is the only credential, and
- * whoever holds it can apply. That is acceptable because an application is
- * inert: no user, no employee, no login until a reviewer approves it. It is
- * also why links carry an expiry.
+ * whoever holds it can fill the form in. That is acceptable because a submission
+ * is inert: no user, no employee, no login until someone checks it and creates
+ * the account. It is also why links carry an expiry.
  */
 class RecruitmentController extends Controller
 {
@@ -68,7 +68,7 @@ class RecruitmentController extends Controller
         ]);
 
         return response()->created([
-            'message' => "Thanks. We've got your details and we'll be in touch.",
+            'message' => "Thanks. We've got your details — you'll get a message when your account is ready.",
         ]);
     }
 
@@ -88,6 +88,6 @@ class RecruitmentController extends Controller
      */
     private function closed(): JsonResponse
     {
-        return response()->error('This recruitment link is no longer open.', 404);
+        return response()->error('This link has expired.', 404);
     }
 }

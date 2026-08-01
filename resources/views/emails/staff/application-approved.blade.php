@@ -8,14 +8,14 @@
     <h2 class="greeting">Hello {{ $user->name }}</h2>
 
     <p class="message">
-        Good news &mdash; your application has been approved. You&rsquo;ve been added as
-        <strong>{{ $position }}</strong>, and your account is ready.
+        Welcome to the team. You&rsquo;ve been added as <strong>{{ $position }}</strong>, and your
+        account is ready to use.
     </p>
 
     <div class="order-box">
         <h3>Signing in</h3>
         <p style="margin: 0; color: #fbf6ed; font-family: 'Cabin', sans-serif; font-size: 15px;">
-            Use your phone number and <strong>the password you chose when you applied</strong>.
+            Use your phone number and <strong>the password you chose on the form</strong>.
         </p>
         <p style="margin: 12px 0 0 0; font-size: 13px; color: #8b7f70; font-family: 'Cabin', sans-serif;">
             We never stored that password in a form anyone can read, so nobody here can tell you what it

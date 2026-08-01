@@ -97,8 +97,9 @@ class RecruitmentAdminController extends Controller
 
         if ($applications > 0) {
             return response()->unprocessable(
-                "This posting has {$applications} application".($applications === 1 ? '' : 's')
-                .' attached and deleting it would take them with it. Close it instead by setting the closing date to today.'
+                $applications === 1
+                    ? 'Somebody has already filled this in, and deleting the link would delete their details too. Close it instead by setting the closing date to today.'
+                    : "{$applications} people have already filled this in, and deleting the link would delete their details too. Close it instead by setting the closing date to today."
             );
         }
 
@@ -185,7 +186,7 @@ class RecruitmentAdminController extends Controller
         $existing = User::where('phone', $application->phone)->first();
         if ($existing?->employee) {
             return response()->unprocessable(
-                'This phone number already belongs to a staff account. The applicant has been hired since applying.'
+                'This phone number already has a staff account — they have been added since filling in the form.'
             );
         }
 
@@ -202,7 +203,7 @@ class RecruitmentAdminController extends Controller
             ]);
 
         if (! $claimed) {
-            return response()->unprocessable('This application has already been decided.');
+            return response()->unprocessable('This one has already been dealt with.');
         }
 
         try {
@@ -243,7 +244,7 @@ class RecruitmentAdminController extends Controller
         return response()->success([
             'application' => (new RecruitmentApplicationResource($application->fresh(['link.branch', 'reviewedBy'])))->resolve(),
             'employee_id' => $result->employee->id,
-        ], 'Application approved and account created.');
+        ], 'Account created.');
     }
 
     /**
@@ -255,6 +256,9 @@ class RecruitmentAdminController extends Controller
      */
     public function reject(Request $request, RecruitmentApplication $application): JsonResponse
     {
+        // Not a decision about the person — they were taken on before they were
+        // ever sent the link. This is for a duplicate, a mistyped number, or
+        // somebody who did not end up starting.
         $this->assertVisible($request->user(), $application);
 
         $claimed = RecruitmentApplication::whereKey($application->id)
@@ -266,12 +270,12 @@ class RecruitmentAdminController extends Controller
             ]);
 
         if (! $claimed) {
-            return response()->unprocessable('This application has already been decided.');
+            return response()->unprocessable('This one has already been dealt with.');
         }
 
         return response()->success(
             (new RecruitmentApplicationResource($application->fresh(['link.branch', 'reviewedBy'])))->resolve(),
-            'Application rejected.'
+            'Discarded.'
         );
     }
 

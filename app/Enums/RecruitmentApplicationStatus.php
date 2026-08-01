@@ -5,10 +5,13 @@ namespace App\Enums;
 use App\Enums\Concerns\HasEnumHelpers;
 
 /**
- * Where an application sits.
+ * Where a submitted set of details sits.
  *
- * A submitted application is inert — no user, no employee, no login. It becomes
- * an account only on approval, which is the whole point of the review step.
+ * A submission is inert — no user, no employee, no login — until someone checks
+ * it and creates the account. `Rejected` is not a decision about the person:
+ * these are staff who have already been taken on, so it is for a duplicate, a
+ * mistyped number, or somebody who did not end up starting. The labels say
+ * "discarded" for that reason.
  */
 enum RecruitmentApplicationStatus: string
 {
@@ -21,9 +24,9 @@ enum RecruitmentApplicationStatus: string
     public function label(): string
     {
         return match ($this) {
-            self::Pending => 'Pending review',
-            self::Approved => 'Approved',
-            self::Rejected => 'Rejected',
+            self::Pending => 'Waiting',
+            self::Approved => 'Added',
+            self::Rejected => 'Discarded',
         };
     }
 

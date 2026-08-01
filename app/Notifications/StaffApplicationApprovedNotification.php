@@ -10,14 +10,18 @@ use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
 /**
- * "You got the job, and your account is ready."
+ * "Your account is ready."
+ *
+ * Sent to a new member of staff once their details have been checked and their
+ * account created. It does not announce a hiring decision — that was made before
+ * they were ever sent the form.
  *
  * A separate notification from StaffAccountCreatedNotification for one reason:
- * that one exists to deliver a password, and here there is none to deliver. The
- * applicant chose their own on the recruitment form and the system holds only
- * the hash. Quoting a password back at them would mean either inventing one they
- * do not have or storing theirs in the clear, and both are worse than saying
- * "the one you chose".
+ * that one exists to deliver a password, and here there is none to deliver. They
+ * chose their own on the joining form and the system holds only the hash.
+ * Quoting a password back at them would mean either inventing one they do not
+ * have or storing theirs in the clear, and both are worse than saying "the one
+ * you chose".
  */
 class StaffApplicationApprovedNotification extends Notification implements ShouldQueue
 {
@@ -75,7 +79,7 @@ class StaffApplicationApprovedNotification extends Notification implements Shoul
     public function toMail(object $notifiable): MailMessage
     {
         return (new MailMessage)
-            ->subject('Welcome to CediBites — your application has been approved')
+            ->subject('Welcome to CediBites — your account is ready')
             ->replyTo('support@cedibites.com', 'CediBites Support')
             ->view('emails.staff.application-approved', [
                 'user' => $notifiable,
@@ -86,8 +90,8 @@ class StaffApplicationApprovedNotification extends Notification implements Shoul
 
     public function toSms(object $notifiable): string
     {
-        return "CediBites: Your application has been approved and you've been added as {$this->position()}. "
-            .'Log in with your phone number and the password you chose when you applied.';
+        return "CediBites: Your account is ready. You've been added as {$this->position()}. "
+            .'Log in with your phone number and the password you chose on the form.';
     }
 
     /**
@@ -96,8 +100,8 @@ class StaffApplicationApprovedNotification extends Notification implements Shoul
     public function toArray(object $notifiable): array
     {
         return [
-            'message' => "Your application has been approved. You've been added as {$this->position()}. "
-                .'Sign in with the password you chose when you applied.',
+            'message' => "Your account is ready. You've been added as {$this->position()}. "
+                .'Sign in with the password you chose on the form.',
         ];
     }
 }
