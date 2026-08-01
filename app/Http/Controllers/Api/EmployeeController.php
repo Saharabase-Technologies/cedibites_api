@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Staff\EmployeeProvisioningService;
+use App\Domain\Staff\PasswordPlan;
 use App\Enums\EmployeeStatus;
 use App\Events\StaffSessionEvent;
 use App\Http\Controllers\Controller;
@@ -16,7 +18,6 @@ use App\Notifications\StaffAccountCreatedNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 
 class EmployeeController extends Controller
 {
@@ -92,120 +93,45 @@ class EmployeeController extends Controller
     /**
      * Store a newly created resource in storage.
      */
-    public function store(CreateEmployeeRequest $request): JsonResponse
-    {
-        DB::beginTransaction();
-
+    public function store(
+        CreateEmployeeRequest $request,
+        EmployeeProvisioningService $provisioning,
+    ): JsonResponse {
         try {
-            $passwordMode = $request->input('password_mode', 'auto');
+            $role = $request->input('role');
 
-            // Determine password based on mode
-            if ($passwordMode === 'prompt') {
-                // User will be prompted to create their own password on first login
-                $password = $this->generateSimplePassword();
-                $mustReset = true;
-                $storeRecoverable = false;
-            } elseif ($passwordMode === 'custom' && $request->filled('password')) {
-                // Admin is setting the password directly — no forced reset
-                $password = $request->password;
-                $mustReset = false;
-                $storeRecoverable = true;
-            } else {
-                // Default: auto-generate — admin is providing the password, no forced reset
-                $password = $this->generateSimplePassword();
-                $mustReset = false;
-                $storeRecoverable = true;
-            }
-
-            // Check if user with this phone already exists (e.g. registered as customer)
-            $existingUser = User::where('phone', $request->phone)->first();
-
-            if ($existingUser) {
-                // Reuse the existing user — update credentials for staff access
-                $existingUser->update([
-                    'name' => $request->name,
-                    'password' => Hash::make($password),
-                    'recoverable_password' => $storeRecoverable ? $password : null,
-                    'must_reset_password' => $mustReset,
-                ]);
-                if ($request->filled('email') && ! $existingUser->email) {
-                    $existingUser->update(['email' => $request->email]);
-                }
-                $user = $existingUser;
-            } else {
-                // Create new user
-                $user = User::create([
-                    'name' => $request->name,
-                    'email' => $request->email,
-                    'phone' => $request->phone,
-                    'password' => Hash::make($password),
-                    'recoverable_password' => $storeRecoverable ? $password : null,
-                    'must_reset_password' => $mustReset,
-                ]);
-            }
-
-            // One role per user. `syncRoles`, not `assignRole` — reusing an
-            // existing user (a former cashier rehired as a rider, or a customer
-            // being brought on staff) used to leave both roles attached, and
-            // every screen that reads `roles->first()` then reported whichever
-            // came back first while the permissions were the union of the two.
-            // Permissions come from that one role; nothing is granted directly.
-            $user->syncRoles([$request->role]);
-            $user->syncPermissions([]);
-
-            // Create employee with all fields — derive next number from the
-            // highest existing suffix inside the transaction to avoid races.
-            $maxNo = Employee::lockForUpdate()
-                ->where('employee_no', 'like', 'EMP%')
-                ->pluck('employee_no')
-                ->map(fn (string $no) => (int) substr($no, 3))
-                ->max() ?? 0;
-            $nextNo = 'EMP'.str_pad((int) $maxNo + 1, 5, '0', STR_PAD_LEFT);
-
-            $employeeData = [
-                'user_id' => $user->id,
-                'employee_no' => $nextNo,
-                'hire_date' => $request->hire_date ?? now(),
-                'status' => $request->status ?? EmployeeStatus::Active->value,
-            ];
-
-            // Add optional fields if provided
-            $optionalFields = [
-                'ssnit_number', 'ghana_card_id', 'tin_number',
-                'date_of_birth', 'nationality', 'emergency_contact_name',
-                'emergency_contact_phone', 'emergency_contact_relationship',
-            ];
-
-            foreach ($optionalFields as $field) {
-                if ($request->filled($field)) {
-                    $employeeData[$field] = $request->$field;
-                }
-            }
-
-            $employee = Employee::create($employeeData);
-            // `branch_ids` is normalised to [] by the request for roles that are
-            // company-wide, so head office, the warehouse and the call centre end
-            // up with no branch rather than an arbitrary one.
-            $employee->branches()->sync($request->input('branch_ids', []));
-
-            DB::commit();
-
-            // Past the commit, the hire has happened. Telling them about it is a
-            // separate concern and must not be able to undo it: an SMS gateway
-            // being down used to surface as "Failed to create employee" on an
-            // employee that had already been created, so the admin would try
-            // again and hit the duplicate-phone rule.
-            $this->notifyQuietly($user, new StaffAccountCreatedNotification($password, $request->role));
+            $result = $provisioning->provision(
+                name: $request->input('name'),
+                phone: $request->input('phone'),
+                email: $request->input('email'),
+                role: $role,
+                // Normalised to [] by the request for roles that are company-wide,
+                // so head office, the warehouse and the call centre end up with no
+                // branch rather than an arbitrary one.
+                branchIds: $request->input('branch_ids', []),
+                password: PasswordPlan::forMode(
+                    $request->input('password_mode', 'auto'),
+                    $request->input('password'),
+                ),
+                details: $request->only([
+                    'ssnit_number', 'ghana_card_id', 'tin_number',
+                    'date_of_birth', 'nationality', 'emergency_contact_name',
+                    'emergency_contact_phone', 'emergency_contact_relationship',
+                ]),
+                hireDate: $request->input('hire_date'),
+                status: $request->input('status'),
+                notification: fn (User $user, ?string $password) => $password
+                    ? new StaffAccountCreatedNotification($password, $role)
+                    : null,
+            );
 
             return response()->created([
-                'employee' => (new EmployeeResource($employee->load(['user.roles.permissions', 'user.permissions', 'branches'])))->resolve(),
+                'employee' => (new EmployeeResource($result->employee))->resolve(),
                 // Surface auto-generated passwords once so the admin can share them
                 // confidentially. Null when the admin set the password themselves.
-                'generated_password' => $passwordMode === 'custom' ? null : $password,
+                'generated_password' => $result->generatedPassword,
             ]);
         } catch (\Exception $e) {
-            DB::rollBack();
-
             return response()->error('Failed to create employee: '.$e->getMessage(), 500);
         }
     }
@@ -578,24 +504,5 @@ class EmployeeController extends Controller
         $note->delete();
 
         return response()->success(null, 'Note deleted.');
-    }
-
-    /**
-     * Generate a simple, human-friendly temporary password.
-     *
-     * Format: AdjectiveNoun + 1-3 digits + special char (e.g. HappyBlue42!)
-     */
-    private function generateSimplePassword(): string
-    {
-        $adjectives = ['Happy', 'Bright', 'Quick', 'Lucky', 'Cool', 'Bold', 'Sweet', 'Grand', 'Smart', 'Calm', 'Warm', 'Fresh', 'Kind', 'Safe', 'Gold'];
-        $nouns = ['Star', 'Blue', 'Wave', 'Moon', 'Tree', 'Lake', 'Fire', 'Rock', 'Bird', 'Lion', 'Bear', 'Rain', 'Peak', 'Sand', 'Box'];
-        $specials = ['!', '@', '#', '$'];
-
-        $adjective = $adjectives[array_rand($adjectives)];
-        $noun = $nouns[array_rand($nouns)];
-        $digits = random_int(10, 999);
-        $special = $specials[array_rand($specials)];
-
-        return $adjective.$noun.$digits.$special;
     }
 }

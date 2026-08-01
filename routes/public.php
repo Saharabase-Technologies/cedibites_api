@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PromoController;
+use App\Http\Controllers\Api\RecruitmentController;
 use App\Http\Controllers\Api\SmartCategoryController;
 use Illuminate\Support\Facades\Route;
 
@@ -58,3 +59,22 @@ Route::get('checkout-config', function () {
         ],
     ]);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Recruitment
+|--------------------------------------------------------------------------
+|
+| The form a recruit fills in. Unauthenticated: the token in the URL is the
+| only credential, and whoever holds it can apply. That is acceptable because
+| nothing here creates an account — a submission is a row waiting for a
+| reviewer. It is also why every link carries an expiry.
+|
+| Throttled harder than the rest of the public surface. By decision there is no
+| headcount cap and no close button, so the rate limit and the expiry date are
+| the only things standing between a forwarded link and a flooded review queue.
+*/
+Route::get('recruit/{token}', [RecruitmentController::class, 'show'])
+    ->middleware('throttle:20,1');
+Route::post('recruit/{token}', [RecruitmentController::class, 'store'])
+    ->middleware('throttle:5,1');

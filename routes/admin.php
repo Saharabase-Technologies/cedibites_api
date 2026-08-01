@@ -9,12 +9,13 @@ use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CancelRequestController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\EmployeeController;
-use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuBranchAvailabilityController;
+use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\MenuItemOptionController;
 use App\Http\Controllers\Api\MenuTagController;
 use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\RecruitmentAdminController;
 use App\Http\Controllers\Api\RoleController;
 use Illuminate\Support\Facades\Route;
 
@@ -54,6 +55,25 @@ Route::prefix('admin')->group(function () {
         // Role and permission endpoints for staff management
         Route::get('roles', [RoleController::class, 'index']);
         Route::get('permissions', [RoleController::class, 'permissions']);
+
+        // Recruitment. Same gate as hiring by hand, because approving an
+        // application *is* hiring — the account is created at that moment. That
+        // deliberately leaves the manager out: he does not hold
+        // `manage_employees` (see RoleSeeder), and since a branch posting can
+        // appoint a manager, letting him approve would reopen the role ceiling
+        // by another door.
+        //
+        // The controller still scopes every query by branch. Nothing
+        // branch-confined can reach these routes today, so that scoping is
+        // insurance: the day anyone grants `manage_employees` to a branch role,
+        // it is the difference between seeing one branch's applicants and
+        // reading every HR record in the company.
+        Route::get('recruitment-links', [RecruitmentAdminController::class, 'links']);
+        Route::post('recruitment-links', [RecruitmentAdminController::class, 'createLink']);
+        Route::get('recruitment-applications', [RecruitmentAdminController::class, 'applications']);
+        Route::get('recruitment-applications/{application}', [RecruitmentAdminController::class, 'showApplication']);
+        Route::post('recruitment-applications/{application}/approve', [RecruitmentAdminController::class, 'approve']);
+        Route::post('recruitment-applications/{application}/reject', [RecruitmentAdminController::class, 'reject']);
     });
 
     // Bulk contact export is the whole customer database in one call — name and
