@@ -59,6 +59,31 @@ class StaffApplicationApprovedNotification extends Notification implements Shoul
     }
 
     /**
+     * First name only. "Hi Ama Mensah" reads like a form letter, and SMS is
+     * charged by the character. Falls back to "Hi there" rather than "Hi ,"
+     * if the name is somehow empty.
+     */
+    protected function greeting(object $notifiable): string
+    {
+        $first = trim((string) strtok(trim((string) $notifiable->name), ' '));
+
+        return 'Hi '.($first === '' ? 'there' : $first).', ';
+    }
+
+    /**
+     * Where they actually sign in. One entry point for every staff role — the
+     * portal they land in is decided after login, not by the URL.
+     *
+     * Reads FRONTEND_URL, the same source the email button uses. If that is
+     * unset the environment default (localhost:3000) goes out in the SMS, so
+     * it must be set wherever this queue runs.
+     */
+    protected function loginUrl(): string
+    {
+        return rtrim((string) config('app.frontend_url'), '/').'/staff/login';
+    }
+
+    /**
      * @return array<int, string>
      */
     public function via(object $notifiable): array
@@ -88,10 +113,16 @@ class StaffApplicationApprovedNotification extends Notification implements Shoul
             ]);
     }
 
+    /**
+     * Straight quotes and plain punctuation only. A curly apostrophe or an em
+     * dash drops the whole message out of GSM-7 into UCS-2, which cuts a
+     * segment from 160 characters to 70 and triples what it costs to send.
+     */
     public function toSms(object $notifiable): string
     {
-        return "CediBites: Your account is ready. You've been added as {$this->position()}. "
-            .'Log in with your phone number and the password you chose on the form.';
+        return "{$this->greeting($notifiable)}your CediBites account is ready. "
+            ."You've been added as {$this->position()}. "
+            ."Log in at {$this->loginUrl()} with your phone number and the password you created on the form.";
     }
 
     /**

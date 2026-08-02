@@ -606,6 +606,32 @@ describe('approving an application', function () {
             });
     });
 
+    it('greets the recruit by first name and tells them where to log in', function () {
+        config(['app.frontend_url' => 'https://app.cedibites.com']);
+
+        $link = branchLink($this->branch, $this->admin);
+        $application = apply($link, $this->admin);
+
+        $this->actingAs($this->admin)
+            ->postJson("/v1/admin/recruitment-applications/{$application->id}/approve", [
+                'role' => RoleEnum::SalesStaff->value,
+            ])
+            ->assertOk();
+
+        $user = User::where('phone', '+233541234567')->first();
+
+        Notification::assertSentTo($user, StaffApplicationApprovedNotification::class,
+            function (StaffApplicationApprovedNotification $notification) use ($user) {
+                $sms = $notification->toSms($user);
+
+                // First name, not "Ama Mensah" — and a link they can tap rather
+                // than a portal name they would have to go looking for.
+                return str_contains($sms, 'Hi Ama,')
+                    && ! str_contains($sms, 'Ama Mensah')
+                    && str_contains($sms, 'https://app.cedibites.com/staff/login');
+            });
+    });
+
     it('refuses a role the posting cannot appoint', function () {
         $link = branchLink($this->branch, $this->admin);
         $application = apply($link, $this->admin);
