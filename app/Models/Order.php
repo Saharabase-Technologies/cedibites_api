@@ -109,6 +109,30 @@ class Order extends Model
     }
 
     /**
+     * Stamp the prep-time estimate on the way in.
+     *
+     * On the model rather than at the call sites because there are three ways an
+     * order gets created — OrderController, PosOrderController and
+     * OrderCreationService — and this codebase has already been bitten once by
+     * putting shared order logic in only some of them: the no-stock-no-sale gate
+     * shipped guarding a door the till does not use, and sold 23 portions
+     * against a balance of 6 four minutes after it went live. A `creating` hook
+     * cannot be bypassed by a path nobody remembered to update.
+     *
+     * Only ever fills a gap. A caller that supplies its own estimate keeps it,
+     * which is what the `nullable` rule in StoreOrderRequest is for.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $order) {
+            if ($order->estimated_prep_time === null) {
+                $order->estimated_prep_time = app(\App\Domain\Orders\PrepTimeEstimator::class)
+                    ->forBranch($order->branch_id ? (int) $order->branch_id : null);
+            }
+        });
+    }
+
+    /**
      * Restaurant-collectible amount = order total minus the third-party delivery
      * fee. Delivery is collected by the rider on delivery and is never restaurant
      * revenue, so this is the amount the restaurant charges/records for goods.

@@ -27,11 +27,16 @@
             <span class="order-value">GHS {{ number_format($order->total_amount, 2) }}</span>
         </div>
         
+        {{-- Hidden rather than rendered blank. This row printed " minutes" on
+             every confirmation email until estimated_prep_time was actually
+             populated at order creation. --}}
+        @if($order->estimated_prep_time)
         <div class="order-detail">
             <span class="order-label">Estimated Time:</span>
             <span class="order-value">{{ $order->estimated_prep_time }} minutes</span>
         </div>
-        
+        @endif
+
         @if($order->order_type === 'delivery')
         <div class="order-detail">
             <span class="order-label">Delivery Address:</span>

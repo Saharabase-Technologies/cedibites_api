@@ -50,12 +50,34 @@ class OrderConfirmedNotification extends Notification implements ShouldQueue
 
     /**
      * Get the SMS representation of the notification.
+     *
+     * The estimate is stamped at creation by PrepTimeEstimator, so it is
+     * normally present. The clause is still conditional because it used to be
+     * interpolated unguarded — `estimated_prep_time` was null on every order
+     * ever created, and PHP renders null as nothing, so every confirmation for
+     * months went out reading "Estimated time:  mins." with a hole in it. A
+     * sentence that can render empty should not be built by concatenation.
      */
     public function toSms(object $notifiable): string
     {
-        return "CediBites: Order #{$this->order->order_number} confirmed! ".
-               "Total: GHS {$this->order->total_amount}. ".
-               "Estimated time: {$this->order->estimated_prep_time} mins.";
+        $message = "CediBites: Order #{$this->order->order_number} confirmed! ".
+                   'Total: GHS '.$this->formattedTotal().'.';
+
+        if ($this->order->estimated_prep_time) {
+            $message .= " Estimated time: {$this->order->estimated_prep_time} mins.";
+        }
+
+        return $message;
+    }
+
+    /**
+     * Thousands-separated, always two decimals. `total_amount` is a
+     * `decimal:2` cast, so interpolating it raw printed a large order as
+     * "GHS 1234.50".
+     */
+    protected function formattedTotal(): string
+    {
+        return number_format((float) $this->order->total_amount, 2);
     }
 
     /**
