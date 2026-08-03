@@ -21,7 +21,7 @@ return [
     */
 
     'prep_time' => [
-        'default_minutes' => (int) env('ORDER_PREP_DEFAULT_MINUTES', 15),
+        'default_minutes' => (int) env('ORDER_PREP_DEFAULT_MINUTES', 12),
         'min_minutes' => (int) env('ORDER_PREP_MIN_MINUTES', 5),
         'max_minutes' => (int) env('ORDER_PREP_MAX_MINUTES', 15),
 
