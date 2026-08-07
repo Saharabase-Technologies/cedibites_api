@@ -136,6 +136,45 @@ class HubtelSmsService
             ];
         }
 
+        /*
+         * The shape `batch/simple/send` actually answers with.
+         *
+         * Not `messageIds` — that is what the branch above expects and it is
+         * what the (now-retired) documentation described. Captured live from
+         * the beta account on 2026-08-07:
+         *
+         *   HTTP 201
+         *   {"batchId":"2d417523-…","status":0,
+         *    "data":[{"recipient":"233…","content":"…","messageId":"9f6a82a9-…"}]}
+         *
+         * Until this branch existed, every accepted batch fell through to the
+         * throw below and was recorded as a failure for every recipient — a
+         * campaign that reached everybody reporting that it reached nobody. The
+         * exact mirror of the false-pass bug the body-status check fixed, and
+         * the more confusing of the two: the messages arrive, and the console
+         * says they did not.
+         *
+         * `data` must be an array for this to be an acceptance. A rejected batch
+         * carries a batchId with no data and falls through to statusDescription,
+         * and an empty data array leaves messageIds empty, which sendBatch()
+         * already treats as a rejection.
+         */
+        if (isset($data['batchId']) && is_array($data['data'] ?? null)) {
+            return [
+                'messageIds' => array_values(array_filter(
+                    array_column($data['data'], 'messageId')
+                )),
+                'batchId' => $data['batchId'],
+                'status' => $data['status'] ?? null,
+                'responseCode' => $data['responseCode'] ?? $data['status'] ?? null,
+                // Not present on this endpoint today. Read anyway, at both
+                // levels, so the day Hubtel starts returning it the actual cost
+                // starts being measured without a code change.
+                'rate' => $data['rate'] ?? $data['data'][0]['rate'] ?? null,
+                'units' => $data['units'] ?? $data['data'][0]['units'] ?? null,
+            ];
+        }
+
         // Check if it's an error response with statusDescription
         if (isset($data['statusDescription'])) {
             throw new \Exception('SMS API Error: '.$data['statusDescription']);
@@ -385,6 +424,22 @@ class HubtelSmsService
             // failed. The branches above have already recorded; anything else
             // reaching this point has not.
             if (! str_starts_with($e->getMessage(), 'Failed to send batch SMS: ')) {
+                // Log the body verbatim. When Hubtel answers in a shape we do
+                // not recognise, the recorded failure says only "Missing
+                // messageId or messageIds" — which is what we expected, not what
+                // arrived. Without the body there is nothing to diagnose from,
+                // and the batch response shape had to be rediscovered by probing
+                // the live endpoint. Never let that happen twice.
+                \Illuminate\Support\Facades\Log::error('Hubtel batch SMS response could not be parsed', [
+                    'endpoint' => "{$this->baseUrl}/batch/simple/send",
+                    'status_code' => isset($response) ? $response->status() : null,
+                    'recipient_count' => count($recipients),
+                    'error' => $e->getMessage(),
+                    'response' => isset($response)
+                        ? $this->sanitizeForLogging($response->json() ?? ['raw' => $response->body()])
+                        : null,
+                ]);
+
                 $this->recordBatch($recipients, false, $e->getMessage(), $notification, $isCampaign, $campaignId);
             }
 
