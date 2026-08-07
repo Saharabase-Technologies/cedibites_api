@@ -43,7 +43,7 @@ class CampaignSender
     {
         $measurement = $this->meter->measure($campaign->message);
 
-        $audienceSize = $this->audience->count($campaign->segment);
+        $audienceSize = $this->audienceSize($campaign);
         $recipients = $this->recipientsFor($campaign);
         $effective = count($recipients);
 
@@ -188,9 +188,39 @@ class CampaignSender
         return array_values(array_unique(array_filter(
             array_map(
                 fn (string $phone) => $this->toHubtelFormat($phone),
-                $this->audience->phones($campaign->segment),
+                $this->audienceFor($campaign),
             ),
         )));
+    }
+
+    /**
+     * The phone numbers this campaign's audience resolves to, right now.
+     *
+     * Assembled rules win over the preset when both are present — the preset is
+     * only ever the starting point the operator narrowed from, and its label is
+     * kept for the list. Resolved fresh at send time rather than read off the
+     * draft, because a segment written last week is not the segment being sent
+     * to today.
+     *
+     * @return array<int, string>
+     */
+    public function audienceFor(Campaign $campaign): array
+    {
+        $rules = $campaign->rules();
+
+        return $rules->isEmpty()
+            ? $this->audience->phones($campaign->segment)
+            : $this->audience->phonesForRules($rules);
+    }
+
+    /** How many people the audience holds, however it was described. */
+    public function audienceSize(Campaign $campaign): int
+    {
+        $rules = $campaign->rules();
+
+        return $rules->isEmpty()
+            ? $this->audience->count($campaign->segment)
+            : $this->audience->countRules($rules);
     }
 
     public function seedMode(): bool

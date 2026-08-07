@@ -20,6 +20,18 @@ class CampaignResource extends JsonResource
             'segment' => $this->segment->value,
             'segment_label' => $this->segment->label(),
 
+            // The assembled audience, when there is one. Null means the preset
+            // above is the whole story.
+            'audience_rules' => $this->audience_rules ?: null,
+            /*
+             * The same rules as sentences, so a campaign's audience is readable
+             * a year later by somebody who was not there when it was built —
+             * and so the review step does not have to reimplement the wording.
+             */
+            'audience_description' => $this->hasCustomAudience()
+                ? $this->rules()->describe()
+                : [$this->segment->description()],
+
             'status' => $this->status->value,
             'status_label' => $this->status->label(),
             'is_editable' => $this->status->isEditable(),

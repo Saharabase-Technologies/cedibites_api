@@ -109,6 +109,12 @@ Route::prefix('admin')->group(function () {
         Route::get('campaigns/segments', [CampaignController::class, 'segments']);
         Route::post('campaigns/measure', [CampaignController::class, 'measure']);
 
+        // The audience builder. `options` is what it can filter on;
+        // `count-audience` is how many people the current rules match, called
+        // as the operator assembles them.
+        Route::get('campaigns/audience-options', [CampaignController::class, 'audienceOptions']);
+        Route::post('campaigns/count-audience', [CampaignController::class, 'countAudience']);
+
         Route::get('campaigns', [CampaignController::class, 'index']);
         Route::post('campaigns', [CampaignController::class, 'store']);
         Route::get('campaigns/{campaign}', [CampaignController::class, 'show']);

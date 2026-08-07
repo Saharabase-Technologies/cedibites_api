@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CampaignSegment;
 use App\Enums\CampaignStatus;
+use App\Services\Campaigns\AudienceRules;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -50,6 +51,7 @@ class Campaign extends Model
         'name',
         'message',
         'segment',
+        'audience_rules',
         'status',
         'scheduled_for',
         'short_link_id',
@@ -69,6 +71,7 @@ class Campaign extends Model
     {
         return [
             'segment' => CampaignSegment::class,
+            'audience_rules' => 'array',
             'status' => CampaignStatus::class,
             'scheduled_for' => 'datetime',
             'started_at' => 'datetime',
@@ -132,5 +135,23 @@ class Campaign extends Model
     public function isFinished(): bool
     {
         return $this->recipient_count > 0 && $this->accountedFor() >= $this->recipient_count;
+    }
+
+    /**
+     * The audience as rules, whether it was assembled or picked from a preset.
+     *
+     * One accessor so nothing downstream has to branch on which it was. A
+     * campaign with no rules returns an empty set, which resolves to everybody —
+     * and the preset is applied separately by whoever asked.
+     */
+    public function rules(): AudienceRules
+    {
+        return AudienceRules::fromArray($this->audience_rules);
+    }
+
+    /** Whether this campaign targets an assembled audience rather than a preset. */
+    public function hasCustomAudience(): bool
+    {
+        return ! $this->rules()->isEmpty();
     }
 }

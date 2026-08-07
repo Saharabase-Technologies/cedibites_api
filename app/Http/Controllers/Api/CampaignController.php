@@ -4,11 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\CampaignSegment;
 use App\Enums\CampaignStatus;
+use App\Enums\GhanaNetwork;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SaveCampaignRequest;
 use App\Http\Resources\CampaignResource;
+use App\Models\Branch;
 use App\Models\Campaign;
+use App\Models\MenuItem;
 use App\Services\Campaigns\AudienceResolver;
+use App\Services\Campaigns\AudienceRules;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\MessageMeter;
 use Illuminate\Http\JsonResponse;
@@ -54,14 +58,12 @@ class CampaignController extends Controller
     public function store(SaveCampaignRequest $request): JsonResponse
     {
         $campaign = Campaign::create([
-            ...$request->safe()->only(['name', 'message', 'segment', 'short_link_id', 'scheduled_for']),
+            ...$request->safe()->only(['name', 'message', 'segment', 'audience_rules', 'short_link_id', 'scheduled_for']),
             'status' => $request->filled('scheduled_for') ? CampaignStatus::Scheduled : CampaignStatus::Draft,
             'created_by_user_id' => $request->user()->id,
-            ...$this->projection(
-                $request->string('message')->value(),
-                CampaignSegment::from($request->string('segment')->value()),
-            ),
         ]);
+
+        $this->stampProjection($campaign);
 
         return response()->created(
             (new CampaignResource($campaign->load(['createdBy', 'shortLink'])))->resolve(),
@@ -81,15 +83,11 @@ class CampaignController extends Controller
             return response()->unprocessable('This campaign has already gone out. Copy it into a new one instead.');
         }
 
-        $campaign->update([
-            ...$request->safe()->only(['name', 'message', 'segment', 'short_link_id', 'scheduled_for']),
-            ...$this->projection(
-                $request->has('message') ? $request->string('message')->value() : $campaign->message,
-                $request->has('segment')
-                    ? CampaignSegment::from($request->string('segment')->value())
-                    : $campaign->segment,
-            ),
-        ]);
+        $campaign->update(
+            $request->safe()->only(['name', 'message', 'segment', 'audience_rules', 'short_link_id', 'scheduled_for']),
+        );
+
+        $this->stampProjection($campaign);
 
         return response()->success(
             (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
@@ -117,30 +115,33 @@ class CampaignController extends Controller
     }
 
     /**
-     * The reach and cost to stamp on a draft as it is saved.
+     * Write the reach and cost onto a draft as it is saved.
      *
-     * Written at save time, not only at send time. Until it was, every draft in
-     * the list read "GHS 0.00 projected" — which is not a small cosmetic
-     * problem: the whole point of the list is to show what a campaign will cost
-     * before anybody presses send, and zero is the one answer that is never
-     * true.
+     * Stamped at save time, not only at send time. Until it was, every draft in
+     * the list read "GHS 0.00 projected" — not a small cosmetic problem: the
+     * whole point of that list is to show what a campaign will cost before
+     * anybody presses send, and zero is the one answer that is never true.
      *
-     * These are a snapshot of a moving target. A segment resolved a week ago is
-     * not the segment that will be sent to, which is why CampaignSender resolves
-     * it again and overwrites both figures at send time. This is the shop
-     * window; that is the till.
+     * Resolved through CampaignSender rather than the resolver directly, so an
+     * assembled audience and a preset are counted by exactly the code that will
+     * later decide who receives it. Two implementations of "who is in this
+     * audience" would eventually disagree, and the draft would promise a
+     * different number than the send delivered.
      *
-     * @return array{recipient_count: int, segments_per_message: int, estimated_cost: float}
+     * These stay a snapshot of a moving target — an audience resolved last week
+     * is not the audience being sent to today — which is why the sender resolves
+     * it again and overwrites both figures at send time. The draft is the shop
+     * window; the send is the till.
      */
-    private function projection(string $message, CampaignSegment $segment): array
+    private function stampProjection(Campaign $campaign): void
     {
-        $recipients = $this->audience->count($segment);
+        $recipients = $this->sender->audienceSize($campaign);
 
-        return [
+        $campaign->update([
             'recipient_count' => $recipients,
-            'segments_per_message' => $this->meter->segments($message),
-            'estimated_cost' => $this->meter->estimateCost($message, $recipients),
-        ];
+            'segments_per_message' => $this->meter->segments($campaign->message),
+            'estimated_cost' => $this->meter->estimateCost($campaign->message, $recipients),
+        ]);
     }
 
     /**
@@ -217,6 +218,55 @@ class CampaignController extends Controller
             // demo.
             'seed_mode' => $this->sender->seedMode(),
             'recipient_cap' => (int) config('campaigns.recipient_cap', 2000),
+        ]);
+    }
+
+    /**
+     * How many people a set of rules matches, right now.
+     *
+     * Called as the operator builds the audience, so the count moves as rules
+     * are added. It is the only honest way to build one: "Lapsed MTN customers
+     * who bought jollof" is a sentence, and it means nothing until it says 312
+     * beside it.
+     *
+     * A resolve, not an estimate. The same code answers this and decides who
+     * actually receives the campaign, so the number shown here is the number
+     * that will be sent to.
+     */
+    public function countAudience(Request $request): JsonResponse
+    {
+        $validated = $request->validate(SaveCampaignRequest::audienceRules());
+
+        $rules = AudienceRules::fromArray($validated['audience_rules'] ?? []);
+
+        return response()->success([
+            'count' => $this->audience->countRules($rules),
+            // Read back so the review step and the audit trail can say what was
+            // asked for, not just how many it found.
+            'description' => $rules->describe(),
+        ]);
+    }
+
+    /**
+     * Everything the audience builder can filter on.
+     *
+     * Served rather than hard-coded in the frontend so the dish list and the
+     * branch list cannot go stale, and so the networks stay in step with
+     * GhanaNetwork.
+     */
+    public function audienceOptions(): JsonResponse
+    {
+        return response()->success([
+            'branches' => Branch::orderBy('name')->get(['id', 'name'])
+                ->map(fn (Branch $b) => ['value' => $b->id, 'label' => $b->name]),
+
+            'menu_items' => MenuItem::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
+                ->map(fn (MenuItem $m) => ['value' => $m->id, 'label' => $m->name]),
+
+            'networks' => array_map(fn (GhanaNetwork $n) => [
+                'value' => $n->value,
+                'label' => $n->label(),
+            ], GhanaNetwork::cases()),
         ]);
     }
 
