@@ -218,6 +218,16 @@ class CampaignController extends Controller
             // demo.
             'seed_mode' => $this->sender->seedMode(),
             'recipient_cap' => (int) config('campaigns.recipient_cap', 2000),
+
+            /*
+             * The rate the projection is built from.
+             *
+             * Served rather than duplicated in the frontend. It was hard-coded
+             * there as 0.05 while this config said 0.0243, so the composer
+             * quoted double what the confirm dialog did for the same message —
+             * two screens, two answers, both wrong to somebody.
+             */
+            'rate_per_segment' => (float) config('campaigns.estimated_rate_per_segment', 0.0243),
         ]);
     }
 
