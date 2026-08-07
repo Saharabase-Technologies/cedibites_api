@@ -133,9 +133,14 @@ class CampaignSender
      * concurrently and a lost update here is a campaign that never reports as
      * complete.
      */
-    public function recordChunkResult(int $campaignId, int $sent, int $failed, ?float $cost = null): void
-    {
-        DB::transaction(function () use ($campaignId, $sent, $failed, $cost) {
+    public function recordChunkResult(
+        int $campaignId,
+        int $sent,
+        int $failed,
+        ?float $cost = null,
+        ?string $batchId = null,
+    ): void {
+        DB::transaction(function () use ($campaignId, $sent, $failed, $cost, $batchId) {
             $campaign = Campaign::whereKey($campaignId)->lockForUpdate()->first();
 
             if (! $campaign) {
@@ -144,6 +149,15 @@ class CampaignSender
 
             $campaign->sent_count += $sent;
             $campaign->failed_count += $failed;
+
+            if ($batchId !== null) {
+                // Appended rather than replaced: a campaign is many chunks, and
+                // each one is a batch the poll has to ask about separately.
+                $campaign->batch_ids = array_values(array_unique([
+                    ...(array) ($campaign->batch_ids ?? []),
+                    $batchId,
+                ]));
+            }
 
             if ($cost !== null) {
                 // Null until the first chunk reports a real rate, so an unknown

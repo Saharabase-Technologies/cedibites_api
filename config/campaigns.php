@@ -78,15 +78,31 @@ return [
     | Cost
     |--------------------------------------------------------------------------
     |
-    | GHS per billed segment, used for the projection shown before sending. It is
-    | an estimate and labelled as one: Hubtel returns a real `rate` on the send
-    | response, and from the first authenticated campaign onwards the actual cost
-    | on the campaign row is measured rather than projected.
+    | GHS per billed segment, used for the projection shown before sending.
     |
-    | The default is the middle of the general Ghana market range of 2.5–8
-    | pesewas. Correct it once a real rate comes back.
+    | 0.0243 is not a guess any more — it is the rate Hubtel actually charged on
+    | a real send from this account, read back from
+    | `GET /v1/messages/batch/{batchId}` on 2026-08-07. It replaces the 0.05
+    | placeholder taken from the general Ghana market range, which was roughly
+    | double and would have overstated every projection by 2x.
+    |
+    | Still only a projection: the rate may differ by network or by volume tier.
+    | The figure on a sent campaign is the measured one — see
+    | CampaignDeliveryPoller — and if the two keep disagreeing, this is the value
+    | to correct.
     |
     */
-    'estimated_rate_per_segment' => (float) env('CAMPAIGN_RATE_PER_SEGMENT', 0.05),
+    'estimated_rate_per_segment' => (float) env('CAMPAIGN_RATE_PER_SEGMENT', 0.0243),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Delivery polling
+    |--------------------------------------------------------------------------
+    |
+    | How far back campaigns:poll-deliveries looks. Delivery statuses settle
+    | within minutes to hours; two days is generous and keeps the job cheap.
+    |
+    */
+    'delivery_poll_hours' => (int) env('CAMPAIGN_DELIVERY_POLL_HOURS', 48),
 
 ];

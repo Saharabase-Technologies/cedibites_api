@@ -48,8 +48,13 @@ class CampaignResource extends JsonResource
             // The permanent record. Never recomputed from sms_delivery_attempts,
             // which is pruned — see the campaigns migration.
             'recipient_count' => $this->recipient_count,
+            // Accepted by Hubtel …
             'sent_count' => $this->sent_count,
             'failed_count' => $this->failed_count,
+            // … and confirmed as arriving, which is the smaller and more honest
+            // number. Zero until the delivery poll has run.
+            'delivered_count' => $this->delivered_count,
+            'delivery_checked_at' => $this->delivery_checked_at?->toIso8601String(),
 
             'segments_per_message' => $this->segments_per_message,
             'estimated_cost' => (float) $this->estimated_cost,

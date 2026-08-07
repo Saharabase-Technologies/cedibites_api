@@ -58,6 +58,10 @@ class SendCampaignChunk implements ShouldQueue
                 sent: $count,
                 failed: 0,
                 cost: $this->costOf($result, $count),
+                // Kept so the delivery poll can ask what actually arrived and
+                // what it cost. This is the only handle Hubtel gives us on a
+                // batch after the fact.
+                batchId: $result['batchId'] ?? null,
             );
         } catch (\Throwable $e) {
             // sendBatch has already written one attempt row per recipient, so

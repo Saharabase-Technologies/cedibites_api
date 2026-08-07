@@ -448,6 +448,48 @@ class HubtelSmsService
     }
 
     /**
+     * What actually happened to a batch, and what it cost.
+     *
+     * `GET /v1/messages/batch/{batchId}` — the only endpoint on this account that
+     * returns a real `rate`. The send response carries none, and the per-message
+     * lookup 404s because the message ids a send returns are not the ones the
+     * query accepts. Both verified against the live account 2026-08-07.
+     *
+     * Returns one entry per message:
+     *   ['messageId' => …, 'status' => 'Delivered', 'rate' => 0.0243, 'to' => '233…']
+     *
+     * Read-only and free. Never throws — a failed poll should leave the previous
+     * figures alone, not replace a known cost with a wrong one.
+     *
+     * @return array<int, array<string, mixed>>|null Null when the batch cannot be read
+     */
+    public function batchStatus(string $batchId): ?array
+    {
+        try {
+            $this->validateConfiguration();
+
+            $response = \Illuminate\Support\Facades\Http::withHeaders([
+                'Authorization' => $this->getAuthHeader(),
+            ])->get("{$this->baseUrl}/batch/{$batchId}");
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $data = $response->json()['data'] ?? null;
+
+            return is_array($data) ? $data : null;
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Could not read Hubtel batch status', [
+                'batch_id' => $batchId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
      * One attempt row per recipient, so a batch of 50 counts as 50 in the
      * failure rate rather than as a single event.
      *
