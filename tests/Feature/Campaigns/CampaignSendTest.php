@@ -231,6 +231,89 @@ describe('the rails that stop an accidental blast', function () {
     });
 });
 
+// ─── Composing ───────────────────────────────────────────────────────────────
+
+describe('saving a draft', function () {
+    /*
+     * Division by zero, found on beta 2026-08-07.
+     *
+     * `create()` does not read column defaults back into the model, so a fresh
+     * campaign held null for sent_count. CampaignResource guarded click-through
+     * with `sent_count === 0`, which is false for null, so it fell through to
+     * `click_count / null`. Only reproducible with a short link attached —
+     * without one the check before it short-circuits.
+     *
+     * The row was written before the resource threw, so the operator saw a 500,
+     * pressed save again, and ended up with duplicate campaigns.
+     */
+    it('saves a draft with a short link attached without dividing by zero', function () {
+        $admin = campaignAdmin();
+        $link = App\Models\ShortLink::factory()->create(['created_by_user_id' => $admin->id]);
+
+        $this->actingAs($admin, 'sanctum')
+            ->postJson('/v1/admin/campaigns', [
+                'name' => 'Friday jollof',
+                'message' => 'CediBites: 20% off jollof today. cedibites.com/r/A7X9Kp',
+                'segment' => CampaignSegment::All->value,
+                'short_link_id' => $link->id,
+            ])
+            ->assertCreated()
+            // Null, not zero: nothing has been sent, so there is no rate to
+            // report and 0% would read as "nobody tapped".
+            ->assertJsonPath('data.click_through_rate', null);
+
+        expect(Campaign::count())->toBe(1);
+    });
+
+    it('gives a new campaign real counters rather than nulls', function () {
+        $campaign = Campaign::create([
+            'name' => 'x', 'message' => 'y', 'segment' => CampaignSegment::All,
+            'created_by_user_id' => campaignAdmin()->id,
+        ]);
+
+        expect($campaign->sent_count)->toBe(0)
+            ->and($campaign->failed_count)->toBe(0)
+            ->and($campaign->recipient_count)->toBe(0);
+    });
+
+    /*
+     * A draft read "GHS 0.00 projected" in the list because the estimate was
+     * only written at send time. Zero is the one answer that is never true, and
+     * showing the cost before anybody presses send is the entire point of the
+     * list.
+     */
+    it('projects reach and cost as the draft is saved, not only at send time', function () {
+        orderingCustomer('+233241111111');
+        orderingCustomer('+233242222222');
+
+        $response = $this->actingAs(campaignAdmin(), 'sanctum')
+            ->postJson('/v1/admin/campaigns', [
+                'name' => 'Friday jollof',
+                'message' => str_repeat('a', 161), // two segments
+                'segment' => CampaignSegment::All->value,
+            ])
+            ->assertCreated();
+
+        // 2 people x 2 segments x GHS 0.05
+        expect($response->json('data.recipient_count'))->toBe(2)
+            ->and($response->json('data.segments_per_message'))->toBe(2)
+            ->and($response->json('data.estimated_cost'))->toEqual(0.2);
+    });
+
+    it('re-projects when the message or the audience changes', function () {
+        orderingCustomer('+233241111111');
+
+        $campaign = Campaign::factory()->create(['created_by_user_id' => campaignAdmin()->id]);
+
+        $response = $this->actingAs(campaignAdmin(), 'sanctum')
+            ->patchJson("/v1/admin/campaigns/{$campaign->id}", ['message' => str_repeat('b', 161)])
+            ->assertSuccessful();
+
+        expect($response->json('data.segments_per_message'))->toBe(2)
+            ->and($response->json('data.estimated_cost'))->toEqual(0.1);
+    });
+});
+
 // ─── Chunking and accounting ─────────────────────────────────────────────────
 
 describe('chunking', function () {

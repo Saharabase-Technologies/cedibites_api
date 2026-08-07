@@ -57,6 +57,10 @@ class CampaignController extends Controller
             ...$request->safe()->only(['name', 'message', 'segment', 'short_link_id', 'scheduled_for']),
             'status' => $request->filled('scheduled_for') ? CampaignStatus::Scheduled : CampaignStatus::Draft,
             'created_by_user_id' => $request->user()->id,
+            ...$this->projection(
+                $request->string('message')->value(),
+                CampaignSegment::from($request->string('segment')->value()),
+            ),
         ]);
 
         return response()->created(
@@ -77,9 +81,15 @@ class CampaignController extends Controller
             return response()->unprocessable('This campaign has already gone out. Copy it into a new one instead.');
         }
 
-        $campaign->update($request->safe()->only([
-            'name', 'message', 'segment', 'short_link_id', 'scheduled_for',
-        ]));
+        $campaign->update([
+            ...$request->safe()->only(['name', 'message', 'segment', 'short_link_id', 'scheduled_for']),
+            ...$this->projection(
+                $request->has('message') ? $request->string('message')->value() : $campaign->message,
+                $request->has('segment')
+                    ? CampaignSegment::from($request->string('segment')->value())
+                    : $campaign->segment,
+            ),
+        ]);
 
         return response()->success(
             (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
@@ -104,6 +114,33 @@ class CampaignController extends Controller
         $campaign->delete();
 
         return response()->deleted();
+    }
+
+    /**
+     * The reach and cost to stamp on a draft as it is saved.
+     *
+     * Written at save time, not only at send time. Until it was, every draft in
+     * the list read "GHS 0.00 projected" — which is not a small cosmetic
+     * problem: the whole point of the list is to show what a campaign will cost
+     * before anybody presses send, and zero is the one answer that is never
+     * true.
+     *
+     * These are a snapshot of a moving target. A segment resolved a week ago is
+     * not the segment that will be sent to, which is why CampaignSender resolves
+     * it again and overwrites both figures at send time. This is the shop
+     * window; that is the till.
+     *
+     * @return array{recipient_count: int, segments_per_message: int, estimated_cost: float}
+     */
+    private function projection(string $message, CampaignSegment $segment): array
+    {
+        $recipients = $this->audience->count($segment);
+
+        return [
+            'recipient_count' => $recipients,
+            'segments_per_message' => $this->meter->segments($message),
+            'estimated_cost' => $this->meter->estimateCost($message, $recipients),
+        ];
     }
 
     /**

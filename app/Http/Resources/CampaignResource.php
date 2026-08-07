@@ -62,12 +62,23 @@ class CampaignResource extends JsonResource
         ];
     }
 
+    /**
+     * Taps per message delivered.
+     *
+     * The cast is not decoration. `sent_count === 0` was the guard here and it
+     * is false for null — which is exactly what a just-created campaign holds,
+     * because column defaults are applied by the database rather than read back
+     * into the model. Casting first means the guard catches both, whatever
+     * state the model is in.
+     */
     private function clickThroughRate(): ?float
     {
-        if (! $this->relationLoaded('shortLink') || ! $this->shortLink || $this->sent_count === 0) {
+        $sent = (int) $this->sent_count;
+
+        if (! $this->relationLoaded('shortLink') || ! $this->shortLink || $sent === 0) {
             return null;
         }
 
-        return round($this->shortLink->click_count / $this->sent_count * 100, 1);
+        return round($this->shortLink->click_count / $sent * 100, 1);
     }
 }

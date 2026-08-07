@@ -22,6 +22,30 @@ class Campaign extends Model
 {
     use HasFactory, LogsActivity;
 
+    /**
+     * In-memory defaults matching the database's.
+     *
+     * Without these, a freshly created Campaign carries null for every counter:
+     * `create()` only sets what it is given, and column defaults are applied by
+     * the database on insert, not read back into the model. The row is correct;
+     * the object in hand is not.
+     *
+     * That gap divided by zero. CampaignResource guarded click-through with
+     * `sent_count === 0`, which is false for null, so the guard fell through to
+     * `click_count / null` — and only when a short link was attached, because
+     * otherwise the check before it short-circuited first. Saving a draft with a
+     * link selected returned a 500 while having already written the row, so the
+     * operator saw an error, retried, and got duplicate campaigns.
+     */
+    protected $attributes = [
+        'status' => 'draft',
+        'recipient_count' => 0,
+        'sent_count' => 0,
+        'failed_count' => 0,
+        'estimated_cost' => 0,
+        'segments_per_message' => 1,
+    ];
+
     protected $fillable = [
         'name',
         'message',
