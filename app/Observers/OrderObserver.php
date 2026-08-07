@@ -3,6 +3,7 @@
 namespace App\Observers;
 
 use App\Events\OrderBroadcastEvent;
+use App\Jobs\RequestOrderFeedback;
 use App\Models\Employee;
 use App\Models\Order;
 use App\Models\ShiftOrder;
@@ -141,6 +142,20 @@ class OrderObserver
                 'status' => $order->status,
                 'error' => $e->getMessage(),
             ]);
+        }
+
+        // "How was it?", a few hours later.
+        //
+        // Dispatched from here because this is the proven seam for anything that
+        // reacts to an order finishing, but every guard is re-checked inside the
+        // job — hours pass, and by then the order may have been cancelled, the
+        // customer may have ordered again, or the kill switch may be off. Off by
+        // default; see config/order_feedback.php.
+        if (in_array($order->status, ['completed', 'delivered'], true) && config('order_feedback.enabled', false)) {
+            \DB::afterCommit(function () use ($order) {
+                RequestOrderFeedback::dispatch($order->id)
+                    ->delay(now()->addHours((int) config('order_feedback.delay_hours', 3)));
+            });
         }
 
         // Mark the third-party delivery fee collected once the order is delivered —

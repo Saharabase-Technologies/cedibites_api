@@ -113,6 +113,11 @@ class HubtelSmsService
                 'messageId' => $data['messageId'],
                 'status' => $data['status'] ?? null,
                 'responseCode' => $data['responseCode'] ?? $data['status'] ?? null,
+                // What Hubtel actually charged, and in how many billed segments.
+                // Absent on some responses, hence the nulls — a campaign records
+                // an unknown cost as unknown rather than as free.
+                'rate' => $data['rate'] ?? null,
+                'units' => $data['units'] ?? null,
             ];
         }
 
@@ -126,6 +131,8 @@ class HubtelSmsService
                 'messageIds' => $data['messageIds'],
                 'status' => $data['status'] ?? null,
                 'responseCode' => $data['responseCode'] ?? $data['status'] ?? null,
+                'rate' => $data['rate'] ?? null,
+                'units' => $data['units'] ?? null,
             ];
         }
 
@@ -146,11 +153,13 @@ class HubtelSmsService
      * never be the reason a message fails to go out, hence the blanket catch:
      * losing a health datapoint is survivable, losing the SMS is not.
      */
-    private function record(?string $to, bool $succeeded, ?string $error = null, ?string $messageId = null, ?string $notification = null): void
+    private function record(?string $to, bool $succeeded, ?string $error = null, ?string $messageId = null, ?string $notification = null, bool $isCampaign = false, ?int $campaignId = null): void
     {
         try {
             SmsDeliveryAttempt::create([
                 'notification' => $notification,
+                'is_campaign' => $isCampaign,
+                'campaign_id' => $campaignId,
                 'recipient' => $to,
                 'succeeded' => $succeeded,
                 'failure_reason' => $succeeded ? null : SmsFailureReason::classify($error)->value,
@@ -258,14 +267,25 @@ class HubtelSmsService
      *
      * @param  array  $recipients  Array of phone numbers in format 233XXXXXXXXX
      * @param  string  $message  SMS message content
-     * @return array Array with messageIds, status, and responseCode
+     * @param  string|null  $notification  Notification class recorded against the attempts
+     * @param  bool  $isCampaign  Marketing traffic, kept out of the health signal — see SmsDeliveryAttempt::scopeTransactional()
+     * @param  int|null  $campaignId  Stamped on each attempt so the delivery-status poll can find them again
+     * @return array Array with messageIds, status, responseCode, rate and units
      *
      * @throws \RuntimeException When configuration is invalid
      * @throws \InvalidArgumentException When any phone number format is invalid
      * @throws \Exception When API request fails
      */
-    public function sendBatch(array $recipients, string $message, ?string $notification = null): array
+    public function sendBatch(array $recipients, string $message, ?string $notification = null, bool $isCampaign = false, ?int $campaignId = null): array
     {
+        // An empty batch is always a caller bug. Hubtel answers it with a
+        // success-shaped body carrying a failure status, which is exactly the
+        // response this method is least able to interpret — so refuse it here
+        // rather than spend a request finding out.
+        if ($recipients === []) {
+            throw new \InvalidArgumentException('Cannot send a batch SMS with no recipients');
+        }
+
         try {
             // Validate configuration
             $this->validateConfiguration();
@@ -275,7 +295,7 @@ class HubtelSmsService
                 $this->validatePhoneNumber($phone);
             }
         } catch (\Throwable $e) {
-            $this->recordBatch($recipients, false, $e->getMessage(), $notification);
+            $this->recordBatch($recipients, false, $e->getMessage(), $notification, $isCampaign, $campaignId);
 
             throw $e;
         }
@@ -302,7 +322,7 @@ class HubtelSmsService
                 ]);
 
                 $body = $response->json() ?? [];
-                $this->recordBatch($recipients, false, $body['statusDescription'] ?? $response->body(), $notification);
+                $this->recordBatch($recipients, false, $body['statusDescription'] ?? $response->body(), $notification, $isCampaign, $campaignId);
 
                 throw new \Exception('Failed to send batch SMS: '.$response->body());
             }
@@ -310,11 +330,38 @@ class HubtelSmsService
             // Parse and return response with messageIds array
             $result = $this->parseResponse($response);
 
-            $this->recordBatch($recipients, true, null, $notification);
+            // Hubtel reports business-level rejections — an unfunded account, a
+            // blocked sender — in the body while still answering 2xx on the
+            // wire. sendSingle() checks the body for exactly this; without the
+            // same check here every recipient of a rejected batch is recorded
+            // as delivered, and a campaign that reached nobody reports a
+            // flawless delivery rate. "Payment required on account" — the
+            // rejection that took SMS down for three weeks in July — arrives
+            // this way.
+            $messageIds = $result['messageIds'] ?? [];
+            $status = (int) ($result['status'] ?? 0);
+
+            if ($status >= 100 || $messageIds === []) {
+                $body = $response->json() ?? [];
+                $errorMessage = $body['statusDescription'] ?? "Batch rejected by provider (status {$status})";
+
+                \Illuminate\Support\Facades\Log::error('Hubtel batch SMS rejected in response body', [
+                    'endpoint' => "{$this->baseUrl}/batch/simple/send",
+                    'status_code' => $response->status(),
+                    'recipient_count' => count($recipients),
+                    'response' => $this->sanitizeForLogging($body),
+                ]);
+
+                $this->recordBatch($recipients, false, $errorMessage, $notification, $isCampaign, $campaignId);
+
+                throw new \Exception('Failed to send batch SMS: '.$errorMessage);
+            }
+
+            $this->recordBatch($recipients, true, null, $notification, $isCampaign, $campaignId);
 
             // Log success with recipient count and sanitized data
             \Illuminate\Support\Facades\Log::info('Batch SMS sent successfully', [
-                'messageIds_count' => count($result['messageIds']),
+                'messageIds_count' => count($messageIds),
                 'recipient_count' => count($recipients),
                 'recipients' => $this->sanitizeForLogging(['phones' => $recipients])['phones'],
                 'timestamp' => now()->toIso8601String(),
@@ -328,9 +375,20 @@ class HubtelSmsService
                 'error' => $e->getMessage(),
             ]);
 
-            $this->recordBatch($recipients, false, 'Failed to connect to Hubtel SMS API', $notification);
+            $this->recordBatch($recipients, false, 'Failed to connect to Hubtel SMS API', $notification, $isCampaign, $campaignId);
 
             throw new \Exception('Failed to connect to Hubtel SMS API');
+        } catch (\Throwable $e) {
+            // parseResponse rejects a malformed or error-shaped body from here,
+            // and previously escaped unrecorded — leaving a failed batch absent
+            // from the health signal entirely, counted as neither sent nor
+            // failed. The branches above have already recorded; anything else
+            // reaching this point has not.
+            if (! str_starts_with($e->getMessage(), 'Failed to send batch SMS: ')) {
+                $this->recordBatch($recipients, false, $e->getMessage(), $notification, $isCampaign, $campaignId);
+            }
+
+            throw $e;
         }
     }
 
@@ -340,10 +398,10 @@ class HubtelSmsService
      *
      * @param  array<int, string>  $recipients
      */
-    private function recordBatch(array $recipients, bool $succeeded, ?string $error = null, ?string $notification = null): void
+    private function recordBatch(array $recipients, bool $succeeded, ?string $error = null, ?string $notification = null, bool $isCampaign = false, ?int $campaignId = null): void
     {
         foreach ($recipients as $phone) {
-            $this->record((string) $phone, $succeeded, $error, null, $notification);
+            $this->record((string) $phone, $succeeded, $error, null, $notification, $isCampaign, $campaignId);
         }
     }
 }

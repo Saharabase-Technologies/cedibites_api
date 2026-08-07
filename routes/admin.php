@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AdminAnalyticsController;
 use App\Http\Controllers\Api\AdminDashboardController;
 use App\Http\Controllers\Api\AdminReportController;
 use App\Http\Controllers\Api\BranchController;
+use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\EmployeeController;
@@ -14,9 +15,11 @@ use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\MenuItemOptionController;
 use App\Http\Controllers\Api\MenuTagController;
+use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RecruitmentAdminController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\ShortLinkController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('admin')->group(function () {
@@ -89,6 +92,43 @@ Route::prefix('admin')->group(function () {
     // wildcard.
     Route::middleware('role:admin|tech_admin')->group(function () {
         Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
+    });
+
+    // Short links and SMS campaigns. Same ceiling as the contact export, by the
+    // same reasoning — see Permission::ManageCampaigns. Every write is
+    // activity-logged on the model: a link is our brand pointed at somebody's
+    // URL, and a campaign is the company speaking to every customer at once.
+    Route::middleware('permission:manage_campaigns')->group(function () {
+        Route::get('links', [ShortLinkController::class, 'index']);
+        Route::post('links', [ShortLinkController::class, 'store']);
+        Route::patch('links/{link}', [ShortLinkController::class, 'update']);
+        Route::delete('links/{link}', [ShortLinkController::class, 'destroy']);
+
+        // Declared before the {campaign} routes so the wildcard does not
+        // swallow them.
+        Route::get('campaigns/segments', [CampaignController::class, 'segments']);
+        Route::post('campaigns/measure', [CampaignController::class, 'measure']);
+
+        Route::get('campaigns', [CampaignController::class, 'index']);
+        Route::post('campaigns', [CampaignController::class, 'store']);
+        Route::get('campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::patch('campaigns/{campaign}', [CampaignController::class, 'update']);
+        Route::delete('campaigns/{campaign}', [CampaignController::class, 'destroy']);
+
+        // The two-step send. `preview` is the confirm screen — recipient count,
+        // characters, billed segments, projected cost — and `send` is the only
+        // call in the application that spends money on SMS in bulk.
+        Route::get('campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
+        Route::post('campaigns/{campaign}/send', [CampaignController::class, 'send']);
+        Route::post('campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
+
+        // What customers said about their orders. Not marketing, but gated with
+        // it deliberately: the list is company-wide and the controller does no
+        // branch scoping, so opening it to a branch role would hand one manager
+        // every other branch's complaints. Giving a manager their own branch's
+        // feedback is worth doing and needs the isCompanyWide() treatment first
+        // — see the branch-isolation notes before widening this.
+        Route::get('customer-feedback', [OrderFeedbackController::class, 'index']);
     });
 
     Route::middleware('permission:view_customers')->group(function () {

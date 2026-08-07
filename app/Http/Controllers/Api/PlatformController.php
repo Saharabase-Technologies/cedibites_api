@@ -48,7 +48,11 @@ class PlatformController extends Controller
 
         $health = $this->smsHealthService->check($window);
 
+        // Scoped the same way as the verdict above it, or the list would
+        // contradict the headline — a quiet campaign failure showing up under a
+        // "healthy" status reads as a bug in the page.
         $health['recent_failures'] = SmsDeliveryAttempt::query()
+            ->transactional()
             ->where('succeeded', false)
             ->orderByDesc('id')
             ->limit(25)

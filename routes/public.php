@@ -6,8 +6,10 @@ use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PromoController;
 use App\Http\Controllers\Api\RecruitmentController;
+use App\Http\Controllers\Api\ShortLinkController;
 use App\Http\Controllers\Api\SmartCategoryController;
 use Illuminate\Support\Facades\Route;
 
@@ -78,3 +80,49 @@ Route::get('recruit/{token}', [RecruitmentController::class, 'show'])
     ->middleware('throttle:20,1');
 Route::post('recruit/{token}', [RecruitmentController::class, 'store'])
     ->middleware('throttle:5,1');
+
+/*
+|--------------------------------------------------------------------------
+| Short links
+|--------------------------------------------------------------------------
+|
+| Where a campaign link goes. Unauthenticated, because the person tapping it
+| has no account and a short link's entire job is to be followed by whoever
+| is holding it.
+|
+| The throttle is set far higher than the rest of the public surface, and the
+| reason is worth stating: the only caller is our own Next.js route handler
+| at app/r/[token]/route.ts, so every click in a campaign arrives from one IP
+| — our server's. A per-IP limit sized for a person would throttle the entire
+| blast. A 28,000-recipient send with a 30% click-through concentrated into
+| five minutes is roughly 1,700 requests a minute; 3,000 clears that with
+| room to spare while still stopping a script doing thousands a second.
+|
+| Do NOT lower this to match the recruit routes above.
+*/
+Route::post('links/{token}/resolve', [ShortLinkController::class, 'resolve'])
+    ->middleware('throttle:3000,1');
+
+/*
+|--------------------------------------------------------------------------
+| Post-order feedback
+|--------------------------------------------------------------------------
+|
+| The form a customer fills in after their meal. Unauthenticated: the token in
+| the URL is the only credential, and the customer has no account to sign in
+| to. Acceptable because the token is bound to one order, the form accepts
+| exactly one submission, and the response carries no phone or address.
+|
+| Named `order-feedback`, NOT `feedback` — `routes/feedback.php` already owns
+| that prefix for the in-app bug reporter, and public.php is required first in
+| api.php, so a `feedback/{token}` wildcard here would swallow
+| `feedback/reports` before the authenticated route ever saw it.
+|
+| Throttled like the recruit routes above. The token identifies a real order,
+| so walking the space would read off order history — eight base62 characters
+| plus this limit takes that from tedious to impossible.
+*/
+Route::get('order-feedback/{token}', [OrderFeedbackController::class, 'show'])
+    ->middleware('throttle:20,1');
+Route::post('order-feedback/{token}', [OrderFeedbackController::class, 'store'])
+    ->middleware('throttle:10,1');
