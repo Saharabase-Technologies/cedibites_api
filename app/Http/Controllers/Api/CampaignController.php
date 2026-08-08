@@ -5,16 +5,20 @@ namespace App\Http\Controllers\Api;
 use App\Enums\CampaignSegment;
 use App\Enums\CampaignStatus;
 use App\Enums\ContactSource;
+use App\Enums\DeliveryOutcome;
 use App\Enums\GhanaNetwork;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SaveCampaignRequest;
 use App\Http\Resources\CampaignResource;
 use App\Models\Branch;
 use App\Models\Campaign;
+use App\Models\CampaignDelivery;
 use App\Models\Contact;
 use App\Models\MenuItem;
+use App\Models\MenuItemOption;
 use App\Services\Campaigns\AudienceResolver;
 use App\Services\Campaigns\AudienceRules;
+use App\Services\Campaigns\CampaignDeliveryReport;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\MessageMeter;
 use Illuminate\Http\JsonResponse;
@@ -147,6 +151,41 @@ class CampaignController extends Controller
     }
 
     /**
+     * Who received it and who did not, one recipient at a time.
+     *
+     * The reason this exists: a campaign that reports "3,812 of 4,000 delivered"
+     * tells you there is a problem and nothing about what to do. The 188 split
+     * into dead numbers and handsets that were switched off call for opposite
+     * responses — retire the first, try the second again tomorrow — and only a
+     * list can tell them apart.
+     */
+    public function deliveries(Request $request, Campaign $campaign, CampaignDeliveryReport $report): JsonResponse
+    {
+        $outcome = $request->string('outcome')->toString();
+
+        $deliveries = CampaignDelivery::where('campaign_id', $campaign->id)
+            // `not_delivered` is the default view worth having: it is the only
+            // list anybody opens this screen to see.
+            ->when($outcome === 'not_delivered', fn ($q) => $q->notDelivered())
+            ->when($outcome !== '' && $outcome !== 'not_delivered',
+                fn ($q) => $q->where('outcome', $outcome))
+            ->orderBy('outcome')
+            ->orderBy('phone')
+            ->paginate($request->integer('per_page', 50));
+
+        return response()->success([
+            'summary' => $report->summarise($campaign),
+            'curve' => $report->curve($campaign),
+            'deliveries' => $deliveries->toArray(),
+            'outcomes' => array_map(fn (DeliveryOutcome $o) => [
+                'value' => $o->value,
+                'label' => $o->label(),
+                'description' => $o->description(),
+            ], DeliveryOutcome::cases()),
+        ]);
+    }
+
+    /**
      * What this campaign would cost and reach, without sending anything.
      *
      * This is the confirm step. Every figure on it is resolved live, so the
@@ -271,6 +310,36 @@ class CampaignController extends Controller
         return response()->success([
             'branches' => Branch::orderBy('name')->get(['id', 'name'])
                 ->map(fn (Branch $b) => ['value' => $b->id, 'label' => $b->name]),
+
+            /*
+             * The sellable lines — what a customer actually bought and what
+             * appears on the receipt.
+             *
+             * This is the list that matters. Targeting by menu item alone was
+             * asking "did they ever buy Jollof?" when the useful question is
+             * "did they buy the Large?" — a different dish at a different price
+             * to a different person.
+             *
+             * Labelled with the item name so an option never reads as a bare
+             * "Large" with nothing to attach it to, and grouped so the picker
+             * can nest them.
+             */
+            'menu_item_options' => MenuItemOption::query()
+                ->whereHas('menuItem', fn ($q) => $q->whereNull('deleted_at'))
+                ->with('menuItem:id,name')
+                // display_order is selected because it is sorted on below —
+                // omitting it would silently read null for every row and leave
+                // the options in database order.
+                ->get(['id', 'menu_item_id', 'option_label', 'display_name', 'display_order'])
+                ->sortBy(fn (MenuItemOption $o) => [$o->menuItem?->name, $o->display_order])
+                ->values()
+                ->map(fn (MenuItemOption $o) => [
+                    'value' => $o->id,
+                    // Same fallback the recipe screens use, so one option is not
+                    // named two different things in two places.
+                    'label' => $o->display_name ?: trim(($o->menuItem?->name ?? '').' — '.$o->option_label),
+                    'group' => $o->menuItem?->name,
+                ]),
 
             'menu_items' => MenuItem::whereNull('deleted_at')->orderBy('name')->get(['id', 'name'])
                 ->map(fn (MenuItem $m) => ['value' => $m->id, 'label' => $m->name]),

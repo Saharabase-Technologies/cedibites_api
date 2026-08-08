@@ -3,7 +3,10 @@
 namespace App\Services\Campaigns;
 
 use App\Enums\CampaignStatus;
+use App\Enums\DeliveryOutcome;
 use App\Models\Campaign;
+use App\Models\CampaignDelivery;
+use App\Services\Contacts\PhoneNormaliser;
 use App\Services\HubtelSmsService;
 use Illuminate\Support\Facades\Log;
 
@@ -77,6 +80,7 @@ class CampaignDeliveryPoller
         $cost = 0.0;
         $delivered = 0;
         $seen = 0;
+        $rows = [];
 
         foreach ($batchIds as $batchId) {
             $messages = $this->sms->batchStatus((string) $batchId);
@@ -96,8 +100,24 @@ class CampaignDeliveryPoller
                 // of status. The bill is the bill.
                 $cost += (float) ($message['rate'] ?? 0);
 
-                if (in_array(strtolower((string) ($message['status'] ?? '')), self::DELIVERED, true)) {
+                $providerStatus = (string) ($message['status'] ?? '');
+
+                if (in_array(strtolower($providerStatus), self::DELIVERED, true)) {
                     $delivered++;
+                }
+
+                $phone = $this->phoneFrom($message);
+
+                if ($phone !== null) {
+                    $rows[$phone] = [
+                        'campaign_id' => $campaign->id,
+                        'phone' => $phone,
+                        'outcome' => DeliveryOutcome::fromProviderStatus($providerStatus)->value,
+                        'provider_status' => mb_substr($providerStatus, 0, 64) ?: null,
+                        'rate' => isset($message['rate']) ? (float) $message['rate'] : null,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
                 }
             }
         }
@@ -106,6 +126,8 @@ class CampaignDeliveryPoller
             return false;
         }
 
+        $this->writeDeliveries($rows);
+
         $campaign->update([
             'actual_cost' => round($cost, 4),
             'delivered_count' => $delivered,
@@ -113,5 +135,45 @@ class CampaignDeliveryPoller
         ]);
 
         return true;
+    }
+
+    /**
+     * Store one row per recipient, upserting so repeated polls settle rather
+     * than accumulate.
+     *
+     * Keyed on (campaign_id, phone). The batch endpoint returns the full list
+     * every time it is asked, so without the unique key a campaign polled every
+     * fifteen minutes for two days would end up with a hundred and ninety-two
+     * copies of itself.
+     *
+     * @param  array<string, array>  $rows
+     */
+    private function writeDeliveries(array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        foreach (array_chunk(array_values($rows), 500) as $chunk) {
+            CampaignDelivery::upsert(
+                $chunk,
+                ['campaign_id', 'phone'],
+                ['outcome', 'provider_status', 'rate', 'updated_at'],
+            );
+        }
+    }
+
+    /**
+     * The recipient on a status row, normalised to how we store numbers.
+     *
+     * Hubtel answers with `to` in 233XXXXXXXXX form; everything on our side is
+     * +233XXXXXXXXX. Without this the delivery rows could never be matched
+     * against a contact or a customer, which is most of what they are for.
+     */
+    private function phoneFrom(array $message): ?string
+    {
+        $raw = (string) ($message['to'] ?? $message['To'] ?? $message['recipient'] ?? '');
+
+        return $raw === '' ? null : PhoneNormaliser::normalise($raw);
     }
 }

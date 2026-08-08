@@ -75,11 +75,24 @@ class SaveCampaignRequest extends FormRequest
             'audience_rules.ordered_after' => ['nullable', 'date'],
             'audience_rules.ordered_before' => ['nullable', 'date'],
 
+            // The receipt line — what was actually bought. The item-level filter
+            // below is the broader net that still matches when an option has
+            // since been deleted off the menu.
+            'audience_rules.menu_item_option_ids' => ['nullable', 'array', 'max:100'],
+            'audience_rules.menu_item_option_ids.*' => ['integer', 'exists:menu_item_options,id'],
+
             'audience_rules.menu_item_ids' => ['nullable', 'array', 'max:50'],
             'audience_rules.menu_item_ids.*' => ['integer', 'exists:menu_items,id'],
 
             'audience_rules.branch_ids' => ['nullable', 'array', 'max:50'],
             'audience_rules.branch_ids.*' => ['integer', 'exists:branches,id'],
+
+            'audience_rules.primary_branch_ids' => ['nullable', 'array', 'max:50'],
+            'audience_rules.primary_branch_ids.*' => ['integer', 'exists:branches,id'],
+            'audience_rules.primary_branch_min_orders' => ['nullable', 'integer', 'min:1', 'max:10000'],
+
+            'audience_rules.only_branch_ids' => ['nullable', 'array', 'max:50'],
+            'audience_rules.only_branch_ids.*' => ['integer', 'exists:branches,id'],
 
             'audience_rules.networks' => ['nullable', 'array', 'max:4'],
             'audience_rules.networks.*' => [Rule::enum(GhanaNetwork::class)],

@@ -243,11 +243,21 @@ class CampaignSender
     }
 
     /**
-     * No marketing before 8am, after 7pm, or on a Sunday.
+     * Refuse a send outside the configured hours or on a blocked day.
      *
      * Enforced here rather than in the controller because a scheduled send never
-     * touches a controller. Cheap now, and it leaves the compliance track — a
-     * separate team's work — less to retrofit.
+     * touches a controller.
+     *
+     * BY DEFAULT THIS PERMITS EVERYTHING — any hour, any day. Both restrictions
+     * it used to impose were guesses about what is polite and both were wrong
+     * here: Sunday, which it blocked, is the busiest sales day of the week, and
+     * the 8am–7pm window was the same kind of assumption. When to reach
+     * customers is a business decision, and refusing it as a validation error
+     * nobody thinks to question is not where that decision belongs.
+     *
+     * The mechanism stays so the decision can be made in config later — see
+     * config/campaigns.php for why the guard stays enabled rather than being
+     * switched off.
      *
      * @throws RuntimeException
      */
@@ -260,11 +270,18 @@ class CampaignSender
         }
 
         $now = now();
-        $start = (int) ($window['start_hour'] ?? 8);
-        $end = (int) ($window['end_hour'] ?? 19);
+        // Defaults match the config: wide open, so a missing key can never be
+        // the reason a campaign is refused.
+        $start = (int) ($window['start_hour'] ?? 0);
+        $end = (int) ($window['end_hour'] ?? 24);
 
         if (in_array($now->isoWeekday(), (array) ($window['blocked_days'] ?? []), true)) {
-            throw new RuntimeException('Campaigns do not go out on a Sunday. Schedule it for tomorrow.');
+            // Names the actual day rather than assuming which one is blocked —
+            // the list is configurable, and a message that says "Sunday" on a
+            // Monday is worse than no message.
+            throw new RuntimeException(
+                'Campaigns do not go out on a '.$now->format('l').'. Schedule it for another day.'
+            );
         }
 
         if ($now->hour < $start || $now->hour >= $end) {

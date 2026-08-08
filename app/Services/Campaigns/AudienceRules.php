@@ -28,8 +28,12 @@ class AudienceRules
      * @param  int|null  $notOrderedForDays  Last order at least this long ago
      * @param  string|null  $orderedAfter  ISO date — first bound of a window
      * @param  string|null  $orderedBefore  ISO date — second bound of a window
-     * @param  array<int, int>  $menuItemIds  Bought any one of these dishes
-     * @param  array<int, int>  $branchIds  Ordered from any one of these branches
+     * @param  array<int, int>  $menuItemOptionIds  Bought any one of these menu options — the receipt line
+     * @param  array<int, int>  $menuItemIds  Bought any version of any one of these dishes
+     * @param  array<int, int>  $branchIds  Ever ordered from any one of these branches
+     * @param  array<int, int>  $primaryBranchIds  Buys mostly at one of these branches
+     * @param  int|null  $primaryBranchMinOrders  Ignore a primary branch built on fewer orders than this
+     * @param  array<int, int>  $onlyBranchIds  Has never ordered anywhere but one of these
      * @param  array<int, string>  $networks  GhanaNetwork values
      * @param  int|null  $hourFrom  Ordered at or after this hour (0–23)
      * @param  int|null  $hourTo  Ordered before this hour (0–23)
@@ -41,7 +45,11 @@ class AudienceRules
         public readonly ?string $orderedAfter = null,
         public readonly ?string $orderedBefore = null,
         public readonly array $menuItemIds = [],
+        public readonly array $menuItemOptionIds = [],
         public readonly array $branchIds = [],
+        public readonly array $primaryBranchIds = [],
+        public readonly ?int $primaryBranchMinOrders = null,
+        public readonly array $onlyBranchIds = [],
         public readonly array $networks = [],
         public readonly ?int $minOrders = null,
         public readonly ?int $maxOrders = null,
@@ -62,7 +70,11 @@ class AudienceRules
             orderedAfter: $rules['ordered_after'] ?? null,
             orderedBefore: $rules['ordered_before'] ?? null,
             menuItemIds: array_values(array_map('intval', (array) ($rules['menu_item_ids'] ?? []))),
+            menuItemOptionIds: array_values(array_map('intval', (array) ($rules['menu_item_option_ids'] ?? []))),
             branchIds: array_values(array_map('intval', (array) ($rules['branch_ids'] ?? []))),
+            primaryBranchIds: array_values(array_map('intval', (array) ($rules['primary_branch_ids'] ?? []))),
+            primaryBranchMinOrders: self::intOrNull($rules['primary_branch_min_orders'] ?? null),
+            onlyBranchIds: array_values(array_map('intval', (array) ($rules['only_branch_ids'] ?? []))),
             networks: array_values(array_map('strval', (array) ($rules['networks'] ?? []))),
             minOrders: self::intOrNull($rules['min_orders'] ?? null),
             maxOrders: self::intOrNull($rules['max_orders'] ?? null),
@@ -83,7 +95,11 @@ class AudienceRules
             'ordered_after' => $this->orderedAfter,
             'ordered_before' => $this->orderedBefore,
             'menu_item_ids' => $this->menuItemIds ?: null,
+            'menu_item_option_ids' => $this->menuItemOptionIds ?: null,
             'branch_ids' => $this->branchIds ?: null,
+            'primary_branch_ids' => $this->primaryBranchIds ?: null,
+            'primary_branch_min_orders' => $this->primaryBranchMinOrders,
+            'only_branch_ids' => $this->onlyBranchIds ?: null,
             'networks' => $this->networks ?: null,
             'min_orders' => $this->minOrders,
             'max_orders' => $this->maxOrders,
@@ -110,7 +126,7 @@ class AudienceRules
     /** Whether resolving these needs the order-items join, which is the expensive one. */
     public function needsItems(): bool
     {
-        return $this->menuItemIds !== [];
+        return $this->menuItemIds !== [] || $this->menuItemOptionIds !== [];
     }
 
     // ─── Sources ─────────────────────────────────────────────────────────────
@@ -193,14 +209,35 @@ class AudienceRules
             $lines[] = "Ordered on or before {$this->orderedBefore}";
         }
 
+        if ($this->menuItemOptionIds !== []) {
+            $lines[] = 'Bought '.count($this->menuItemOptionIds).' selected menu '
+                .(count($this->menuItemOptionIds) === 1 ? 'item' : 'items');
+        }
+
         if ($this->menuItemIds !== []) {
-            $lines[] = 'Bought '.count($this->menuItemIds).' selected '
+            $lines[] = 'Bought any version of '.count($this->menuItemIds).' selected '
                 .(count($this->menuItemIds) === 1 ? 'dish' : 'dishes');
         }
 
         if ($this->branchIds !== []) {
-            $lines[] = 'Ordered from '.count($this->branchIds).' selected '
+            $lines[] = 'Has ordered from '.count($this->branchIds).' selected '
                 .(count($this->branchIds) === 1 ? 'branch' : 'branches');
+        }
+
+        if ($this->primaryBranchIds !== []) {
+            $line = 'Buys mostly at '.count($this->primaryBranchIds).' selected '
+                .(count($this->primaryBranchIds) === 1 ? 'branch' : 'branches');
+
+            if ($this->primaryBranchMinOrders !== null) {
+                $line .= ", over {$this->primaryBranchMinOrders} orders or more";
+            }
+
+            $lines[] = $line;
+        }
+
+        if ($this->onlyBranchIds !== []) {
+            $lines[] = 'Has never ordered anywhere but '.count($this->onlyBranchIds).' selected '
+                .(count($this->onlyBranchIds) === 1 ? 'branch' : 'branches');
         }
 
         if ($this->networks !== []) {

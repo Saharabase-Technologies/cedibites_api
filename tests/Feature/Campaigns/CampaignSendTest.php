@@ -179,7 +179,7 @@ describe('the rails that stop an accidental blast', function () {
             ->assertJsonPath('message', fn ($m) => str_contains($m, 'between 8:00 and 19:00'));
     });
 
-    it('refuses to send on a Sunday', function () {
+    it('refuses to send on a day that has been blocked', function () {
         config([
             'campaigns.send_window.enabled' => true,
             'campaigns.send_window.blocked_days' => [7],
@@ -194,7 +194,54 @@ describe('the rails that stop an accidental blast', function () {
         $this->actingAs(campaignAdmin(), 'sanctum')
             ->postJson("/v1/admin/campaigns/{$campaign->id}/send")
             ->assertStatus(422)
+            // Names the day it actually is, rather than assuming Sunday.
             ->assertJsonPath('message', fn ($m) => str_contains($m, 'Sunday'));
+    });
+
+    it('sends at any hour by default', function () {
+        /*
+         * The window used to default to 8am–7pm. Like the Sunday block, that was
+         * a guess about what is polite rather than a decision anybody took, and
+         * it surfaced as a validation error rather than as a choice.
+         *
+         * Deliberately sets only `enabled` — the point is what the shipped
+         * defaults permit, so the hours must come from config, not from here.
+         */
+        config(['campaigns.send_window.enabled' => true]);
+
+        // 03:00, which the old default refused outright.
+        $this->travelTo(now()->setDate(2026, 8, 5)->setTime(3, 0));
+
+        orderingCustomer('+233241111111');
+        $campaign = Campaign::factory()->create(['created_by_user_id' => campaignAdmin()->id]);
+
+        $this->actingAs(campaignAdmin(), 'sanctum')
+            ->postJson("/v1/admin/campaigns/{$campaign->id}/send")
+            ->assertOk();
+    });
+
+    it('sends on a Sunday, because Sunday is the busiest day of the week', function () {
+        /*
+         * The default used to block Sunday, on the assumption that weekend
+         * marketing is intrusive. It is the biggest sales day here, so the guard
+         * was refusing to send on the one day a campaign is worth the most —
+         * and it did it silently, as a validation error nobody would think to
+         * question.
+         *
+         * Deliberately does NOT set blocked_days: the whole point is what the
+         * shipped default does.
+         */
+        config(['campaigns.send_window.enabled' => true]);
+
+        // Sunday 2 August 2026, midday.
+        $this->travelTo(now()->setDate(2026, 8, 2)->setTime(12, 0));
+
+        orderingCustomer('+233241111111');
+        $campaign = Campaign::factory()->create(['created_by_user_id' => campaignAdmin()->id]);
+
+        $this->actingAs(campaignAdmin(), 'sanctum')
+            ->postJson("/v1/admin/campaigns/{$campaign->id}/send")
+            ->assertOk();
     });
 
     /*

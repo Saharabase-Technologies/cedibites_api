@@ -60,17 +60,36 @@ return [
     | Send window
     |--------------------------------------------------------------------------
     |
-    | No marketing before 8am, after 7pm, or on a Sunday. Cheap to enforce now,
-    | and it leaves the compliance track — which is a separate team's work — less
-    | to retrofit. Times are in the app timezone.
+    | CAMPAIGNS GO OUT AT ANY HOUR, ON ANY DAY, BY DEFAULT.
+    |
+    | Both restrictions started as guesses about what is polite, and both were
+    | wrong for this business. Sunday — blocked on the assumption that weekend
+    | marketing is intrusive — is the busiest sales day of the week, so the guard
+    | was refusing to send on the day a campaign earns the most. The 8am–7pm
+    | window was the same kind of guess.
+    |
+    | When to reach customers is a business decision. Refusing it in config, as a
+    | validation error nobody thinks to question, is not where that decision
+    | belongs.
+    |
+    | The machinery is still here and still enforced — it is the DEFAULTS that
+    | are open. Note the window stays `enabled` rather than being switched off,
+    | so that setting a blocked day alone actually takes effect; disabling the
+    | whole guard by default would make CAMPAIGN_SEND_WINDOW_BLOCKED_DAYS a
+    | setting that silently does nothing.
+    |
+    |   CAMPAIGN_SEND_WINDOW_START / _END  hours, app timezone (0 and 24 = any)
+    |   CAMPAIGN_SEND_WINDOW_BLOCKED_DAYS  ISO-8601 days, e.g. "7" for Sunday
     |
     */
     'send_window' => [
         'enabled' => (bool) env('CAMPAIGN_SEND_WINDOW_ENABLED', true),
-        'start_hour' => (int) env('CAMPAIGN_SEND_WINDOW_START', 8),
-        'end_hour' => (int) env('CAMPAIGN_SEND_WINDOW_END', 19),
-        // ISO-8601 day numbers. 7 is Sunday.
-        'blocked_days' => [7],
+        'start_hour' => (int) env('CAMPAIGN_SEND_WINDOW_START', 0),
+        'end_hour' => (int) env('CAMPAIGN_SEND_WINDOW_END', 24),
+        'blocked_days' => array_values(array_filter(array_map(
+            'intval',
+            array_filter(array_map('trim', explode(',', (string) env('CAMPAIGN_SEND_WINDOW_BLOCKED_DAYS', '')))),
+        ))),
     ],
 
     /*

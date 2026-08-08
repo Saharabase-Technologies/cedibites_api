@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
 use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\DirectMessageController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\MenuBranchAvailabilityController;
 use App\Http\Controllers\Api\MenuCategoryController;
@@ -125,6 +126,10 @@ Route::prefix('admin')->group(function () {
         // The two-step send. `preview` is the confirm screen — recipient count,
         // characters, billed segments, projected cost — and `send` is the only
         // call in the application that spends money on SMS in bulk.
+        // Who received it and who did not. The breakdown that tells a dead
+        // number from a handset that was switched off.
+        Route::get('campaigns/{campaign}/deliveries', [CampaignController::class, 'deliveries']);
+
         Route::get('campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
         Route::post('campaigns/{campaign}/send', [CampaignController::class, 'send']);
         Route::post('campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
@@ -150,6 +155,14 @@ Route::prefix('admin')->group(function () {
          * Fixed segments declared before `{import}` so the wildcard does not
          * swallow them.
          */
+        /*
+         * One text to one number. Not a campaign of one — see
+         * DirectMessageController for why it skips the send window and seed
+         * mode, and what it deliberately does not skip.
+         */
+        Route::post('messages/measure', [DirectMessageController::class, 'measure']);
+        Route::post('messages/send', [DirectMessageController::class, 'send']);
+
         Route::get('contacts/stats', [ContactController::class, 'stats']);
         Route::get('contacts/conversions', [ContactController::class, 'conversions']);
         Route::get('contacts/imports', [ContactController::class, 'imports']);

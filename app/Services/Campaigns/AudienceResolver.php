@@ -212,7 +212,13 @@ class AudienceResolver
             ->select('id', 'customer_id', 'branch_id', 'contact_name', 'contact_phone', 'total_amount', 'created_at');
 
         if ($withItems) {
-            $query->with(['items:id,order_id,menu_item_id']);
+            // The option is what was actually bought — "Jollof, Large" is the
+            // receipt line and the thing a promotion is about. The item id is
+            // carried too because it is the broader net and, unlike the option,
+            // it survives: menu_item_option_id is nullable and set to null when
+            // an option is deleted, so option-level history can disappear from
+            // old orders while item-level history never does.
+            $query->with(['items:id,order_id,menu_item_id,menu_item_option_id']);
         }
 
         $query->chunk(1000, function ($orders) use (&$profiles, $customerPhone, $withItems): void {
@@ -240,7 +246,18 @@ class AudienceResolver
                 $profiles[$phone]['spend'] += (float) $o->total_amount;
 
                 if ($o->branch_id) {
-                    $profiles[$phone]['branches'][(int) $o->branch_id] = true;
+                    $branchId = (int) $o->branch_id;
+
+                    // Counted, not flagged. "Ever ordered here" and "this is
+                    // their branch" are different questions, and only a count
+                    // can answer the second — one visit to Ashaiman three years
+                    // ago should not put somebody in Ashaiman's audience forever.
+                    $profiles[$phone]['branches'][$branchId] =
+                        ($profiles[$phone]['branches'][$branchId] ?? 0) + 1;
+
+                    // Newest-first, so the first branch seen is the most recent
+                    // one. Breaks ties for the primary branch.
+                    $profiles[$phone]['last_branch'] ??= $branchId;
                 }
 
                 if ($o->created_at) {
@@ -253,6 +270,10 @@ class AudienceResolver
 
                 if ($withItems) {
                     foreach ($o->items as $item) {
+                        if ($item->menu_item_option_id) {
+                            $profiles[$phone]['options'][(int) $item->menu_item_option_id] = true;
+                        }
+
                         if ($item->menu_item_id) {
                             $profiles[$phone]['items'][(int) $item->menu_item_id] = true;
                         }
@@ -277,12 +298,47 @@ class AudienceResolver
             'count' => 0,
             'last' => null,
             'spend' => 0.0,
+            /** @var array<int, int> branch id => how many orders there */
             'branches' => [],
+            'last_branch' => null,
             'hours' => [],
             'items' => [],
+            'options' => [],
             'is_customer' => $isCustomer,
             'is_imported' => $isImported,
         ];
+    }
+
+    /**
+     * The branch somebody belongs to — where they have bought the most.
+     *
+     * The nearest thing to a home branch we can know without asking. We hold no
+     * customer location, so purchase history is the honest proxy.
+     *
+     * Ties go to the most recent branch, which makes the answer deterministic
+     * and picks the more useful of the two: somebody two-and-two between
+     * branches is better reached about the one they were at last.
+     *
+     * Means little for a customer with a single order — their "primary" branch
+     * is just their only one — which is why the rule that uses it can require a
+     * minimum number of orders.
+     */
+    private function primaryBranch(array $profile): ?int
+    {
+        if ($profile['branches'] === []) {
+            return null;
+        }
+
+        $most = max($profile['branches']);
+        $leaders = array_keys($profile['branches'], $most, true);
+
+        if (count($leaders) === 1) {
+            return (int) $leaders[0];
+        }
+
+        return in_array($profile['last_branch'], $leaders, true)
+            ? (int) $profile['last_branch']
+            : (int) $leaders[0];
     }
 
     /** Whether one person's history satisfies every rule that is set. */
@@ -328,6 +384,35 @@ class AudienceResolver
         // a single rule the options are alternatives; it is between rules that
         // everything must hold.
         if ($rules->branchIds !== [] && ! array_intersect($rules->branchIds, array_keys($p['branches']))) {
+            return false;
+        }
+
+        // Where they belong, not merely where they have been. See primaryBranch().
+        if ($rules->primaryBranchIds !== []) {
+            $primary = $this->primaryBranch($p);
+
+            if ($primary === null || ! in_array($primary, $rules->primaryBranchIds, true)) {
+                return false;
+            }
+
+            // A single order makes a primary branch that means nothing. The
+            // threshold is opt-in so the rule can still be used loosely.
+            if ($rules->primaryBranchMinOrders !== null && $p['count'] < $rules->primaryBranchMinOrders) {
+                return false;
+            }
+        }
+
+        // Never bought anywhere else. The strictest of the three, and the right
+        // one for something only that branch can honour.
+        if ($rules->onlyBranchIds !== []) {
+            $branches = array_keys($p['branches']);
+
+            if (count($branches) !== 1 || ! in_array((int) $branches[0], $rules->onlyBranchIds, true)) {
+                return false;
+            }
+        }
+
+        if ($rules->menuItemOptionIds !== [] && ! array_intersect($rules->menuItemOptionIds, array_keys($p['options']))) {
             return false;
         }
 
