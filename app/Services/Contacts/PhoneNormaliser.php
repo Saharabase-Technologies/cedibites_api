@@ -79,4 +79,32 @@ class PhoneNormaliser
     {
         return (bool) preg_match(self::PATTERN, $phone);
     }
+
+    /**
+     * The shapes this number could plausibly be stored as in `orders`.
+     *
+     * `orders.contact_phone` holds whatever was typed at the counter, so a
+     * lookup for one person's history cannot simply match the normalised form.
+     * This covers the three that are actually written — +233…, 233… and 0… —
+     * which is what makes a targeted query possible at all.
+     *
+     * DELIBERATELY NOT EXHAUSTIVE. A number entered with spaces or brackets will
+     * not be found by this, so a per-order history lookup can under-count. That
+     * is an acceptable trade for a single indexed query instead of a full table
+     * scan per order — and the places where exactness matters, the campaign
+     * audience and the contact importer, do scan and normalise every row.
+     *
+     * @return array<int, string>
+     */
+    public static function variants(string $normalised): array
+    {
+        if (! self::isValid($normalised)) {
+            return [$normalised];
+        }
+
+        $digits = substr($normalised, 1);        // 233XXXXXXXXX
+        $local = '0'.substr($normalised, 4);     // 0XXXXXXXXX
+
+        return [$normalised, $digits, $local];
+    }
 }

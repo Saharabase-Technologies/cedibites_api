@@ -170,6 +170,28 @@ class OrderObserver
             });
         }
 
+        /*
+         * Automation rules that were waiting for an order to finish.
+         *
+         * Evaluated even when the feature is switched off — the evaluator
+         * records what would have happened and sends nothing, which is how a
+         * rule earns trust before anybody turns it on. Wrapped so that a fault
+         * in a marketing rule can never be the reason an order fails to
+         * complete.
+         */
+        if (in_array($order->status, ['completed', 'delivered'], true)) {
+            \DB::afterCommit(function () use ($order) {
+                try {
+                    app(\App\Services\Automation\TriggerEvaluator::class)->evaluate($order);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::error('Automation evaluation failed', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            });
+        }
+
         // Mark the third-party delivery fee collected once the order is delivered —
         // the rider hands it over on delivery. Only acts on still-pending fees.
         if (in_array($order->status, ['delivered', 'completed'], true) && $order->delivery_fee_status === 'pending') {

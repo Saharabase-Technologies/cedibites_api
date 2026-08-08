@@ -233,56 +233,98 @@ class AudienceResolver
                     $profiles[$phone] = $this->blankProfile($o->contact_name, isCustomer: true);
                 }
 
-                // Placing an order is what makes somebody a customer, whether or
-                // not they hold an account — this is the same line the contact
-                // base draws with converted_at.
-                $profiles[$phone]['is_customer'] = true;
-
-                // Newest-first, so the first order seen for a number fixes its
-                // latest date. A seeded profile has none yet.
-                $profiles[$phone]['last'] ??= $o->created_at;
-
-                $profiles[$phone]['count']++;
-                $profiles[$phone]['spend'] += (float) $o->total_amount;
-
-                if ($o->branch_id) {
-                    $branchId = (int) $o->branch_id;
-
-                    // Counted, not flagged. "Ever ordered here" and "this is
-                    // their branch" are different questions, and only a count
-                    // can answer the second — one visit to Ashaiman three years
-                    // ago should not put somebody in Ashaiman's audience forever.
-                    $profiles[$phone]['branches'][$branchId] =
-                        ($profiles[$phone]['branches'][$branchId] ?? 0) + 1;
-
-                    // Newest-first, so the first branch seen is the most recent
-                    // one. Breaks ties for the primary branch.
-                    $profiles[$phone]['last_branch'] ??= $branchId;
-                }
-
-                if ($o->created_at) {
-                    // Read in PHP rather than SQL on purpose. EXTRACT(HOUR FROM …)
-                    // is Postgres-only and is exactly what makes SmartCategoryTest
-                    // fail on SQLite depending on the wall clock; this stays
-                    // correct on both.
-                    $profiles[$phone]['hours'][(int) $o->created_at->hour] = true;
-                }
-
-                if ($withItems) {
-                    foreach ($o->items as $item) {
-                        if ($item->menu_item_option_id) {
-                            $profiles[$phone]['options'][(int) $item->menu_item_option_id] = true;
-                        }
-
-                        if ($item->menu_item_id) {
-                            $profiles[$phone]['items'][(int) $item->menu_item_id] = true;
-                        }
-                    }
-                }
+                $this->accumulate($profiles[$phone], $o, $withItems);
             }
         });
 
         return $profiles;
+    }
+
+    /**
+     * Fold one order into somebody's profile.
+     *
+     * Extracted so the automation engine can build a profile for a single person
+     * from their own order history and put it through the same matches(). Two
+     * implementations of "what does this customer's behaviour add up to" would
+     * eventually disagree, and the day they did, a campaign and a trigger would
+     * reach different people from rules that read identically.
+     *
+     * Callers must pass orders NEWEST FIRST — `last` and `last_branch` take the
+     * first value they see and keep it.
+     */
+    private function accumulate(array &$profile, Order $o, bool $withItems): void
+    {
+        // Placing an order is what makes somebody a customer, whether or not
+        // they hold an account — the same line the contact base draws with
+        // converted_at.
+        $profile['is_customer'] = true;
+
+        // A seeded profile has no date yet; the first order seen fixes it.
+        $profile['last'] ??= $o->created_at;
+
+        $profile['count']++;
+        $profile['spend'] += (float) $o->total_amount;
+
+        if ($o->branch_id) {
+            $branchId = (int) $o->branch_id;
+
+            // Counted, not flagged. "Ever ordered here" and "this is their
+            // branch" are different questions, and only a count answers the
+            // second — one visit to Ashaiman three years ago should not put
+            // somebody in Ashaiman's audience forever.
+            $profile['branches'][$branchId] = ($profile['branches'][$branchId] ?? 0) + 1;
+            $profile['last_branch'] ??= $branchId;
+        }
+
+        if ($o->created_at) {
+            // Read in PHP rather than SQL on purpose. EXTRACT(HOUR FROM …) is
+            // Postgres-only and is exactly what makes SmartCategoryTest fail on
+            // SQLite depending on the wall clock; this stays correct on both.
+            $profile['hours'][(int) $o->created_at->hour] = true;
+        }
+
+        if ($withItems) {
+            foreach ($o->items as $item) {
+                if ($item->menu_item_option_id) {
+                    $profile['options'][(int) $item->menu_item_option_id] = true;
+                }
+
+                if ($item->menu_item_id) {
+                    $profile['items'][(int) $item->menu_item_id] = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * One person's profile, built from orders you already hold.
+     *
+     * The automation engine has a customer's history loaded already; handing it
+     * back here rather than re-querying keeps trigger conditions answered by the
+     * same code that answers campaign conditions.
+     *
+     * @param  iterable<Order>  $orders  Newest first
+     */
+    public function profileFromOrders(iterable $orders, ?string $name = null): array
+    {
+        $profile = $this->blankProfile($name);
+
+        foreach ($orders as $order) {
+            $this->accumulate($profile, $order, withItems: $order->relationLoaded('items'));
+        }
+
+        return $profile;
+    }
+
+    /**
+     * Whether one person satisfies a rule set.
+     *
+     * Public so the automation engine can ask it about a single customer. The
+     * profile must come from profileFromOrders() — the shape is not incidental.
+     */
+    public function profileMatches(array $profile, string $phone, AudienceRules $rules): bool
+    {
+        return $this->matches($profile, $phone, $rules);
     }
 
     /**
