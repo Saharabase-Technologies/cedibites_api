@@ -2,6 +2,7 @@
 
 namespace App\Services\Automation;
 
+use App\Jobs\SendAutomationMessage;
 use App\Models\AutomationFire;
 use App\Models\AutomationRule;
 use App\Models\Order;
@@ -10,10 +11,11 @@ use App\Services\Campaigns\AudienceResolver;
 /**
  * Which rule, if any, this order sets off.
  *
- * Records what it decides and sends nothing. Sending is a separate step, and
- * keeping them apart is what lets the whole engine run against real traffic with
- * the kill switch down: rules match real orders, the log fills up, the reporting
- * works, and no customer hears a thing.
+ * Decides and records; the actual send is queued for later and re-checks
+ * everything decided here — see SendAutomationMessage for why. With the kill
+ * switch down nothing wins, so the engine still evaluates real traffic and fills
+ * the log while no customer hears a thing. That is how a rule earns trust before
+ * anybody turns it on.
  *
  * ONE RULE WINS PER ORDER. A first delivery, of a new dish, at a new branch is
  * three matches on one order, and three texts in one afternoon is how an
@@ -54,6 +56,7 @@ class TriggerEvaluator
 
         $profile = null;
         $winner = null;
+        $winningRule = null;
 
         foreach ($rules as $rule) {
             if (! $this->events->matches($rule, $milestones)) {
@@ -90,7 +93,22 @@ class TriggerEvaluator
 
             if ($reason === null) {
                 $winner = $fire;
+                $winningRule = $rule;
             }
+        }
+
+        if ($winner !== null) {
+            /*
+             * Queued for later rather than sent now, and the delay is the point:
+             * asking how the food was while somebody is still eating it is worse
+             * than not asking at all.
+             *
+             * The job re-checks every guard when it runs. Between here and there
+             * the order can be cancelled, the rule switched off, or the same
+             * person messaged by something else entirely.
+             */
+            SendAutomationMessage::dispatch($winner->id)
+                ->delay(now()->addMinutes(max(0, (int) $winningRule->delay_minutes)));
         }
 
         return $winner;

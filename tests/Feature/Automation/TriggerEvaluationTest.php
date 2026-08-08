@@ -11,10 +11,16 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // The send is a separate concern with its own test file; faking the bus
+    // keeps these about what the evaluator decides, and stops a sync queue
+    // turning every assertion into a real HTTP call.
+    Bus::fake();
+
     Order::query()->forceDelete();
     Customer::query()->forceDelete();
     User::query()->forceDelete();
