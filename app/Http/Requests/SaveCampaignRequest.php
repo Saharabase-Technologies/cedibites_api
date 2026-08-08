@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Enums\CampaignSegment;
+use App\Enums\ContactSource;
 use App\Enums\GhanaNetwork;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -59,6 +60,15 @@ class SaveCampaignRequest extends FormRequest
     {
         return [
             'audience_rules' => ['sometimes', 'nullable', 'array'],
+
+            /*
+             * Which pools to draw from. Absent means customers only — the one
+             * rule here that can WIDEN an audience rather than narrow it, which
+             * is why it has to be asked for explicitly and why it is described
+             * first in the review step.
+             */
+            'audience_rules.sources' => ['nullable', 'array', 'max:2'],
+            'audience_rules.sources.*' => [Rule::enum(ContactSource::class)],
 
             'audience_rules.ordered_within_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'audience_rules.not_ordered_for_days' => ['nullable', 'integer', 'min:1', 'max:3650'],

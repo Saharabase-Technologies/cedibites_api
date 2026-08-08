@@ -59,6 +59,18 @@ class OrderObserver
             'changed_at' => now(),
         ]);
 
+        /*
+         * If this number was on an imported contact list, it has just stopped
+         * being a supplementary contact and become a customer.
+         *
+         * Above the manual_entry return on purpose. A recorded past order is
+         * still evidence that the person bought from us, and the whole point of
+         * the imported/acquired split is that it reflects who has actually
+         * ordered — not who ordered through a channel that also sends
+         * notifications.
+         */
+        \DB::afterCommit(fn () => app(\App\Services\Contacts\ContactConverter::class)->convertFromOrderQuietly($order));
+
         // Past orders (manual entries) should not trigger notifications or broadcasts.
         if ($order->order_source === 'manual_entry') {
             return;

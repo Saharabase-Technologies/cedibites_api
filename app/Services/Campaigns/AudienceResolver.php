@@ -5,6 +5,7 @@ namespace App\Services\Campaigns;
 use App\Enums\CampaignSegment;
 use App\Enums\GhanaNetwork;
 use App\Helpers\PhoneHelper;
+use App\Models\Contact;
 use App\Models\Customer;
 use App\Models\Order;
 use Carbon\Carbon;
@@ -77,17 +78,49 @@ class AudienceResolver
             return $this->allContacts();
         }
 
-        $profiles = $this->buildProfiles($rules->needsItems());
+        $profiles = $this->buildProfiles($rules->needsItems(), $rules->includesSupplementary());
 
         $rows = [];
 
         foreach ($profiles as $phone => $p) {
+            if (! $this->inScope($p, $rules)) {
+                continue;
+            }
+
             if ($this->matches($p, $phone, $rules)) {
                 $rows[] = ['name' => $p['name'], 'phone' => $phone];
             }
         }
 
         return array_values($rows);
+    }
+
+    /**
+     * Whether this number is in one of the pools the operator asked for.
+     *
+     * The two pools are a partition and this is where that is enforced:
+     * supplementary requires `is_imported AND NOT is_customer`. Anybody who has
+     * ordered belongs to Customers and only to Customers, whatever list we
+     * originally found them on.
+     *
+     * The `! is_customer` half is not redundant with the unconverted() filter
+     * that seeds them. A contact whose order never reached ContactConverter —
+     * written by a seeder, a backfill, or before `contacts:reconcile` last ran —
+     * still has `converted_at` null while plainly having orders. Reading the
+     * order scan rather than the flag means the partition holds even when the
+     * conversion bookkeeping is behind, instead of quietly counting a regular
+     * customer as a prospect and texting them as one.
+     *
+     * Applied after the behavioural rules rather than folded into them, so the
+     * rules stay purely about behaviour.
+     */
+    private function inScope(array $profile, AudienceRules $rules): bool
+    {
+        if ($profile['is_customer']) {
+            return $rules->includesCustomers();
+        }
+
+        return $rules->includesSupplementary() && $profile['is_imported'];
     }
 
     public function countRules(AudienceRules $rules): int
@@ -111,15 +144,67 @@ class AudienceResolver
      * The item set is only assembled when a rule asks for it — that is the join
      * through order_items, and it is the expensive part.
      *
+     * Seeded before the scan with everybody we hold a number for, each starting
+     * at zero orders, so that a rule set with nothing behavioural in it matches
+     * exactly who allContacts() returns. Without the seed, adding any rule at
+     * all silently dropped registered account holders who have never ordered —
+     * they appear in no order row, so the scan alone cannot see them. A
+     * zero-profile then answers every behavioural rule correctly on its own
+     * terms: it fails "ordered in the last 30 days", passes "has not ordered for
+     * 60 days", fails any dish or branch, and carries a network read off the
+     * prefix.
+     *
      * @return array<string, array{
      *     name: string, count: int, last: mixed, spend: float,
-     *     branches: array<int, bool>, hours: array<int, bool>, items: array<int, bool>
+     *     branches: array<int, bool>, hours: array<int, bool>, items: array<int, bool>,
+     *     is_customer: bool, is_imported: bool
      * }>
      */
-    private function buildProfiles(bool $withItems): array
+    private function buildProfiles(bool $withItems, bool $withSupplementary = false): array
     {
         $customerPhone = $this->registeredPhones();
         $profiles = [];
+
+        // Registered account holders first, so their own name wins over whatever
+        // was typed at a counter — the same precedence allContacts() uses.
+        foreach ($customerPhone as $entry) {
+            $phone = PhoneHelper::normalize(trim((string) $entry['phone']));
+
+            if ($this->isValidPhone($phone) && ! isset($profiles[$phone])) {
+                $profiles[$phone] = $this->blankProfile($entry['name'], isCustomer: true);
+            }
+        }
+
+        /*
+         * The supplementary contact base, only when the audience asked for it.
+         * Left untouched otherwise, so a customers-only audience does not pay
+         * for a table it is not going to read.
+         *
+         * Unconverted rows only. A contact who has ordered is a customer and is
+         * already in this map through the order scan below; seeding them here
+         * as well would put the same person on both sides of what is supposed
+         * to be a partition.
+         */
+        if ($withSupplementary) {
+            Contact::unconverted()
+                ->select('name', 'phone')
+                ->chunk(2000, function ($contacts) use (&$profiles): void {
+                    foreach ($contacts as $contact) {
+                        if (isset($profiles[$contact->phone])) {
+                            // Same number as a registered account holder. Mark
+                            // the origin and keep the richer profile; inScope()
+                            // will file them under Customers.
+                            $profiles[$contact->phone]['is_imported'] = true;
+
+                            continue;
+                        }
+
+                        if ($this->isValidPhone($contact->phone)) {
+                            $profiles[$contact->phone] = $this->blankProfile($contact->name, isImported: true);
+                        }
+                    }
+                });
+        }
 
         $query = Order::where('status', '!=', 'cancelled')
             ->orderByDesc('created_at')
@@ -139,17 +224,17 @@ class AudienceResolver
                 }
 
                 if (! isset($profiles[$phone])) {
-                    $profiles[$phone] = [
-                        'name' => trim((string) $o->contact_name) ?: 'Customer',
-                        'count' => 0,
-                        // Newest-first, so the first sighting fixes the latest date.
-                        'last' => $o->created_at,
-                        'spend' => 0.0,
-                        'branches' => [],
-                        'hours' => [],
-                        'items' => [],
-                    ];
+                    $profiles[$phone] = $this->blankProfile($o->contact_name, isCustomer: true);
                 }
+
+                // Placing an order is what makes somebody a customer, whether or
+                // not they hold an account — this is the same line the contact
+                // base draws with converted_at.
+                $profiles[$phone]['is_customer'] = true;
+
+                // Newest-first, so the first order seen for a number fixes its
+                // latest date. A seeded profile has none yet.
+                $profiles[$phone]['last'] ??= $o->created_at;
 
                 $profiles[$phone]['count']++;
                 $profiles[$phone]['spend'] += (float) $o->total_amount;
@@ -177,6 +262,27 @@ class AudienceResolver
         });
 
         return $profiles;
+    }
+
+    /**
+     * Somebody we hold a number for who has, so far, done nothing.
+     *
+     * `last` is null rather than a date, which is what makes the recency rules
+     * treat "never ordered" as infinitely long ago instead of as today.
+     */
+    private function blankProfile(?string $name, bool $isCustomer = false, bool $isImported = false): array
+    {
+        return [
+            'name' => trim((string) $name) ?: 'Customer',
+            'count' => 0,
+            'last' => null,
+            'spend' => 0.0,
+            'branches' => [],
+            'hours' => [],
+            'items' => [],
+            'is_customer' => $isCustomer,
+            'is_imported' => $isImported,
+        ];
     }
 
     /** Whether one person's history satisfies every rule that is set. */

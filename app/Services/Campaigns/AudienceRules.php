@@ -2,6 +2,7 @@
 
 namespace App\Services\Campaigns;
 
+use App\Enums\ContactSource;
 use App\Enums\GhanaNetwork;
 
 /**
@@ -32,6 +33,7 @@ class AudienceRules
      * @param  array<int, string>  $networks  GhanaNetwork values
      * @param  int|null  $hourFrom  Ordered at or after this hour (0–23)
      * @param  int|null  $hourTo  Ordered before this hour (0–23)
+     * @param  array<int, string>  $sources  ContactSource values; empty means customers only
      */
     public function __construct(
         public readonly ?int $orderedWithinDays = null,
@@ -47,6 +49,7 @@ class AudienceRules
         public readonly ?float $maxSpend = null,
         public readonly ?int $hourFrom = null,
         public readonly ?int $hourTo = null,
+        public readonly array $sources = [],
     ) {}
 
     public static function fromArray(?array $rules): self
@@ -67,6 +70,7 @@ class AudienceRules
             maxSpend: isset($rules['max_spend']) && $rules['max_spend'] !== null ? (float) $rules['max_spend'] : null,
             hourFrom: self::intOrNull($rules['hour_from'] ?? null),
             hourTo: self::intOrNull($rules['hour_to'] ?? null),
+            sources: array_values(array_map('strval', (array) ($rules['sources'] ?? []))),
         );
     }
 
@@ -87,6 +91,13 @@ class AudienceRules
             'max_spend' => $this->maxSpend,
             'hour_from' => $this->hourFrom,
             'hour_to' => $this->hourTo,
+
+            // Only written when it is not the default. Customers-only is what a
+            // rule set means when it says nothing about sources, so recording it
+            // explicitly would make every plain audience read as non-empty — and
+            // CampaignSender uses isEmpty() to decide whether a campaign is
+            // running on a preset or on assembled rules.
+            'sources' => $this->isDefaultSources() ? null : $this->sources,
         ], fn ($v) => $v !== null);
     }
 
@@ -102,6 +113,45 @@ class AudienceRules
         return $this->menuItemIds !== [];
     }
 
+    // ─── Sources ─────────────────────────────────────────────────────────────
+
+    /**
+     * The pools to draw from, with the default filled in.
+     *
+     * @return array<int, string>
+     */
+    public function effectiveSources(): array
+    {
+        $valid = array_values(array_filter(
+            $this->sources,
+            fn (string $s) => ContactSource::tryFrom($s) !== null,
+        ));
+
+        return $valid === [] ? [ContactSource::Customers->value] : $valid;
+    }
+
+    public function includesCustomers(): bool
+    {
+        return in_array(ContactSource::Customers->value, $this->effectiveSources(), true);
+    }
+
+    /**
+     * Whether the supplementary contact base is in scope.
+     *
+     * The resolver reads this before it touches the contacts table at all, so an
+     * audience that has not asked for them costs exactly what it cost before
+     * this existed.
+     */
+    public function includesSupplementary(): bool
+    {
+        return in_array(ContactSource::Supplementary->value, $this->effectiveSources(), true);
+    }
+
+    private function isDefaultSources(): bool
+    {
+        return $this->effectiveSources() === [ContactSource::Customers->value];
+    }
+
     /**
      * The rules in plain English, for the review step and the audit trail.
      *
@@ -113,6 +163,17 @@ class AudienceRules
     public function describe(): array
     {
         $lines = [];
+
+        // First, because it is the only line that can make the audience bigger
+        // than "our customers", and it should not be discovered at the bottom of
+        // a list of narrowing filters.
+        if (! $this->isDefaultSources()) {
+            $labels = array_map(
+                fn (string $s) => ContactSource::tryFrom($s)?->label() ?? $s,
+                $this->effectiveSources(),
+            );
+            $lines[] = 'Drawn from '.implode(' and ', $labels);
+        }
 
         if ($this->orderedWithinDays !== null) {
             $lines[] = $this->orderedWithinDays === 1

@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\CampaignSegment;
 use App\Enums\CampaignStatus;
+use App\Enums\ContactSource;
 use App\Enums\GhanaNetwork;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SaveCampaignRequest;
 use App\Http\Resources\CampaignResource;
 use App\Models\Branch;
 use App\Models\Campaign;
+use App\Models\Contact;
 use App\Models\MenuItem;
 use App\Services\Campaigns\AudienceResolver;
 use App\Services\Campaigns\AudienceRules;
@@ -277,6 +279,25 @@ class CampaignController extends Controller
                 'value' => $n->value,
                 'label' => $n->label(),
             ], GhanaNetwork::cases()),
+
+            /*
+             * The two pools, with a live headcount each.
+             *
+             * They are a partition, so these two figures do not overlap and can
+             * honestly be added. The supplementary count is contacts who have
+             * never ordered — NOT the size of the contact base. A converted
+             * contact is already counted on the customers side, and showing the
+             * raw total here would have the operator adding two numbers that
+             * share people.
+             */
+            'sources' => array_map(fn (ContactSource $s) => [
+                'value' => $s->value,
+                'label' => $s->label(),
+                'description' => $s->description(),
+                'count' => $s === ContactSource::Supplementary
+                    ? Contact::unconverted()->count()
+                    : $this->audience->count(CampaignSegment::All),
+            ], ContactSource::cases()),
         ]);
     }
 

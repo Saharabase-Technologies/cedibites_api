@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\AdminReportController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
+use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\MenuBranchAvailabilityController;
@@ -135,6 +136,29 @@ Route::prefix('admin')->group(function () {
         // feedback is worth doing and needs the isCompanyWide() treatment first
         // — see the branch-isolation notes before widening this.
         Route::get('customer-feedback', [OrderFeedbackController::class, 'index']);
+
+        /*
+         * The supplementary contact base — imported numbers that have bought
+         * nothing.
+         *
+         * Gated here rather than under `view_customers` even though the UI shows
+         * it as a tab beside the customer list. The whole table is names and
+         * numbers in bulk, which is exactly what the export ceiling above
+         * exists to protect; a cashier who can look up one caller should not be
+         * able to page through an uploaded list of 28,000.
+         *
+         * Fixed segments declared before `{import}` so the wildcard does not
+         * swallow them.
+         */
+        Route::get('contacts/stats', [ContactController::class, 'stats']);
+        Route::get('contacts/conversions', [ContactController::class, 'conversions']);
+        Route::get('contacts/imports', [ContactController::class, 'imports']);
+        Route::post('contacts/import/preview', [ContactController::class, 'preview']);
+        Route::post('contacts/import', [ContactController::class, 'store']);
+        Route::delete('contacts/imports/{import}', [ContactController::class, 'undoImport']);
+
+        Route::get('contacts', [ContactController::class, 'index']);
+        Route::delete('contacts/{contact}', [ContactController::class, 'destroy']);
     });
 
     Route::middleware('permission:view_customers')->group(function () {
