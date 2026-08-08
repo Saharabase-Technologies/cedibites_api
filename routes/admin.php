@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Admin\SmartCategorySettingController;
 use App\Http\Controllers\Api\AdminAnalyticsController;
 use App\Http\Controllers\Api\AdminDashboardController;
 use App\Http\Controllers\Api\AdminReportController;
+use App\Http\Controllers\Api\AutomationRuleController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
@@ -155,6 +156,30 @@ Route::prefix('admin')->group(function () {
          * Fixed segments declared before `{import}` so the wildcard does not
          * swallow them.
          */
+        /*
+         * Automation rules — messages that fire on an order milestone instead
+         * of on somebody pressing send.
+         *
+         * Same gate as campaigns: a rule reaches the whole customer base over
+         * time, one person at a time, which is a campaign spread thin.
+         *
+         * Fixed segments before {rule} so the wildcard does not swallow them.
+         * `toggle` is its own route because switching a rule on is the decision
+         * that starts real messages going to real people, and it should not be
+         * reachable by a stray field on a save.
+         */
+        Route::get('automations/options', [AutomationRuleController::class, 'options']);
+        Route::post('automations/measure', [AutomationRuleController::class, 'measure']);
+
+        Route::get('automations', [AutomationRuleController::class, 'index']);
+        Route::post('automations', [AutomationRuleController::class, 'store']);
+        Route::get('automations/{rule}', [AutomationRuleController::class, 'show']);
+        Route::patch('automations/{rule}', [AutomationRuleController::class, 'update']);
+        Route::delete('automations/{rule}', [AutomationRuleController::class, 'destroy']);
+
+        Route::post('automations/{rule}/toggle', [AutomationRuleController::class, 'toggle']);
+        Route::get('automations/{rule}/dry-run', [AutomationRuleController::class, 'dryRun']);
+
         /*
          * One text to one number. Not a campaign of one — see
          * DirectMessageController for why it skips the send window and seed

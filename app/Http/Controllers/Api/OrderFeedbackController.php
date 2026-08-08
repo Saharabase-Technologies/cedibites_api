@@ -94,6 +94,23 @@ class OrderFeedbackController extends Controller
             return response()->success(['already_submitted' => true], 'Thanks — we already have this.');
         }
 
+        /*
+         * Tie the answer back to the automation firing that asked for it.
+         *
+         * Without this, response rate per rule is always zero and there is no
+         * way to learn which asks work — which is the whole reason for having
+         * several rules rather than one. Matched on the order because that is
+         * what both sides hold.
+         *
+         * Only the firing that actually sent, and only if it has not already
+         * been credited: a rule that was suppressed did not earn this answer.
+         */
+        \App\Models\AutomationFire::where('order_id', $feedback->order_id)
+            ->whereNotNull('sent_at')
+            ->whereNull('order_feedback_id')
+            ->limit(1)
+            ->update(['order_feedback_id' => $feedback->id]);
+
         return response()->success(
             ['already_submitted' => false],
             'Thank you. That helps more than you know.',
