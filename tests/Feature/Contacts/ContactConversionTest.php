@@ -264,6 +264,29 @@ it('filters supplementary contacts by network, which is readable from the prefix
         ->and($mtn)->not->toContain('+233201111111');
 });
 
+it('resolves an empty custom audience to everybody, including customers who never ordered', function () {
+    /*
+     * The shape that produced "0 people" on beta. Four registered customers
+     * with no orders: opening the audience builder used to inject "ordered in
+     * the last 30 days" to keep its own tab open, which excluded every one of
+     * them, and the operator only found out at the send screen.
+     *
+     * An empty builder has to mean everybody, and everybody has to include
+     * account holders who have not got round to ordering yet.
+     */
+    foreach (['+233241111111', '+233242222222', '+233243333333', '+233244444444'] as $phone) {
+        $user = User::factory()->create(['phone' => $phone]);
+        Customer::create(['user_id' => $user->id, 'is_guest' => false, 'status' => 'active']);
+    }
+
+    expect(resolver()->countRules(AudienceRules::fromArray([])))->toBe(4)
+        ->and(resolver()->countRules(AudienceRules::fromArray(['sources' => ['customers']])))->toBe(4)
+        ->and(resolver()->countRules(AudienceRules::fromArray(['sources' => ['customers', 'supplementary']])))->toBe(4)
+        // And the condition that used to be injected really does empty it, which
+        // is why it must never be added on the operator's behalf.
+        ->and(resolver()->countRules(AudienceRules::fromArray(['ordered_within_days' => 30])))->toBe(0);
+});
+
 it('keeps a plain rule set empty, so presets still resolve as presets', function () {
     // sources defaults to customers-only and must not be written into the rules,
     // or CampaignSender would stop treating a preset campaign as a preset.
