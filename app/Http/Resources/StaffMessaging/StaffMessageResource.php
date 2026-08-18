@@ -20,6 +20,7 @@ class StaffMessageResource extends JsonResource
             'kind_label' => $this->kind->label(),
             'subject' => $this->subject,
             'body' => $this->body,
+            'image_url' => $this->imageUrl(),
             'audience' => $this->audience,
             'requires_acknowledgement' => $this->requires_acknowledgement,
             'allow_custom_reply' => $this->allow_custom_reply,

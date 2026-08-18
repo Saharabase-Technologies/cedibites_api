@@ -177,3 +177,42 @@ it('does not need any permission to read your own inbox', function () {
 
     $this->actingAs($this->rider)->getJson("/v1/messages/inbox/{$row->id}")->assertSuccessful();
 });
+
+it('shows the team as the sender, never the individual who pressed send', function () {
+    $admin = msgSender(RoleEnum::Admin->value);
+    $admin->update(['name' => 'Richard Somda']);
+
+    $message = StaffMessage::factory()->create(['sender_user_id' => $admin->id]);
+    $row = StaffMessageRecipient::create([
+        'staff_message_id' => $message->id,
+        'user_id' => $this->rider->id,
+    ]);
+
+    $body = $this->actingAs($this->rider)
+        ->getJson("/v1/messages/inbox/{$row->id}")
+        ->assertSuccessful()
+        ->json('data');
+
+    // A caution signed with one manager's name turns company policy into a
+    // personal quarrel. The real sender stays on the record for the admin side.
+    expect($body['sender_name'])->toBe('CediBites IT')
+        ->and(json_encode($body))->not->toContain('Richard Somda')
+        ->and($message->fresh()->sender_user_id)->toBe($admin->id);
+});
+
+it('refuses an image path we did not issue', function () {
+    $admin = msgSender(RoleEnum::Admin->value);
+    msgStaff(RoleEnum::Rider->value, [$this->branch]);
+
+    // Without the prefix rule a caller could point a message at any path and
+    // have it render inside our chrome.
+    $this->actingAs($admin)
+        ->postJson('/v1/admin/messages', [
+            'kind' => StaffMessageKind::Notice->value,
+            'body' => 'Body.',
+            'audience' => ['roles' => [RoleEnum::Rider->value]],
+            'image_path' => '../../etc/passwd',
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('image_path');
+});

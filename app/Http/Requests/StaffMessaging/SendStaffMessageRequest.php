@@ -27,6 +27,12 @@ class SendStaffMessageRequest extends FormRequest
             'subject' => ['nullable', 'string', 'max:150'],
             'body' => ['required', 'string', 'max:4000'],
 
+            // A path this API issued from the upload endpoint, never a URL the
+            // caller chose — see the migration note. Validated as a path under
+            // our own prefix so a message cannot be pointed at somebody else's
+            // image and rendered inside our chrome.
+            'image_path' => ['nullable', 'string', 'max:255', 'starts_with:staff-messages/'],
+
             'audience' => ['required', 'array'],
             'audience.everyone' => ['sometimes', 'boolean'],
             'audience.roles' => ['sometimes', 'array'],

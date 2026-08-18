@@ -11,6 +11,7 @@ use App\Services\StaffMessaging\StaffMessageDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * The admin's side: compose, send, and read the receipts.
@@ -81,6 +82,32 @@ class StaffMessageController extends Controller
         ]);
     }
 
+    /**
+     * Take an image and hand back the path to attach it to a message.
+     *
+     * Separate from the send so the compose form can show a preview before
+     * committing. The cost is that abandoning a compose leaves an orphaned file;
+     * that is a cheap, sweepable problem, whereas the alternative — trusting a
+     * URL the client supplies — is a permanent hole through which any message
+     * could be made to render somebody else's image inside our chrome.
+     */
+    public function uploadImage(Request $request): JsonResponse
+    {
+        $request->validate([
+            // Explicit types rather than the `image` rule alone: that accepts
+            // SVG, which is a script-execution vector when served from our own
+            // origin.
+            'image' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $path = $request->file('image')->store('staff-messages', 'public');
+
+        return response()->success([
+            'path' => $path,
+            'url' => Storage::disk('public')->url($path),
+        ]);
+    }
+
     public function store(SendStaffMessageRequest $request): JsonResponse
     {
         $data = $request->validated();
@@ -100,6 +127,7 @@ class StaffMessageController extends Controller
             'kind' => $data['kind'],
             'subject' => $data['subject'] ?? null,
             'body' => $data['body'],
+            'image_path' => $data['image_path'] ?? null,
             'audience' => $data['audience'],
             'requires_acknowledgement' => $data['requires_acknowledgement'] ?? false,
             'allow_custom_reply' => $data['allow_custom_reply'] ?? true,

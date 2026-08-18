@@ -54,6 +54,7 @@ Route::prefix('admin/messages')
         // Audience size before sending — the last chance to notice that the
         // selection is the whole company.
         Route::post('preview', [StaffMessageController::class, 'preview']);
+        Route::post('image', [StaffMessageController::class, 'uploadImage']);
 
         Route::get('/', [StaffMessageController::class, 'index']);
         Route::post('/', [StaffMessageController::class, 'store']);

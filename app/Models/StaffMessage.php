@@ -21,6 +21,7 @@ class StaffMessage extends Model
         'kind',
         'subject',
         'body',
+        'image_path',
         'audience',
         'requires_acknowledgement',
         'allow_custom_reply',
@@ -42,6 +43,19 @@ class StaffMessage extends Model
             'expires_at' => 'datetime',
             'sent_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Public URL for the attached image, or null.
+     *
+     * Built from the disk at read time rather than stored, so relocating storage
+     * does not strand every message that was ever sent.
+     */
+    public function imageUrl(): ?string
+    {
+        return $this->image_path
+            ? \Illuminate\Support\Facades\Storage::disk('public')->url($this->image_path)
+            : null;
     }
 
     public function sender(): BelongsTo

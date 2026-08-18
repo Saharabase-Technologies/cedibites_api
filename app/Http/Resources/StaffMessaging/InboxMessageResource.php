@@ -32,7 +32,16 @@ class InboxMessageResource extends JsonResource
             'interrupts' => $message->kind->interrupts(),
             'subject' => $message->subject,
             'body' => $message->body,
-            'sender_name' => $message->sender?->name ?? 'CediBites IT',
+            'image_url' => $message->imageUrl(),
+            // The TEAM, never the individual.
+            //
+            // A caution signed with one manager's name turns a company policy
+            // into a personal quarrel between two people, and the next time that
+            // person walks into the branch it is still there. The exact user who
+            // pressed send is recorded on the message and shown throughout the
+            // admin side, so accountability is intact — it is simply not the
+            // recipient's business who typed it.
+            'sender_name' => 'CediBites IT',
             'is_automatic' => $message->sender_user_id === null,
             'sent_at' => $message->sent_at?->toIso8601String(),
             'expires_at' => $message->expires_at?->toIso8601String(),
@@ -54,7 +63,7 @@ class InboxMessageResource extends JsonResource
                 fn () => $message->replies->map(fn ($reply) => [
                     'id' => $reply->id,
                     'body' => $reply->body,
-                    'sender_name' => $reply->sender?->name ?? 'CediBites IT',
+                    'sender_name' => 'CediBites IT',
                     'is_automatic' => $reply->sender_user_id === null,
                     'sent_at' => $reply->sent_at?->toIso8601String(),
                 ])->values(),
