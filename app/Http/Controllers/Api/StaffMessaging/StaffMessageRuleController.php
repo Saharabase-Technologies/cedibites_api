@@ -116,6 +116,70 @@ class StaffMessageRuleController extends Controller
         return response()->success($dryRun->run($rule, $days));
     }
 
+    /**
+     * Who this rule has actually reached, and what came back.
+     *
+     * Reads the FIRES rather than the messages, so held-back considerations
+     * appear beside the sends. "Why did Kwame not get this?" is the question
+     * that gets asked, and answering it needs the rows where nothing was sent.
+     *
+     * A rule that matched 94 and sent 6 is doing its job; a screen showing only
+     * the 6 makes that indistinguishable from a rule that is broken.
+     */
+    public function activity(Request $request, StaffMessageRule $rule): JsonResponse
+    {
+        $fires = $rule->fires()
+            ->with(['user', 'message.recipients' => fn ($q) => $q->select(
+                'id', 'staff_message_id', 'user_id', 'read_at', 'acknowledged_at',
+                'quick_reply', 'reply_body', 'replied_at', 'sms_sent_at', 'sms_status',
+            )])
+            ->when(
+                $request->boolean('sent_only'),
+                fn ($q) => $q->whereNull('suppressed_reason'),
+            )
+            ->latest('fired_at')
+            ->paginate($request->integer('per_page') ?: 50);
+
+        return response()->json([
+            'data' => collect($fires->items())->map(function ($fire) {
+                // The recipient row belonging to THIS person. An automatic
+                // message has exactly one, but filtering by user id rather than
+                // taking first() keeps it correct if that ever changes.
+                $receipt = $fire->message?->recipients
+                    ->firstWhere('user_id', $fire->user_id);
+
+                return [
+                    'id' => $fire->id,
+                    'fired_at' => $fire->fired_at?->toIso8601String(),
+                    'user' => [
+                        'id' => $fire->user?->id,
+                        'name' => $fire->user?->name ?? 'Nobody',
+                        'role' => $fire->user?->getRoleNames()->first(),
+                    ],
+                    'about' => $fire->subject_type
+                        ? class_basename($fire->subject_type).' #'.$fire->subject_id
+                        : null,
+                    'sent' => $fire->suppressed_reason === null,
+                    'held_back_reason' => $fire->suppressed_reason?->value,
+                    'held_back_label' => $fire->suppressed_reason?->label(),
+                    'message_id' => $fire->staff_message_id,
+                    'body' => $fire->message?->body,
+                    'read_at' => $receipt?->read_at?->toIso8601String(),
+                    'acknowledged_at' => $receipt?->acknowledged_at?->toIso8601String(),
+                    'quick_reply' => $receipt?->quick_reply,
+                    'reply_body' => $receipt?->reply_body,
+                    'sms_status' => $receipt?->sms_status,
+                ];
+            }),
+            'meta' => [
+                'current_page' => $fires->currentPage(),
+                'last_page' => $fires->lastPage(),
+                'total' => $fires->total(),
+                'rule' => ['id' => $rule->id, 'name' => $rule->name, 'is_active' => $rule->is_active],
+            ],
+        ]);
+    }
+
     public function destroy(StaffMessageRule $rule): JsonResponse
     {
         $rule->delete();

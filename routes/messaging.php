@@ -50,6 +50,7 @@ Route::prefix('admin/messages')
         Route::delete('rules/{rule}', [StaffMessageRuleController::class, 'destroy']);
         Route::post('rules/{rule}/toggle', [StaffMessageRuleController::class, 'toggle']);
         Route::get('rules/{rule}/dry-run', [StaffMessageRuleController::class, 'dryRun']);
+        Route::get('rules/{rule}/activity', [StaffMessageRuleController::class, 'activity']);
 
         // Audience size before sending — the last chance to notice that the
         // selection is the whole company.
