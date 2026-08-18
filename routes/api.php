@@ -27,6 +27,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(['token.staff', 'staff.active'])->group(function () {
         require __DIR__.'/employee.php';
         require __DIR__.'/manager.php';
+        require __DIR__.'/messaging.php';
         require __DIR__.'/admin.php';
         require __DIR__.'/platform.php';
     });

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Rules\GhanaPhone;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StorePosOrderRequest extends FormRequest
@@ -34,7 +35,7 @@ class StorePosOrderRequest extends FormRequest
             'momo_reference' => ['nullable', 'string', 'max:100'],
             'fulfillment_type' => ['required', 'string', 'in:dine_in,takeaway'],
             'contact_name' => ['required', 'string', 'max:255'],
-            'contact_phone' => ['required', 'string', 'max:20'],
+            'contact_phone' => ['required', 'string', 'max:20', new GhanaPhone],
             'customer_notes' => ['nullable', 'string'],
             'discount' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],

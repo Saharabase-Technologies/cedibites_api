@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Rules\GhanaPhone;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreOrderRequest extends FormRequest
@@ -32,7 +33,7 @@ class StoreOrderRequest extends FormRequest
             'delivery_latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'delivery_longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'contact_name' => ['required', 'string', 'max:255'],
-            'contact_phone' => ['required', 'string', 'max:20'],
+            'contact_phone' => ['required', 'string', 'max:20', new GhanaPhone],
             'delivery_note' => ['nullable', 'string'],
             'subtotal' => ['required', 'numeric', 'min:0'],
             'delivery_fee' => ['numeric', 'min:0'],

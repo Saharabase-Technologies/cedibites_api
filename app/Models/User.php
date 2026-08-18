@@ -8,6 +8,7 @@ use App\Enums\Permission;
 use App\Enums\Role as RoleEnum;
 use App\Models\Inventory\Location;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -127,6 +128,17 @@ class User extends Authenticatable
     public function employee(): HasOne
     {
         return $this->hasOne(Employee::class);
+    }
+
+    /**
+     * This user's copy of every staff message sent to them.
+     *
+     * Not `staffMessages()` — that name would suggest the messages they SENT,
+     * and both directions exist for an admin.
+     */
+    public function staffMessageDeliveries(): HasMany
+    {
+        return $this->hasMany(StaffMessageRecipient::class);
     }
 
     /**

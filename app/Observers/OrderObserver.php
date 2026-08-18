@@ -18,6 +18,42 @@ use App\Notifications\OrderReadyNotification;
 class OrderObserver
 {
     /**
+     * Who is making this change, for the status history.
+     *
+     * Both columns were previously hardcoded to 'system' with `changed_by_id`
+     * never written at all — so `order_status_history` recorded that an order
+     * moved and was silent about who moved it. The information was reachable
+     * only through the activity log, and only for the handful of attributes the
+     * Order model logs.
+     *
+     * That gap is why an order could sit in Received for the best part of three
+     * hours with nothing able to name the person who took it. Anything that
+     * measures staff conduct against order flow needs this column populated;
+     * see App\Services\StaffMessaging.
+     *
+     * Falls back to 'system' outside a request — queued jobs, console commands,
+     * seeders — which is what those changes genuinely are.
+     *
+     * @return array{changed_by_id: ?int, changed_by_type: string}
+     */
+    private function causer(): array
+    {
+        $user = auth()->user();
+
+        if (! $user) {
+            return ['changed_by_id' => null, 'changed_by_type' => 'system'];
+        }
+
+        // The enum accepts customer|employee|system only, so this is a coarse
+        // classification of the actor, not a morph class. `changed_by_id` points
+        // at users.id in every case — see OrderStatusHistory::changedBy.
+        return [
+            'changed_by_id' => $user->id,
+            'changed_by_type' => $user->employee()->exists() ? 'employee' : 'customer',
+        ];
+    }
+
+    /**
      * Handle the Order "creating" event — default the delivery-fee collection
      * state. A fee > 0 means the rider has something to collect (pending);
      * otherwise it is not applicable. Already-collected/explicit values are kept.
@@ -52,9 +88,8 @@ class OrderObserver
     public function created(Order $order): void
     {
         // Record initial status in history
-        $order->statusHistory()->create([
+        $order->statusHistory()->create($this->causer() + [
             'status' => $order->status,
-            'changed_by_type' => 'system',
             'changed_at' => now(),
         ]);
 
@@ -111,9 +146,8 @@ class OrderObserver
 
         // Record status change in history
         try {
-            $order->statusHistory()->create([
+            $order->statusHistory()->create($this->causer() + [
                 'status' => $order->status,
-                'changed_by_type' => 'system',
                 'changed_at' => now(),
             ]);
         } catch (\Throwable $e) {
