@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\PlatformController;
+use App\Http\Controllers\Api\PlatformSettingsController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -45,4 +46,12 @@ Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
 
     // Maintenance mode
     Route::post('maintenance', [PlatformController::class, 'toggleMaintenance'])->middleware('permission:toggle_maintenance');
+
+    // Runtime settings — the toggles that replace SSHing in to edit `.env`.
+    // Gated on `manage_platform`, alongside minting tech admins, because these
+    // change how the platform behaves for everybody. They are DB overrides on an
+    // allowlist: this cannot write `.env` and cannot reach a credential.
+    Route::get('settings', [PlatformSettingsController::class, 'index'])->middleware('permission:manage_platform');
+    Route::put('settings', [PlatformSettingsController::class, 'update'])->middleware('permission:manage_platform');
+    Route::post('settings/revert', [PlatformSettingsController::class, 'revert'])->middleware('permission:manage_platform');
 });

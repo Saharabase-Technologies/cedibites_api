@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\StaffMessaging;
 
+use App\Services\Platform\RuntimeSettings;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -35,7 +36,7 @@ class StaffMessageRuleResource extends JsonResource
             // Reported beside the rule so a screen full of live rules sending
             // nothing is explicable. Without it the only available conclusion is
             // that the rules are broken.
-            'automation_enabled' => (bool) config('staff_messaging.automation_enabled'),
+            'automation_enabled' => (bool) app(RuntimeSettings::class)->get('staff_messaging.automation_enabled'),
 
             'stats' => $this->fireStats(),
             'created_at' => $this->created_at?->toIso8601String(),

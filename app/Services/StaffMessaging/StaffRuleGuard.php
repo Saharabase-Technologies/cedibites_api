@@ -13,6 +13,14 @@ use App\Models\StaffMessageRuleFire;
  */
 class StaffRuleGuard
 {
+    public function __construct(
+        // Read through RuntimeSettings rather than config() so a tech admin can
+        // pull the kill switch from the platform panel and have it take effect
+        // in the queue workers on their next read — a `.env` change would not,
+        // until somebody SSHed in and restarted them.
+        private readonly \App\Services\Platform\RuntimeSettings $runtime,
+    ) {}
+
     /**
      * Why this person should not be messaged about this thing, or null to go
      * ahead.
@@ -23,7 +31,7 @@ class StaffRuleGuard
      */
     public function suppressionFor(StaffMessageRule $rule, int $userId, string $cooldownKey): ?StaffMessageSuppression
     {
-        if (! config('staff_messaging.automation_enabled')) {
+        if (! $this->runtime->get('staff_messaging.automation_enabled')) {
             return StaffMessageSuppression::FeatureOff;
         }
 
@@ -73,7 +81,7 @@ class StaffRuleGuard
      */
     private function recipientCapped(int $userId): bool
     {
-        $cap = (int) config('staff_messaging.recipient_hourly_cap', 3);
+        $cap = (int) $this->runtime->get('staff_messaging.recipient_hourly_cap');
 
         if ($cap <= 0) {
             return false;

@@ -31,6 +31,7 @@ class StaffRuleEvaluator
         private StaffAudienceResolver $audience,
         private StaffMessageRenderer $renderer,
         private StaffMessageDispatcher $dispatcher,
+        private \App\Services\Platform\RuntimeSettings $runtime,
     ) {}
 
     /**
@@ -46,7 +47,7 @@ class StaffRuleEvaluator
             // created in.
             : StaffMessageRule::query()->orderByDesc('priority')->orderBy('id')->get();
 
-        $since = now()->subHours((int) config('staff_messaging.lookback_hours', 24));
+        $since = now()->subHours((int) $this->runtime->get('staff_messaging.lookback_hours'));
 
         $totals = ['matched' => 0, 'sent' => 0, 'held_back' => 0];
 

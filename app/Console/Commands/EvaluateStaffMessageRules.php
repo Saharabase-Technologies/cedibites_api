@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\StaffMessageRule;
+use App\Services\Platform\RuntimeSettings;
 use App\Services\StaffMessaging\StaffRuleEvaluator;
 use Illuminate\Console\Command;
 
@@ -38,7 +39,7 @@ class EvaluateStaffMessageRules extends Command
             $totals['held_back'],
         ));
 
-        if (! config('staff_messaging.automation_enabled')) {
+        if (! app(RuntimeSettings::class)->get('staff_messaging.automation_enabled')) {
             $this->warn('Automation is OFF — everything above was recorded, nothing was sent.');
         }
 

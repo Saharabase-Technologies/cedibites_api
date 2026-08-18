@@ -50,6 +50,19 @@ class SystemSettingService
     }
 
     /**
+     * Delete a setting entirely, so reads fall back to their default again.
+     *
+     * Distinct from setting it to null or to an empty string, both of which
+     * leave a row that keeps overriding the fallback with nothing.
+     */
+    public function forget(string $key): void
+    {
+        DB::table('system_settings')->where('key', $key)->delete();
+
+        Cache::forget(self::CACHE_PREFIX . $key);
+    }
+
+    /**
      * Get a boolean setting.
      */
     public function getBoolean(string $key, bool $default = false): bool

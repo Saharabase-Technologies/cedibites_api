@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StaffMessaging\StoreStaffMessageRuleRequest;
 use App\Http\Resources\StaffMessaging\StaffMessageRuleResource;
 use App\Models\StaffMessageRule;
+use App\Services\Platform\RuntimeSettings;
 use App\Services\StaffMessaging\StaffRuleDryRun;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,7 +27,7 @@ class StaffMessageRuleController extends Controller
             'rules' => StaffMessageRuleResource::collection($rules),
             // Reported alongside, because a list of live rules sending nothing
             // is otherwise impossible to explain.
-            'automation_enabled' => (bool) config('staff_messaging.automation_enabled'),
+            'automation_enabled' => (bool) app(RuntimeSettings::class)->get('staff_messaging.automation_enabled'),
         ]);
     }
 
@@ -98,7 +99,7 @@ class StaffMessageRuleController extends Controller
         // Being live is not sufficient. Somebody switching on their first rule
         // and seeing nothing happen needs to be told why here, not left to
         // discover the kill switch.
-        if ($rule->is_active && ! config('staff_messaging.automation_enabled')) {
+        if ($rule->is_active && ! app(RuntimeSettings::class)->get('staff_messaging.automation_enabled')) {
             $message = 'Rule is live, but automation is switched off globally — nothing will send yet.';
         }
 
