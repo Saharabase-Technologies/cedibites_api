@@ -5,18 +5,24 @@ use App\Http\Controllers\Api\Admin\SmartCategorySettingController;
 use App\Http\Controllers\Api\AdminAnalyticsController;
 use App\Http\Controllers\Api\AdminDashboardController;
 use App\Http\Controllers\Api\AdminReportController;
+use App\Http\Controllers\Api\AutomationRuleController;
 use App\Http\Controllers\Api\BranchController;
+use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
+use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\DirectMessageController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\MenuBranchAvailabilityController;
 use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\MenuItemOptionController;
 use App\Http\Controllers\Api\MenuTagController;
+use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RecruitmentAdminController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\ShortLinkController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('admin')->group(function () {
@@ -89,6 +95,108 @@ Route::prefix('admin')->group(function () {
     // wildcard.
     Route::middleware('role:admin|tech_admin')->group(function () {
         Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
+    });
+
+    // Short links and SMS campaigns. Same ceiling as the contact export, by the
+    // same reasoning — see Permission::ManageCampaigns. Every write is
+    // activity-logged on the model: a link is our brand pointed at somebody's
+    // URL, and a campaign is the company speaking to every customer at once.
+    Route::middleware('permission:manage_campaigns')->group(function () {
+        Route::get('links', [ShortLinkController::class, 'index']);
+        Route::post('links', [ShortLinkController::class, 'store']);
+        Route::patch('links/{link}', [ShortLinkController::class, 'update']);
+        Route::delete('links/{link}', [ShortLinkController::class, 'destroy']);
+
+        // Declared before the {campaign} routes so the wildcard does not
+        // swallow them.
+        Route::get('campaigns/segments', [CampaignController::class, 'segments']);
+        Route::post('campaigns/measure', [CampaignController::class, 'measure']);
+
+        // The audience builder. `options` is what it can filter on;
+        // `count-audience` is how many people the current rules match, called
+        // as the operator assembles them.
+        Route::get('campaigns/audience-options', [CampaignController::class, 'audienceOptions']);
+        Route::post('campaigns/count-audience', [CampaignController::class, 'countAudience']);
+
+        Route::get('campaigns', [CampaignController::class, 'index']);
+        Route::post('campaigns', [CampaignController::class, 'store']);
+        Route::get('campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::patch('campaigns/{campaign}', [CampaignController::class, 'update']);
+        Route::delete('campaigns/{campaign}', [CampaignController::class, 'destroy']);
+
+        // The two-step send. `preview` is the confirm screen — recipient count,
+        // characters, billed segments, projected cost — and `send` is the only
+        // call in the application that spends money on SMS in bulk.
+        // Who received it and who did not. The breakdown that tells a dead
+        // number from a handset that was switched off.
+        Route::get('campaigns/{campaign}/deliveries', [CampaignController::class, 'deliveries']);
+
+        Route::get('campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
+        Route::post('campaigns/{campaign}/send', [CampaignController::class, 'send']);
+        Route::post('campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
+
+        // What customers said about their orders. Not marketing, but gated with
+        // it deliberately: the list is company-wide and the controller does no
+        // branch scoping, so opening it to a branch role would hand one manager
+        // every other branch's complaints. Giving a manager their own branch's
+        // feedback is worth doing and needs the isCompanyWide() treatment first
+        // — see the branch-isolation notes before widening this.
+        Route::get('customer-feedback', [OrderFeedbackController::class, 'index']);
+
+        /*
+         * The supplementary contact base — imported numbers that have bought
+         * nothing.
+         *
+         * Gated here rather than under `view_customers` even though the UI shows
+         * it as a tab beside the customer list. The whole table is names and
+         * numbers in bulk, which is exactly what the export ceiling above
+         * exists to protect; a cashier who can look up one caller should not be
+         * able to page through an uploaded list of 28,000.
+         *
+         * Fixed segments declared before `{import}` so the wildcard does not
+         * swallow them.
+         */
+        /*
+         * Automation rules — messages that fire on an order milestone instead
+         * of on somebody pressing send.
+         *
+         * Same gate as campaigns: a rule reaches the whole customer base over
+         * time, one person at a time, which is a campaign spread thin.
+         *
+         * Fixed segments before {rule} so the wildcard does not swallow them.
+         * `toggle` is its own route because switching a rule on is the decision
+         * that starts real messages going to real people, and it should not be
+         * reachable by a stray field on a save.
+         */
+        Route::get('automations/options', [AutomationRuleController::class, 'options']);
+        Route::post('automations/measure', [AutomationRuleController::class, 'measure']);
+
+        Route::get('automations', [AutomationRuleController::class, 'index']);
+        Route::post('automations', [AutomationRuleController::class, 'store']);
+        Route::get('automations/{rule}', [AutomationRuleController::class, 'show']);
+        Route::patch('automations/{rule}', [AutomationRuleController::class, 'update']);
+        Route::delete('automations/{rule}', [AutomationRuleController::class, 'destroy']);
+
+        Route::post('automations/{rule}/toggle', [AutomationRuleController::class, 'toggle']);
+        Route::get('automations/{rule}/dry-run', [AutomationRuleController::class, 'dryRun']);
+
+        /*
+         * One text to one number. Not a campaign of one — see
+         * DirectMessageController for why it skips the send window and seed
+         * mode, and what it deliberately does not skip.
+         */
+        Route::post('messages/measure', [DirectMessageController::class, 'measure']);
+        Route::post('messages/send', [DirectMessageController::class, 'send']);
+
+        Route::get('contacts/stats', [ContactController::class, 'stats']);
+        Route::get('contacts/conversions', [ContactController::class, 'conversions']);
+        Route::get('contacts/imports', [ContactController::class, 'imports']);
+        Route::post('contacts/import/preview', [ContactController::class, 'preview']);
+        Route::post('contacts/import', [ContactController::class, 'store']);
+        Route::delete('contacts/imports/{import}', [ContactController::class, 'undoImport']);
+
+        Route::get('contacts', [ContactController::class, 'index']);
+        Route::delete('contacts/{contact}', [ContactController::class, 'destroy']);
     });
 
     Route::middleware('permission:view_customers')->group(function () {

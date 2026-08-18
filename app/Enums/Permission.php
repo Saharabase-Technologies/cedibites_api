@@ -176,4 +176,16 @@ enum Permission: string
     // is gated. A permission on the inbox would mean editing all ten roles, and
     // whichever one was missed would silently never be reachable.
     case StaffMessagesManage = 'staff_messages.manage';
+    // Marketing — short links and SMS campaigns.
+    //
+    // The same ceiling the contact export already enforces (admin and tech_admin
+    // only), and for the same reason: this is the whole customer list, addressed
+    // in one act, at four figures a send. It is deliberately not a manager's —
+    // BranchIsolationTest already asserts they cannot reach the export, and a
+    // campaign reaches further than a CSV does.
+    //
+    // It also covers the shortener, where the risk is different but no smaller:
+    // whoever can create a link can point our branded domain at a page wearing
+    // our name.
+    case ManageCampaigns = 'manage_campaigns';
 }

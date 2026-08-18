@@ -58,6 +58,25 @@ jobs:
             php artisan cache:clear
             php artisan route:clear
             php artisan view:clear
+
+            # Same as production (see deploy.yml), and missing here until
+            # 2026-08-07. Queue workers are long-lived PHP processes: they hold
+            # the code that was on disk when they booted and never notice a
+            # deploy. Beta ran `cedibites-beta-queue` for seven days across
+            # several deploys, so the SMS campaign work shipped to a worker that
+            # could not resolve its own new job classes and had to be bounced by
+            # hand — twice in one afternoon.
+            #
+            # MUST stay below cache:clear. queue:restart works by writing
+            # `illuminate:queue:restart` into the cache, and the cache driver
+            # here is `database` — clearing the cache afterwards would wipe the
+            # signal and silently leave the workers on the old code.
+            #
+            # Graceful, not a kill: each worker finishes its current job, exits,
+            # and PM2 restarts it. Nothing queued is lost — pending work lives in
+            # the `jobs` table and failures in `failed_jobs`, not in the process.
+            php artisan queue:restart
+
             sudo systemctl reload php8.4-fpm
 
             # Health check — confirms Laravel can bootstrap

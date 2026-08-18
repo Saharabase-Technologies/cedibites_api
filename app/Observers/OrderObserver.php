@@ -3,6 +3,7 @@
 namespace App\Observers;
 
 use App\Events\OrderBroadcastEvent;
+use App\Jobs\RequestOrderFeedback;
 use App\Models\Employee;
 use App\Models\Order;
 use App\Models\ShiftOrder;
@@ -93,6 +94,18 @@ class OrderObserver
             'changed_at' => now(),
         ]);
 
+        /*
+         * If this number was on an imported contact list, it has just stopped
+         * being a supplementary contact and become a customer.
+         *
+         * Above the manual_entry return on purpose. A recorded past order is
+         * still evidence that the person bought from us, and the whole point of
+         * the imported/acquired split is that it reflects who has actually
+         * ordered — not who ordered through a channel that also sends
+         * notifications.
+         */
+        \DB::afterCommit(fn () => app(\App\Services\Contacts\ContactConverter::class)->convertFromOrderQuietly($order));
+
         // Past orders (manual entries) should not trigger notifications or broadcasts.
         if ($order->order_source === 'manual_entry') {
             return;
@@ -175,6 +188,42 @@ class OrderObserver
                 'status' => $order->status,
                 'error' => $e->getMessage(),
             ]);
+        }
+
+        // "How was it?", a few hours later.
+        //
+        // Dispatched from here because this is the proven seam for anything that
+        // reacts to an order finishing, but every guard is re-checked inside the
+        // job — hours pass, and by then the order may have been cancelled, the
+        // customer may have ordered again, or the kill switch may be off. Off by
+        // default; see config/order_feedback.php.
+        if (in_array($order->status, ['completed', 'delivered'], true) && config('order_feedback.enabled', false)) {
+            \DB::afterCommit(function () use ($order) {
+                RequestOrderFeedback::dispatch($order->id)
+                    ->delay(now()->addHours((int) config('order_feedback.delay_hours', 3)));
+            });
+        }
+
+        /*
+         * Automation rules that were waiting for an order to finish.
+         *
+         * Evaluated even when the feature is switched off — the evaluator
+         * records what would have happened and sends nothing, which is how a
+         * rule earns trust before anybody turns it on. Wrapped so that a fault
+         * in a marketing rule can never be the reason an order fails to
+         * complete.
+         */
+        if (in_array($order->status, ['completed', 'delivered'], true)) {
+            \DB::afterCommit(function () use ($order) {
+                try {
+                    app(\App\Services\Automation\TriggerEvaluator::class)->evaluate($order);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::error('Automation evaluation failed', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            });
         }
 
         // Mark the third-party delivery fee collected once the order is delivered —

@@ -111,6 +111,149 @@ it('records an invalid recipient without calling the provider', function () {
 
 /*
 |--------------------------------------------------------------------------
+| Batch sending
+|--------------------------------------------------------------------------
+|
+| Hubtel answers 2xx on the wire and reports business-level rejections in the
+| body. A batch that trusts the HTTP status records one success per recipient
+| for a send that reached nobody — the failure mode that makes a campaign
+| dashboard lie.
+*/
+
+it('records a batch rejected in the body as failures, not successes', function () {
+    // Status >= 100 is a rejection even though the wire says 200.
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'messageIds' => ['a-1', 'a-2'],
+        'status' => 100,
+        'statusDescription' => 'Payment required on account',
+    ], 200)]);
+
+    expect(fn () => app(HubtelSmsService::class)->sendBatch(
+        ['233241234567', '233241234568'],
+        'hi',
+        'PromoCampaign',
+    ))->toThrow(Exception::class);
+
+    expect(SmsDeliveryAttempt::where('succeeded', true)->count())->toBe(0)
+        ->and(SmsDeliveryAttempt::where('succeeded', false)->count())->toBe(2)
+        ->and(SmsDeliveryAttempt::first()->failure_reason)->toBe(SmsFailureReason::NoCredit);
+});
+
+it('treats a batch answered with a singular messageId as a failure', function () {
+    // The exact shape the live endpoint returns when it rejects a batch: no
+    // messageIds array at all, just a lone id and a failure status.
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'rate' => 0,
+        'messageId' => '4f33a4d3-492f-4353-9e74-10fd5bb8adfe',
+        'status' => 100,
+        'statusDescription' => null,
+    ], 200)]);
+
+    expect(fn () => app(HubtelSmsService::class)->sendBatch(['233241234567'], 'hi'))
+        ->toThrow(Exception::class);
+
+    expect(SmsDeliveryAttempt::sole()->succeeded)->toBeFalse();
+});
+
+/*
+ * The shape the live endpoint ACTUALLY returns, captured from the beta account
+ * on 2026-08-07: HTTP 201, a batchId, and a per-recipient `data` array. Not the
+ * `messageIds` list the retired documentation described.
+ *
+ * Before this was handled, an accepted batch fell through to "Missing messageId
+ * or messageIds" and every recipient was recorded as a failure — a campaign that
+ * reached all four test phones reporting 0 delivered, 4 failed. The exact mirror
+ * of the false-pass bug above, and the worse of the two to debug: the messages
+ * arrive, so the only thing wrong is the record.
+ */
+it('accepts the batchId + data shape the live endpoint really returns', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'batchId' => '2d417523-ba9c-4c88-aa7b-56704886e3d9',
+        'status' => 0,
+        'data' => [
+            ['recipient' => '233241234567', 'content' => 'hi', 'messageId' => '9f6a82a9-1'],
+            ['recipient' => '233241234568', 'content' => 'hi', 'messageId' => '9f6a82a9-2'],
+        ],
+    ], 201)]);
+
+    $result = app(HubtelSmsService::class)->sendBatch(['233241234567', '233241234568'], 'hi');
+
+    expect($result['messageIds'])->toBe(['9f6a82a9-1', '9f6a82a9-2'])
+        ->and($result['batchId'])->toBe('2d417523-ba9c-4c88-aa7b-56704886e3d9')
+        ->and(SmsDeliveryAttempt::where('succeeded', true)->count())->toBe(2)
+        ->and(SmsDeliveryAttempt::where('succeeded', false)->count())->toBe(0);
+});
+
+/*
+ * A batchId with no data is a rejection, not an acceptance. The new branch must
+ * not swallow one — it requires `data` to be an array, so this falls through to
+ * the statusDescription throw and is recorded as a failure per recipient.
+ */
+it('still treats a batchId carrying no data as a rejection', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'batchId' => '2d417523-ba9c-4c88-aa7b-56704886e3d9',
+        'status' => 4109,
+        'statusDescription' => 'Payment required on account',
+    ], 201)]);
+
+    expect(fn () => app(HubtelSmsService::class)->sendBatch(['233241234567'], 'hi'))
+        ->toThrow(Exception::class);
+
+    expect(SmsDeliveryAttempt::sole()->succeeded)->toBeFalse()
+        ->and(SmsDeliveryAttempt::sole()->failure_reason)->toBe(SmsFailureReason::NoCredit);
+});
+
+/* An empty data array reaches sendBatch's own guard and is a rejection too. */
+it('treats a batch with an empty data array as a rejection', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'batchId' => '2d417523-ba9c-4c88-aa7b-56704886e3d9',
+        'status' => 0,
+        'data' => [],
+    ], 201)]);
+
+    expect(fn () => app(HubtelSmsService::class)->sendBatch(['233241234567'], 'hi'))
+        ->toThrow(Exception::class);
+
+    expect(SmsDeliveryAttempt::sole()->succeeded)->toBeFalse();
+});
+
+it('records one success per recipient when the batch is accepted', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'messageIds' => ['a-1', 'a-2', 'a-3'],
+        'status' => 0,
+    ], 200)]);
+
+    app(HubtelSmsService::class)->sendBatch(
+        ['233241234567', '233241234568', '233241234569'],
+        'hi',
+    );
+
+    expect(SmsDeliveryAttempt::where('succeeded', true)->count())->toBe(3)
+        ->and(SmsDeliveryAttempt::where('succeeded', false)->count())->toBe(0);
+});
+
+it('refuses an empty batch without spending a request', function () {
+    Http::fake();
+
+    expect(fn () => app(HubtelSmsService::class)->sendBatch([], 'hi'))
+        ->toThrow(InvalidArgumentException::class);
+
+    Http::assertNothingSent();
+});
+
+it('marks campaign sends so they can be told apart from order notifications', function () {
+    Http::fake(['sms.hubtel.com/*' => Http::response([
+        'messageIds' => ['a-1'],
+        'status' => 0,
+    ], 200)]);
+
+    app(HubtelSmsService::class)->sendBatch(['233241234567'], 'hi', 'FridayPromo', isCampaign: true);
+
+    expect(SmsDeliveryAttempt::sole()->is_campaign)->toBeTrue();
+});
+
+/*
+|--------------------------------------------------------------------------
 | Verdict
 |--------------------------------------------------------------------------
 */
@@ -143,6 +286,48 @@ it('does not go critical over a couple of bad phone numbers', function () {
     }
 
     expect(app(SmsHealthService::class)->check()['status'])->toBe('healthy');
+});
+
+it('does not let a failed campaign trip the alert for order notifications', function () {
+    // A rejected blast writes thousands of failures in one moment. That says
+    // nothing about whether an order-ready SMS can still get through, and the
+    // page must not claim otherwise.
+    foreach (range(1, 200) as $i) {
+        SmsDeliveryAttempt::create([
+            'notification' => 'FridayPromo',
+            'is_campaign' => true,
+            'recipient' => "2332412345{$i}",
+            'succeeded' => false,
+            'failure_reason' => SmsFailureReason::NoCredit->value,
+            'error_message' => 'SMS API Error: Payment required on account',
+        ]);
+    }
+
+    foreach (range(1, 20) as $i) {
+        SmsDeliveryAttempt::create(['recipient' => "23324123456{$i}", 'succeeded' => true]);
+    }
+
+    $health = app(SmsHealthService::class)->check();
+
+    expect($health['status'])->toBe('healthy')
+        ->and($health['failed'])->toBe(0)
+        ->and($health['sent'])->toBe(20);
+});
+
+it('does not let campaign volume mask a real transactional outage', function () {
+    // The exclusion has to cut both ways: a large successful blast must not
+    // dilute the failure rate of the pipe that actually matters.
+    foreach (range(1, 500) as $i) {
+        SmsDeliveryAttempt::create([
+            'is_campaign' => true,
+            'recipient' => "2332412345{$i}",
+            'succeeded' => true,
+        ]);
+    }
+
+    attempt();
+
+    expect(app(SmsHealthService::class)->check()['status'])->toBe('critical');
 });
 
 it('diagnoses from the current streak, not from errors before the last success', function () {

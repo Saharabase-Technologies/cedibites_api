@@ -14,6 +14,10 @@ use Illuminate\Support\Carbon;
  * since the last success — says what is wrong, because an outage that started an
  * hour ago should not be diagnosed from errors that predate the last message
  * that got through.
+ *
+ * Every read here is scoped to transactional traffic. Marketing campaigns write
+ * one row per recipient and would otherwise drown the signal — see
+ * SmsDeliveryAttempt::scopeTransactional().
  */
 class SmsHealthService
 {
@@ -31,12 +35,12 @@ class SmsHealthService
     {
         $since = now()->subHours($windowHours);
 
-        $sent = SmsDeliveryAttempt::where('created_at', '>=', $since)->where('succeeded', true)->count();
-        $failed = SmsDeliveryAttempt::where('created_at', '>=', $since)->where('succeeded', false)->count();
+        $sent = SmsDeliveryAttempt::transactional()->where('created_at', '>=', $since)->where('succeeded', true)->count();
+        $failed = SmsDeliveryAttempt::transactional()->where('created_at', '>=', $since)->where('succeeded', false)->count();
         $total = $sent + $failed;
 
-        $lastSuccessAt = SmsDeliveryAttempt::where('succeeded', true)->max('created_at');
-        $lastFailureAt = SmsDeliveryAttempt::where('succeeded', false)->max('created_at');
+        $lastSuccessAt = SmsDeliveryAttempt::transactional()->where('succeeded', true)->max('created_at');
+        $lastFailureAt = SmsDeliveryAttempt::transactional()->where('succeeded', false)->max('created_at');
 
         $streak = $this->currentStreak($lastSuccessAt);
         $reason = $this->dominantReason($streak);
@@ -68,6 +72,7 @@ class SmsHealthService
     private function currentStreak(?string $lastSuccessAt): \Illuminate\Support\Collection
     {
         return SmsDeliveryAttempt::query()
+            ->transactional()
             ->where('succeeded', false)
             ->when($lastSuccessAt, fn ($q) => $q->where('created_at', '>', $lastSuccessAt))
             ->orderByDesc('id')
@@ -128,6 +133,7 @@ class SmsHealthService
     private function affectedNotifications(Carbon $since): array
     {
         return SmsDeliveryAttempt::query()
+            ->transactional()
             ->where('created_at', '>=', $since)
             ->where('succeeded', false)
             ->whereNotNull('notification')
