@@ -15,6 +15,13 @@ use Illuminate\Database\Seeder;
  * look like homework. These are drafts to dry-run, argue with and edit — not
  * recommendations, and certainly not defaults anybody should switch on unread.
  *
+ * TARGETING RULE, decided with the user 2026-08-18: a rule goes to the ACTOR —
+ * the person who placed or received the order — unless somebody else genuinely
+ * has to know. Three here legitimately do not use the actor: the manager copy is
+ * a deliberate second-tier escalation an hour later, and the two spike rules are
+ * about a person's own pattern, where telling only that person is not oversight.
+ * Everything else is one message to one responsible individual.
+ *
  * The wording matters as much as the thresholds. Every message assumes the
  * innocent explanation first and tells the person what to DO. "You have not
  * moved this order — check with the kitchen" is a colleague; "this order has
@@ -111,10 +118,10 @@ class StaffMessageRuleSeeder extends Seeder
                 'description' => 'Out for delivery well past the expected time.',
                 'event' => StaffMessageEvent::OrderStalled->value,
                 'conditions' => ['status' => 'out_for_delivery', 'minutes' => 60],
-                'target' => ['types' => [
-                    StaffMessageTarget::Actor->value,
-                    StaffMessageTarget::BranchManagers->value,
-                ]],
+                // The rider, alone. Copying the manager on every late delivery
+                // makes the manager's inbox the least useful screen in the
+                // building, and they cannot drive the bike.
+                'target' => ['types' => [StaffMessageTarget::Actor->value]],
                 'kind' => StaffMessageKind::Caution->value,
                 'subject' => 'Delivery {order_number} is running long',
                 'body_template' => '{order_number} has been out for delivery for {minutes} minutes. If it has been delivered, please mark it delivered. If not, let the branch know where you are.',
@@ -144,10 +151,10 @@ class StaffMessageRuleSeeder extends Seeder
                 'description' => 'One number reused across several orders in a day.',
                 'event' => StaffMessageEvent::RepeatedCustomerPhone->value,
                 'conditions' => ['threshold' => 4, 'window_hours' => 12],
-                'target' => ['types' => [
-                    StaffMessageTarget::Actor->value,
-                    StaffMessageTarget::BranchManagers->value,
-                ]],
+                // The person taking the orders. If it turns out to be habit
+                // rather than a genuine regular, the cancellation and no-charge
+                // rules are the ones that escalate to a manager.
+                'target' => ['types' => [StaffMessageTarget::Actor->value]],
                 'kind' => StaffMessageKind::Caution->value,
                 'subject' => 'One number on {count} orders today',
                 'body_template' => '{customer_phone} has been used on {count} orders at {branch} in the last {window_hours} hours. If that is a regular customer, all good — please confirm. If it is a stand-in number, we need the real ones.',
