@@ -26,14 +26,22 @@ class StaffMessageRuleSeeder extends Seeder
     public function run(): void
     {
         foreach ($this->rules() as $rule) {
-            StaffMessageRule::updateOrCreate(
-                ['name' => $rule['name']],
-                // `is_active` is never in this payload. Re-running the seeder
-                // must not switch a rule back on that somebody deliberately
-                // switched off, and must not switch on one they are still
-                // testing.
-                $rule + ['is_active' => false],
-            );
+            $existing = StaffMessageRule::where('name', $rule['name'])->first();
+
+            if ($existing) {
+                // Wording, thresholds and targets are updated; LIVENESS IS NOT.
+                // The previous version passed `is_active => false` on update
+                // too, so re-running the seeder to fix a template would
+                // silently switch off every rule somebody had turned on — and
+                // nothing would report that it had happened.
+                $existing->update($rule);
+
+                continue;
+            }
+
+            // A brand-new rule always starts off, so it can be dry-run before
+            // it is ever pointed at a person.
+            StaffMessageRule::create($rule + ['is_active' => false]);
         }
     }
 

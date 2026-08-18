@@ -329,3 +329,22 @@ it('still records a held-back observation once the window has passed', function 
 
     expect(StaffMessageRuleFire::where('rule_id', $rule->id)->count())->toBe(2);
 });
+
+it('does not switch a live rule off when the seeder is re-run', function () {
+    // Re-running the seeder to correct a template must not quietly disable
+    // every rule somebody had turned on.
+    $this->seed(\Database\Seeders\StaffMessageRuleSeeder::class);
+
+    $rule = StaffMessageRule::where('name', 'Food ready, nobody has collected it')->first();
+    $rule->update(['is_active' => true]);
+
+    $this->seed(\Database\Seeders\StaffMessageRuleSeeder::class);
+
+    expect($rule->fresh()->is_active)->toBeTrue();
+});
+
+it('seeds a brand-new rule switched off', function () {
+    $this->seed(\Database\Seeders\StaffMessageRuleSeeder::class);
+
+    expect(StaffMessageRule::where('is_active', true)->count())->toBe(0);
+});
