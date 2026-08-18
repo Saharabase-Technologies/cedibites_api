@@ -4,6 +4,7 @@ namespace App\Services\StaffMessaging\Detectors;
 
 use App\Models\Order;
 use App\Models\StaffMessageRule;
+use App\Services\StaffMessaging\Detectors\Concerns\ResolvesOrderActor;
 use App\Services\StaffMessaging\RuleMatch;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
@@ -25,6 +26,8 @@ use Illuminate\Support\Collection;
  */
 class OrderStalledDetector implements DetectsStaffEvent
 {
+    use ResolvesOrderActor;
+
     public function detect(StaffMessageRule $rule, CarbonInterface $since): Collection
     {
         $status = (string) $rule->condition('status');
@@ -34,9 +37,13 @@ class OrderStalledDetector implements DetectsStaffEvent
         return Order::query()
             ->where('status', $status)
             ->where('created_at', '>=', $since)
-            ->with(['statusHistory' => fn ($q) => $q->orderByDesc('changed_at')])
+            // assignedEmployee is load-bearing now that the actor is the
+            // order-taker rather than the last mover. Lazy loading is prevented
+            // in this app, and the evaluator catches per-rule exceptions, so
+            // omitting it makes the rule silently produce nothing.
+            ->with(['assignedEmployee', 'statusHistory' => fn ($q) => $q->orderByDesc('changed_at')])
             ->get()
-            ->map(function (Order $order) use ($status, $cutoff) {
+            ->map(function (Order $order) use ($status, $cutoff, $rule) {
                 $enteredAt = $this->enteredStatusAt($order, $status);
 
                 if ($enteredAt === null || $enteredAt->greaterThan($cutoff)) {
@@ -45,7 +52,7 @@ class OrderStalledDetector implements DetectsStaffEvent
 
                 return new RuleMatch(
                     subject: $order,
-                    actorUserId: $this->actorFor($order, $status),
+                    actorUserId: $this->actorFor($order, $status, $rule),
                     branchId: $order->branch_id,
                     mergeData: [
                         'order_number' => $order->order_number,
@@ -88,22 +95,36 @@ class OrderStalledDetector implements DetectsStaffEvent
     }
 
     /**
-     * Who is answerable.
+     * Who is answerable: the person who took the order.
      *
-     * Whoever moved it into this status; failing that, whoever the order is
-     * assigned to. Null for an order that arrived through the website and has
-     * never been touched — there is genuinely no individual to caution, and
-     * inventing one by blaming the assignee would put a caution on somebody who
-     * may not have seen the order at all.
+     * NOT whoever last moved it. Decided with the user 2026-08-18 — "the one who
+     * placed it or received it, that is who we hold responsible." On a stalled
+     * `ready` order the last mover is whoever marked it ready, usually the
+     * kitchen; the person accountable for it reaching the customer is the one
+     * who took it.
+     *
+     * Deliberately the same `orderActorUserId()` the phone rules use, so "actor"
+     * means one thing across every rule rather than quietly meaning something
+     * different depending on which event fired.
+     *
+     * `'actor' => 'mover'` in the conditions opts back into last-mover for a
+     * rule where the person who put it in this status really is the responsible
+     * one.
+     *
+     * Null for a website order nobody has touched — there is genuinely no
+     * individual to caution, and blaming the assignee would put a caution on
+     * somebody who may never have seen it.
      */
-    private function actorFor(Order $order, string $status): ?int
+    private function actorFor(Order $order, string $status, StaffMessageRule $rule): ?int
     {
-        $entry = $order->statusHistory->firstWhere('status', $status);
+        if ($rule->condition('actor') === 'mover') {
+            $entry = $order->statusHistory->firstWhere('status', $status);
 
-        if ($entry?->changed_by_id) {
-            return (int) $entry->changed_by_id;
+            if ($entry?->changed_by_id) {
+                return (int) $entry->changed_by_id;
+            }
         }
 
-        return $order->assignedEmployee?->user_id;
+        return $this->orderActorUserId($order);
     }
 }

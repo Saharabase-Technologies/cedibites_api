@@ -239,7 +239,15 @@ class CampaignSender
 
     public function seedMode(): bool
     {
-        return (bool) config('campaigns.seed_mode', true);
+        // Through RuntimeSettings, not config(), so the platform toggle actually
+        // governs it. A `.env` change would not reach the queue workers until
+        // somebody SSHed in and restarted them — and the send runs in a worker,
+        // so the toggle would appear to do nothing exactly where it matters.
+        //
+        // Still defaults to TRUE the whole way down: every fallback in this
+        // chain errs towards nobody being texted.
+        return (bool) app(\App\Services\Platform\RuntimeSettings::class)
+            ->get('campaigns.seed_mode');
     }
 
     /**

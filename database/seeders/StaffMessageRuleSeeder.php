@@ -81,12 +81,20 @@ class StaffMessageRuleSeeder extends Seeder
                 'description' => 'An order sitting Ready while it goes cold.',
                 'event' => StaffMessageEvent::OrderStalled->value,
                 'conditions' => ['status' => 'ready', 'minutes' => 20],
-                'target' => ['types' => [StaffMessageTarget::BranchStaff->value]],
+                // The one who took the order, not everyone at the branch. Six
+                // people were being cautioned about one order and only one of
+                // them could act on it; the fastest way to make staff dismiss
+                // cautions unread is to send them ones that are not their job.
+                'target' => ['types' => [StaffMessageTarget::Actor->value]],
                 'kind' => StaffMessageKind::Caution->value,
                 'subject' => 'Order {order_number} is ready and waiting',
                 'body_template' => '{order_number} at {branch} has been ready for {minutes} minutes. Please get it out or hand it to the rider.',
                 'requires_acknowledgement' => true,
                 'quick_replies' => ['On it', 'Rider is on the way'],
+                // Food going cold is time-critical and the modal only reaches
+                // somebody actually looking at the app. One recipient now, so
+                // the fallback costs one text rather than six.
+                'sms_fallback_after_minutes' => 15,
                 'cooldown_minutes' => 60,
                 'priority' => 90,
             ],

@@ -126,3 +126,22 @@ it('actually stops the rule engine when the switch is pulled from the panel', fu
     expect($guard->suppressionFor($rule, 1, 'App\Models\Order:1'))
         ->toBe(\App\Enums\StaffMessageSuppression::FeatureOff);
 });
+
+it('actually governs campaign test mode from the panel', function () {
+    // The lesson already learned with the messaging kill switch: a toggle the
+    // send path does not read is a placebo, and this is the one where the
+    // placebo texts real customers.
+    config()->set('campaigns.seed_mode', true);
+
+    $sender = app(\App\Services\Campaigns\CampaignSender::class);
+    expect($sender->seedMode())->toBeTrue();
+
+    $this->runtime->set('campaigns.seed_mode', false);
+
+    expect($sender->seedMode())->toBeFalse();
+});
+
+it('keeps campaign test mode on when nothing has been set', function () {
+    // Every fallback in the chain errs towards nobody being texted.
+    expect($this->runtime->get('campaigns.seed_mode'))->toBeTrue();
+});

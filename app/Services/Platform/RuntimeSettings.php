@@ -105,6 +105,21 @@ class RuntimeSettings
                 'max' => 1440,
             ],
 
+            // ── Campaigns ────────────────────────────────────────────────────
+            [
+                'key' => 'campaigns.seed_mode',
+                'config' => 'campaigns.seed_mode',
+                'env' => 'CAMPAIGN_SEED_MODE',
+                'group' => 'Campaigns',
+                'label' => 'Campaign test mode',
+                'help' => 'ON means every campaign goes to the staff test numbers only and no '
+                    .'customer receives anything, whatever audience is chosen. Turning it OFF means '
+                    .'the next send reaches real customers and is billed. The 2,000 recipient cap '
+                    .'still applies.',
+                'type' => 'boolean',
+                'danger' => true,
+            ],
+
             // ── Inventory ────────────────────────────────────────────────────
             [
                 'key' => 'inventory.enabled',
