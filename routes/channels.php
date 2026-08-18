@@ -6,6 +6,14 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
     return (int) $user->id === (int) $id;
 });
 
+// A staff member's own message stream. Strictly self — a caution about somebody's
+// own work is not their colleagues' business, and there is no supervisory reason
+// to listen in either: the sender reads delivery from the receipts table, not
+// from the wire.
+Broadcast::channel('staff-messages.{userId}', function ($user, $userId) {
+    return (int) $user->id === (int) $userId;
+});
+
 Broadcast::channel('orders.branch.{branchId}', function ($user, $branchId) {
     // Company-wide roles hold no branch assignment (head office, the warehouse,
     // the call centre), so a pivot lookup would refuse them every branch rather

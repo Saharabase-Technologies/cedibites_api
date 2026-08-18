@@ -165,4 +165,15 @@ enum Permission: string
     // Feedback — triage access (view/manage all reports). Submitting a report
     // needs no permission beyond being authenticated.
     case FeedbackTriage = 'feedback.triage';
+
+    // Staff messaging — compose and send to staff, run the automation rules, and
+    // read the delivery receipts. Held by admin and tech_admin only; branch
+    // managers deliberately do not send, decided 2026-08-17.
+    //
+    // There is no matching `view` permission. RECEIVING a message, reading your
+    // own inbox and replying need nothing beyond a live staff token — the same
+    // shape as feedback above, where submitting is unpermissioned and only triage
+    // is gated. A permission on the inbox would mean editing all ten roles, and
+    // whichever one was missed would silently never be reachable.
+    case StaffMessagesManage = 'staff_messages.manage';
 }
