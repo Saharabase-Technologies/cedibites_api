@@ -155,7 +155,14 @@ class StaffRuleEvaluator
             'sender_user_id' => null,
             'rule_id' => $rule->id,
             'kind' => $rule->kind->value,
-            'subject' => $rule->subject,
+            // The subject takes merge fields too. It was passed through raw,
+            // so every automatic caution arrived titled "Order {order_number}
+            // has not moved" while the body underneath said AG697 correctly —
+            // which reads as the system being broken in the one place the
+            // recipient looks first.
+            'subject' => $rule->subject
+                ? $this->renderer->render($rule->subject, $user, $match->branchId, $match->mergeData)
+                : null,
             'body' => $this->renderer->render($rule->body_template, $user, $match->branchId, $match->mergeData),
             'audience' => ['rule' => $rule->id, 'user_ids' => [$user->id]],
             'requires_acknowledgement' => $rule->requires_acknowledgement,

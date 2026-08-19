@@ -348,3 +348,21 @@ it('seeds a brand-new rule switched off', function () {
 
     expect(StaffMessageRule::where('is_active', true)->count())->toBe(0);
 });
+
+it('fills the merge fields in the subject, not just the body', function () {
+    $order = msgStalledOrder($this->branch, $this->employee, 'received', 45);
+
+    $rule = StaffMessageRule::factory()->live()->create([
+        'subject' => 'Order {order_number} has not moved',
+        'body_template' => '{order_number} has been sitting.',
+    ]);
+
+    app(StaffRuleEvaluator::class)->run($rule);
+
+    $message = StaffMessage::where('rule_id', $rule->id)->first();
+
+    // The title is the first thing the recipient reads; a raw {order_number}
+    // there reads as a broken system regardless of how correct the body is.
+    expect($message->subject)->toBe("Order {$order->order_number} has not moved")
+        ->and($message->subject)->not->toContain('{');
+});
