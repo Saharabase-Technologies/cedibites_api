@@ -114,6 +114,13 @@ class OrderObserver
         // Defer notifications until after the DB transaction commits so the
         // payment row is available and we don't send SMS before payment is confirmed.
         \DB::afterCommit(function () use ($order) {
+            // First, before any notification work. The board is a live screen
+            // somebody is standing in front of, and this used to be dispatched
+            // at the bottom of this closure — behind the customer SMS and a
+            // notification for every active employee at the branch — so the
+            // kitchen learned about an order after the customer did.
+            OrderBroadcastEvent::dispatch($order, 'created');
+
             try {
                 $order->loadMissing('payments');
                 $payment = $order->payments->first();
@@ -137,8 +144,6 @@ class OrderObserver
                     'error' => $e->getMessage(),
                 ]);
             }
-
-            OrderBroadcastEvent::dispatch($order, 'created');
         });
     }
 
