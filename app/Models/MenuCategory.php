@@ -29,6 +29,7 @@ class MenuCategory extends Model
         'slug',
         'display_order',
         'is_active',
+        'requires_preparation',
     ];
 
     protected function casts(): array
@@ -36,6 +37,7 @@ class MenuCategory extends Model
         return [
             'display_order' => 'integer',
             'is_active' => 'boolean',
+            'requires_preparation' => 'boolean',
         ];
     }
 

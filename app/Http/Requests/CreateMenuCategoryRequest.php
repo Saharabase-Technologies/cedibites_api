@@ -33,6 +33,7 @@ class CreateMenuCategoryRequest extends FormRequest
             'display_order' => ['nullable', 'integer', 'min:0'],
             'slug' => ['nullable', 'string', 'max:255'],
             'is_active' => ['nullable', 'boolean'],
+            'requires_preparation' => ['nullable', 'boolean'],
         ];
     }
 

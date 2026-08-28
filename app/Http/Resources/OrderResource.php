@@ -64,6 +64,11 @@ class OrderResource extends JsonResource
                     'name' => $item->menuItem?->name,
                     'category' => $item->menuItem?->category?->name,
                 ],
+                // Lets the board grey out the lines the kitchen has nothing to
+                // do with — a drink on an otherwise hot order. Defaults to true
+                // when the menu item has been deleted out from under the order,
+                // so a line never silently reads as "ignore me".
+                'requires_preparation' => $item->menuItem?->requiresPreparation() ?? true,
                 'option' => $item->menuItemOption ? [
                     'id' => $item->menuItemOption->id,
                     'option_key' => $item->menuItemOption->option_key,

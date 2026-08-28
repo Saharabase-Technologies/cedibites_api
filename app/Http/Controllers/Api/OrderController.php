@@ -106,7 +106,7 @@ class OrderController extends Controller
             return response()->error('Unauthenticated.', 401);
         }
 
-        $orders = Order::with(['customer.user', 'branch', 'items.menuItem'])
+        $orders = Order::with(['customer.user', 'branch', 'items.menuItem.category'])
             ->where('customer_id', $user->customer->id)
             ->when($request->status, fn ($query, $status) => $query->where('status', $status))
             ->latest()
@@ -156,7 +156,7 @@ class OrderController extends Controller
             }
         }
 
-        $cartQuery = Cart::with(['items.menuItem', 'items.menuItemOption', 'branch'])
+        $cartQuery = Cart::with(['items.menuItem.category', 'items.menuItemOption', 'branch'])
             ->where('status', 'active');
 
         if ($identity['customer_id'] !== null) {
@@ -255,7 +255,7 @@ class OrderController extends Controller
 
             DB::commit();
 
-            $order->load(['customer.user', 'branch', 'items.menuItem', 'payments']);
+            $order->load(['customer.user', 'branch', 'items.menuItem.category', 'payments']);
 
             return response()->created(new OrderResource($order));
         } catch (\Exception $e) {
@@ -272,7 +272,7 @@ class OrderController extends Controller
      */
     public function showByNumber(string $orderNumber): JsonResponse
     {
-        $order = Order::with(['branch', 'items.menuItem', 'items.menuItemOption.media', 'statusHistory', 'payments'])
+        $order = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
             ->where('order_number', $orderNumber)
             ->first();
 
@@ -313,7 +313,7 @@ class OrderController extends Controller
     {
         $branchId = $request->query('branch_id');
 
-        $query = Order::with(['branch', 'customer.user', 'items.menuItem', 'items.menuItemOption.media', 'statusHistory', 'payments'])
+        $query = Order::with(['branch', 'customer.user', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
             ->paymentConfirmed()
             ->whereIn('status', ['received', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
@@ -351,7 +351,7 @@ class OrderController extends Controller
     {
         $branchId = $request->query('branch_id');
 
-        $query = Order::with(['branch', 'items.menuItem', 'items.menuItemOption.media'])
+        $query = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media'])
             ->paymentConfirmed()
             ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
@@ -386,7 +386,7 @@ class OrderController extends Controller
             return response()->error('Order not found.', 404);
         }
 
-        $order->load(['customer.user', 'branch', 'items.menuItem', 'statusHistory', 'payments']);
+        $order->load(['customer.user', 'branch', 'items.menuItem.category', 'statusHistory', 'payments']);
 
         return response()->success(new OrderResource($order));
     }

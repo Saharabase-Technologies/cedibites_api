@@ -109,6 +109,16 @@ class PosOrderController extends Controller
 
                 $isManualEntry = (bool) ($request->validated('is_manual_entry') ?? false);
 
+                // An order with nothing to cook does not belong on the kitchen
+                // board. At the till the drink is handed over as the money is
+                // taken, so it is already complete; see PreparationRouter for
+                // why a mixed order still goes to the kitchen in full.
+                $orderSource = $isManualEntry ? 'manual_entry' : 'pos';
+                $initialStatus = $isManualEntry
+                    ? 'completed'
+                    : app(\App\Services\Orders\PreparationRouter::class)
+                        ->initialStatus($menuItems, $orderSource);
+
                 // Find or create a customer record by phone so POS customers
                 // appear in the admin customers list.
                 $contactPhone = $this->normalizePhone($request->validated('contact_phone') ?? '');
@@ -136,7 +146,7 @@ class PosOrderController extends Controller
                     'branch_id' => $branchId,
                     'assigned_employee_id' => $employee->id,
                     'order_type' => $fulfillmentType,
-                    'order_source' => $isManualEntry ? 'manual_entry' : 'pos',
+                    'order_source' => $orderSource,
                     'contact_name' => $contactName,
                     'contact_phone' => $contactPhone,
                     'delivery_note' => $deliveryNote,
@@ -145,7 +155,7 @@ class PosOrderController extends Controller
                     'tax_rate' => $this->taxRate(),
                     'tax_amount' => $totals['tax_amount'],
                     'total_amount' => $totals['total_amount'],
-                    'status' => $isManualEntry ? 'completed' : 'received',
+                    'status' => $initialStatus,
                     'customer_id' => $posCustomerId,
                     'delivery_address' => null,
                     'delivery_latitude' => null,

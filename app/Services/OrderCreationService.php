@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Helpers\PhoneHelper;
+use App\Models\MenuItem;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\User;
+use App\Services\Orders\PreparationRouter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -77,6 +79,21 @@ class OrderCreationService
 
             $isManualEntry = (bool) $session->is_manual_entry;
 
+            // Items are decoded here rather than after the insert because the
+            // order's opening status depends on what is on it: an order with
+            // nothing to cook should never be written as `received` and then
+            // corrected, or the board flashes a ticket that vanishes by itself.
+            $items = is_string($session->items) ? json_decode($session->items, true) : ($session->items ?? []);
+
+            $orderSource = $this->resolveOrderSource($session);
+            $menuItems = MenuItem::with('category')
+                ->whereIn('id', array_filter(array_column($items, 'menu_item_id')))
+                ->get();
+
+            $initialStatus = $isManualEntry
+                ? 'completed'
+                : app(PreparationRouter::class)->initialStatus($menuItems, $orderSource);
+
             // Create the order
             $order = Order::create([
                 'order_number' => $orderNumber,
@@ -84,7 +101,7 @@ class OrderCreationService
                 'branch_id' => $session->branch_id,
                 'assigned_employee_id' => $session->staff_id,
                 'order_type' => $session->fulfillment_type ?? 'pickup',
-                'order_source' => $this->resolveOrderSource($session),
+                'order_source' => $orderSource,
                 'delivery_address' => $session->delivery_address,
                 'delivery_latitude' => $session->delivery_latitude,
                 'delivery_longitude' => $session->delivery_longitude,
@@ -98,14 +115,13 @@ class OrderCreationService
                 'promo_id' => $session->promo_id ?? null,
                 'promo_name' => $session->promo_name ?? null,
                 'total_amount' => $session->total_amount,
-                'status' => $isManualEntry ? 'completed' : 'received',
+                'status' => $initialStatus,
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,
                 'momo_number' => $session->momo_number,
             ]);
 
-            // Create order items from snapshot
-            $items = is_string($session->items) ? json_decode($session->items, true) : ($session->items ?? []);
-
+            // Create order items from snapshot (decoded above, before the insert,
+            // because the opening status depends on what is on the order)
             foreach ($items as $item) {
                 OrderItem::create([
                     'order_id' => $order->id,

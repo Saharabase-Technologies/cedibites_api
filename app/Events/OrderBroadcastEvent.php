@@ -58,7 +58,7 @@ class OrderBroadcastEvent implements ShouldBroadcastNow
         return [
             'type' => $this->changeType,
             'order' => (new OrderResource(
-                $this->order->load(['branch', 'items.menuItem', 'items.menuItemOption.media'])
+                $this->order->load(['branch', 'items.menuItem.category', 'items.menuItemOption.media'])
             ))->toArray(request()),
         ];
     }

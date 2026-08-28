@@ -32,6 +32,7 @@ class MenuItem extends Model
         'slug',
         'description',
         'is_available',
+        'requires_preparation',
         'rating',
         'rating_count',
     ];
@@ -40,6 +41,7 @@ class MenuItem extends Model
     {
         return [
             'is_available' => 'boolean',
+            'requires_preparation' => 'boolean',
             'rating' => 'float',
             'rating_count' => 'integer',
         ];
@@ -150,6 +152,27 @@ class MenuItem extends Model
             ->first(fn ($id) => ! in_array($id, $onSale));
 
         return $offender === null ? null : static::find($offender);
+    }
+
+    /**
+     * Does this dish actually need cooking?
+     *
+     * The item's own column is nullable and NULL means "inherit" — the answer
+     * then comes from its category. Only an explicit true/false on the item
+     * overrides, which is what lets a milkshake sit among the bottled drinks
+     * without dragging the whole category back into the kitchen queue.
+     *
+     * Defaults to true when neither has an opinion. A drink wrongly queued is a
+     * small annoyance; a hot dish wrongly skipping the kitchen is a customer
+     * handed raw food, so the safe default is the one that costs least.
+     */
+    public function requiresPreparation(): bool
+    {
+        if ($this->requires_preparation !== null) {
+            return (bool) $this->requires_preparation;
+        }
+
+        return (bool) ($this->category?->requires_preparation ?? true);
     }
 
     public function category(): BelongsTo

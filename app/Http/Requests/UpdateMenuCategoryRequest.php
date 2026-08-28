@@ -37,6 +37,10 @@ class UpdateMenuCategoryRequest extends FormRequest
             'display_order' => ['sometimes', 'integer', 'min:0'],
             'slug' => ['sometimes', 'string', 'max:255'],
             'is_active' => ['sometimes', 'boolean'],
+            // False means nothing in this category needs cooking, so an order
+            // made up entirely of its items skips the kitchen board. See
+            // App\Services\Orders\PreparationRouter.
+            'requires_preparation' => ['sometimes', 'boolean'],
         ];
     }
 

@@ -27,7 +27,11 @@ class OrderManagementService
         $canSeeAllOrders = $user->isCompanyWide();
 
         // No payment filter here - admin sees all orders by default
-        $query = Order::with(['customer.user', 'items.menuItemOption.menuItem', 'payments', 'branch', 'statusHistory.changedBy', 'assignedEmployee.user']);
+        // `items.menuItemOption.media` is not decoration: OrderResource reads
+        // each option's media for its image, and without it that was thirteen
+        // extra queries on a board of eighteen orders — one per option, every
+        // time the board refreshed.
+        $query = Order::with(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItemOption.media', 'items.menuItem.category', 'payments', 'branch', 'statusHistory.changedBy', 'assignedEmployee.user']);
 
         $employeeBranchIds = $employee?->branches()->pluck('branches.id');
 
@@ -206,7 +210,7 @@ class OrderManagementService
             return Order::query()->whereRaw('1 = 0');
         }
 
-        return Order::with(['customer.user', 'items.menuItemOption.menuItem', 'branch'])
+        return Order::with(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'branch'])
             ->whereIn('branch_id', $branchIds)
             ->paymentConfirmed()
             ->whereIn('status', ['received', 'preparing', 'ready', 'ready_for_pickup', 'out_for_delivery'])
