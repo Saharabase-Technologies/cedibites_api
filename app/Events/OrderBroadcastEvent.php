@@ -58,7 +58,11 @@ class OrderBroadcastEvent implements ShouldBroadcastNow
         return [
             'type' => $this->changeType,
             'order' => (new OrderResource(
-                $this->order->load(['branch', 'items.menuItem.category', 'items.menuItemOption.media'])
+                // `statusHistory` is what tells the board how long this order has
+                // been in its current stage. Without it here, a ticket that
+                // arrived over the socket — which is most of them — would carry
+                // no stage time and fall back to its total age.
+                $this->order->load(['branch', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory'])
             ))->toArray(request()),
         ];
     }

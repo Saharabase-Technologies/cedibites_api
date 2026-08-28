@@ -99,6 +99,29 @@ class OrderResource extends JsonResource
                 'transaction_id' => $this->payments->first()->transaction_id,
                 'paid_at' => $this->payments->first()->paid_at?->toIso8601String(),
             ] : null,
+            /**
+             * When this order entered the status it is in now.
+             *
+             * The boards need to say "cooking for 2 minutes", not "placed 15
+             * minutes ago", and they cannot work that out for themselves: a
+             * screen only knows about the moves it made, so after a refresh —
+             * or for an order bumped on a different tablet — it had nothing to
+             * go on and fell back to the placed time. Every stage then read as
+             * the order's total age.
+             *
+             * `order_status_history` already records `changed_at` for every
+             * transition, so the answer is authoritative here and identical on
+             * every screen looking at it.
+             *
+             * Null when the relation was not loaded — callers fall back to the
+             * placed time rather than this quietly triggering a query per order.
+             */
+            'stage_changed_at' => $this->relationLoaded('statusHistory')
+                ? $this->statusHistory
+                    ->where('status', $this->status)
+                    ->sortByDesc(fn ($h) => $h->changed_at ?? $h->created_at)
+                    ->first()?->changed_at?->toIso8601String()
+                : null,
             'status_history' => $this->statusHistory->map(fn ($history) => [
                 'id' => $history->id,
                 'status' => $history->status,
