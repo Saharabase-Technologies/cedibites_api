@@ -119,7 +119,14 @@ class OrderObserver
             // at the bottom of this closure — behind the customer SMS and a
             // notification for every active employee at the branch — so the
             // kitchen learned about an order after the customer did.
-            OrderBroadcastEvent::dispatch($order, 'created');
+            //
+            // Guarded, because it is now sent inline rather than queued. As a
+            // queued job a Reverb outage failed harmlessly in the worker; sent
+            // inline an exception would escape this callback and surface at the
+            // till as a failed sale — for an order that has already committed.
+            // A cashier would then take it again. The board catching up on its
+            // next poll is a far smaller problem than a duplicate order.
+            $this->broadcastQuietly($order, 'created');
 
             try {
                 $order->loadMissing('payments');
@@ -248,8 +255,33 @@ class OrderObserver
 
         // Dispatch broadcast after transaction commits (matches created() pattern)
         \DB::afterCommit(function () use ($order) {
-            OrderBroadcastEvent::dispatch($order, 'updated');
+            $this->broadcastQuietly($order, 'updated');
         });
+    }
+
+    /**
+     * Broadcast the order, and never let a broadcast failure become the
+     * caller's problem.
+     *
+     * `OrderBroadcastEvent` is `ShouldBroadcastNow`, so this runs inline in the
+     * request rather than in a worker. That is deliberate — queueing it put the
+     * kitchen's copy of an order behind every notification the order generated
+     * — but it also means an unreachable Reverb would throw straight into
+     * whoever saved the order. Taking money must not depend on a websocket
+     * being up, so the failure is logged and swallowed. The boards recover on
+     * their own: both poll as a safety net for exactly this.
+     */
+    protected function broadcastQuietly(Order $order, string $changeType): void
+    {
+        try {
+            OrderBroadcastEvent::dispatch($order, $changeType);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Order broadcast failed', [
+                'order_id' => $order->id,
+                'change_type' => $changeType,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
