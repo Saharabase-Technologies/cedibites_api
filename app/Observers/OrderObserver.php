@@ -255,16 +255,50 @@ class OrderObserver
     /**
      * Notify all active employees at the branch.
      */
+    /**
+     * Write the branch's in-app "new order" notifications in one query.
+     *
+     * This used to loop `$employee->user?->notify(...)`. `NewOrderNotification`
+     * is `ShouldQueue`, so every employee got their own queued job — nineteen
+     * of them at Ashaiman — each serialising the whole Order model, waking a
+     * worker, and writing a single row. Around four seconds of worker time per
+     * order, to produce nineteen rows.
+     *
+     * And the rows are identical: `NewOrderNotification::toArray()` describes
+     * the order and never looks at the notifiable. So the payload is built once
+     * and inserted for everyone at once — same rows, same shape, one query.
+     *
+     * The notification class stays as the single definition of that payload;
+     * only the delivery mechanism changes. It is still used normally elsewhere.
+     */
     protected function notifyBranchEmployees(Order $order): void
     {
-        $employees = Employee::whereHas('branches', fn ($q) => $q->where('branches.id', $order->branch_id))
+        $userIds = Employee::whereHas('branches', fn ($q) => $q->where('branches.id', $order->branch_id))
             ->where('status', 'active')
-            ->with('user')
-            ->get();
+            ->whereNotNull('user_id')
+            ->pluck('user_id');
 
-        foreach ($employees as $employee) {
-            $employee->user?->notify(new NewOrderNotification($order));
+        if ($userIds->isEmpty()) {
+            return;
         }
+
+        // `toArray()` ignores its argument — the payload is about the order, not
+        // the recipient — so the order stands in for the notifiable here.
+        $payload = json_encode((new NewOrderNotification($order))->toArray($order));
+        $now = now();
+
+        \DB::table('notifications')->insert(
+            $userIds->map(fn ($userId) => [
+                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'type' => NewOrderNotification::class,
+                'notifiable_type' => \App\Models\User::class,
+                'notifiable_id' => $userId,
+                'data' => $payload,
+                'read_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])->all()
+        );
     }
 
     /**
