@@ -3,7 +3,10 @@
 namespace App\Services;
 
 use App\Models\Branch;
+use App\Models\Employee;
 use App\Models\Order;
+use App\Models\Shift;
+use App\Models\ShiftOrder;
 use App\Models\User;
 use App\Services\Analytics\AnalyticsService;
 use Illuminate\Database\Eloquent\Builder;
@@ -158,12 +161,29 @@ class OrderManagementService
 
         $updateData = ['status' => $status];
 
-        // Auto-assign employee when order is accepted or preparing
+        // Whoever accepts an order owns it.
+        //
+        // An order that arrived from anywhere but a till — the website, or a
+        // call the branch did not take — is created with no employee against
+        // it, so until somebody accepts it, it belongs to nobody. Every figure
+        // that measures staff against sales reads `assigned_employee_id`
+        // (see AnalyticsService::getStaffSalesMetrics), so an unclaimed order
+        // reports as "Unassigned" revenue nobody is accountable for.
+        //
+        // Guarded on the column being empty: an order taken at a till, or by a
+        // call-centre agent, already names its owner from creation, and
+        // accepting it later must never reassign it away from them.
+        $newlyAssignedTo = null;
         if (in_array($status, ['accepted', 'preparing']) && ! $order->assigned_employee_id && $causer?->employee) {
-            $updateData['assigned_employee_id'] = $causer->employee->id;
+            $newlyAssignedTo = $causer->employee;
+            $updateData['assigned_employee_id'] = $newlyAssignedTo->id;
         }
 
         $order->update($updateData);
+
+        if ($newlyAssignedTo !== null) {
+            $this->attachToOpenShift($order, $newlyAssignedTo);
+        }
 
         if ($notes) {
             $order->statusHistory()->create([
@@ -188,6 +208,53 @@ class OrderManagementService
         }
 
         return $order->fresh();
+    }
+
+    /**
+     * Put a newly-claimed order onto that employee's open shift.
+     *
+     * The till does this for its own sales from the client, the moment payment
+     * clears. Nothing did it for an order claimed from the Order Manager or the
+     * Kitchen Display, so accepting an online order made you its owner
+     * everywhere except the one figure you are counted against at the end of
+     * the day — your shift's takings.
+     *
+     * Deliberately quiet. This is bookkeeping hanging off a status change, and
+     * an order that has already been accepted must not fail to accept because
+     * its owner had not clocked in. Idempotent through `firstOrCreate`, so the
+     * till's own call for the same order cannot double it.
+     */
+    protected function attachToOpenShift(Order $order, Employee $employee): void
+    {
+        try {
+            $shift = Shift::query()
+                ->where('employee_id', $employee->id)
+                ->whereNull('logout_at')
+                ->latest('login_at')
+                ->first();
+
+            if (! $shift) {
+                return;
+            }
+
+            $orderTotal = (float) $order->total_amount;
+
+            $shiftOrder = ShiftOrder::firstOrCreate(
+                ['shift_id' => $shift->id, 'order_id' => $order->id],
+                ['order_total' => $orderTotal],
+            );
+
+            if ($shiftOrder->wasRecentlyCreated) {
+                $shift->increment('total_sales', $orderTotal);
+                $shift->increment('order_count');
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to attach accepted order to shift', [
+                'order_id' => $order->id,
+                'employee_id' => $employee->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
