@@ -43,6 +43,10 @@ class OrderResource extends JsonResource
                 'latitude' => $this->branch?->latitude,
                 'longitude' => $this->branch?->longitude,
             ],
+            // Whether a slip has ever been produced for this order — the till
+            // shows "Print receipt" until it has, and "Reprint" after.
+            'receipt_printed_at' => $this->receipt_printed_at?->toISOString(),
+            'receipt_print_count' => (int) $this->receipt_print_count,
             'assigned_employee_id' => $this->assigned_employee_id,
             'staff_name' => $this->assignedEmployee?->user?->name,
             'assigned_employee' => $this->assignedEmployee ? [

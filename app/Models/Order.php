@@ -83,6 +83,8 @@ class Order extends Model
         'cancel_request_reason',
         'cancel_requested_at',
         'recorded_at',
+        'receipt_printed_at',
+        'receipt_print_count',
         'momo_number',
         'internal_notes',
     ];
@@ -104,6 +106,7 @@ class Order extends Model
             'cancelled_at' => 'datetime',
             'cancel_requested_at' => 'datetime',
             'recorded_at' => 'datetime',
+            'receipt_printed_at' => 'datetime',
             'internal_notes' => 'array',
         ];
     }

@@ -78,6 +78,38 @@ class EmployeeOrderController extends Controller
     }
 
     /**
+     * Record that a receipt was produced for this order.
+     *
+     * Deliberately not a status change. Printing tells you nothing about where
+     * the order is in the kitchen — it is bookkeeping about the paper, and the
+     * only thing reading it is the till, which needs to know whether to offer
+     * "Print receipt" or "Reprint receipt".
+     *
+     * Idempotent in the sense that matters: the first print sets the timestamp
+     * and every print bumps the count, so a run of reprints on one order stays
+     * visible without the original time moving.
+     */
+    public function receiptPrinted(Request $request, Order $order): JsonResponse
+    {
+        $employee = $request->user()->employee;
+        $user = $request->user();
+
+        if (! $user->isCompanyWide() && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
+            return response()->error('You can only print receipts for orders at your branch.', 403);
+        }
+
+        $order->forceFill([
+            'receipt_printed_at' => $order->receipt_printed_at ?? now(),
+            'receipt_print_count' => $order->receipt_print_count + 1,
+        ])->save();
+
+        return response()->success(
+            new OrderResource($order->fresh()->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments'])),
+            'Receipt print recorded.'
+        );
+    }
+
+    /**
      * Update order status.
      */
     public function updateStatus(UpdateOrderStatusRequest $request, Order $order): JsonResponse

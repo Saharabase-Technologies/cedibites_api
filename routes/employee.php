@@ -65,6 +65,11 @@ Route::middleware('password.reset')->group(function () {
         Route::get('orders/pending', [EmployeeOrderController::class, 'pending']);
         Route::patch('orders/{order}/status', [EmployeeOrderController::class, 'updateStatus'])
             ->middleware('permission:update_orders');
+        // Printing is not moving the order, so it rides on `view_orders` — the
+        // permission every till already holds. Gating it behind `update_orders`
+        // would mean the people who hand over receipts could not record that
+        // they had.
+        Route::post('orders/{order}/receipt-printed', [EmployeeOrderController::class, 'receiptPrinted']);
         // Asking for a cancellation is not the same power as moving an order
         // through the kitchen, and the call centre needs exactly one of the two.
         // See Permission::OrderCancelRequest.
