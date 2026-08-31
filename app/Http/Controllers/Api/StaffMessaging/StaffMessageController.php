@@ -125,6 +125,7 @@ class StaffMessageController extends Controller
         $message = StaffMessage::create([
             'sender_user_id' => $request->user()->id,
             'kind' => $data['kind'],
+            'release_key' => $data['release_key'] ?? null,
             'subject' => $data['subject'] ?? null,
             'body' => $data['body'],
             'image_path' => $data['image_path'] ?? null,
@@ -135,6 +136,18 @@ class StaffMessageController extends Controller
             'sms_fallback_after_minutes' => $data['sms_fallback_after_minutes'] ?? null,
             'expires_at' => $data['expires_at'] ?? null,
         ]);
+
+        // Position comes from the order they were sent in, not from anything
+        // the client supplies — a caller that omits or repeats an index would
+        // otherwise scramble the walkthrough or collide on the unique key.
+        foreach (array_values($data['steps'] ?? []) as $index => $step) {
+            $message->steps()->create([
+                'position' => $index + 1,
+                'title' => $step['title'] ?? null,
+                'body' => $step['body'],
+                'image_path' => $step['image_path'] ?? null,
+            ]);
+        }
 
         $this->dispatcher->send($message, $recipients);
 

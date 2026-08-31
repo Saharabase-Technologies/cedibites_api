@@ -58,10 +58,13 @@ class StaffInboxController extends Controller
     {
         $unread = (clone $this->scope($request))->whereNull('read_at')->count();
 
+        // Every kind that takes over the screen, not just cautions — a release
+        // walkthrough interrupts too, and reads the same pending set. Asking the
+        // enum keeps the two from disagreeing the next time a kind is added.
         $pending = $this->scope($request)
             ->whereNull('acknowledged_at')
-            ->whereHas('message', fn ($q) => $q->where('kind', StaffMessageKind::Caution->value))
-            ->with(['message.sender'])
+            ->whereHas('message', fn ($q) => $q->whereIn('kind', StaffMessageKind::interruptingValues()))
+            ->with(['message.sender', 'message.steps'])
             ->orderBy('created_at')
             ->limit(5)
             ->get();
@@ -76,7 +79,7 @@ class StaffInboxController extends Controller
     {
         $this->assertOwn($request, $recipient);
 
-        $recipient->load(['message.sender', 'message.replies.sender']);
+        $recipient->load(['message.sender', 'message.steps', 'message.replies.sender']);
 
         // Opening it is what reading means. Stamped here rather than by a
         // separate call the client might forget to make.

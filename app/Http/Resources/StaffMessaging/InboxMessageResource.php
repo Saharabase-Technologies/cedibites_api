@@ -33,6 +33,19 @@ class InboxMessageResource extends JsonResource
             'subject' => $message->subject,
             'body' => $message->body,
             'image_url' => $message->imageUrl(),
+
+            // Slides, for the kinds that are paged rather than read at once.
+            // Absent rather than empty on every other kind, so a client can tell
+            // "not a walkthrough" from "a walkthrough with nothing in it".
+            'steps' => $message->kind->hasSteps()
+                ? $message->steps->map(fn ($step) => [
+                    'id' => $step->id,
+                    'position' => $step->position,
+                    'title' => $step->title,
+                    'body' => $step->body,
+                    'image_url' => $step->imageUrl(),
+                ])->values()
+                : null,
             // The TEAM, never the individual.
             //
             // A caution signed with one manager's name turns a company policy

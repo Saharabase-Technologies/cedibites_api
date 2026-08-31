@@ -33,6 +33,17 @@ class SendStaffMessageRequest extends FormRequest
             // image and rendered inside our chrome.
             'image_path' => ['nullable', 'string', 'max:255', 'starts_with:staff-messages/'],
 
+            // ─── Release walkthroughs ─────────────────────────────────────
+            // A stable name for this release, so the same announcement cannot
+            // go out twice. On a kind that interrupts every sign-in until it is
+            // acknowledged, a duplicate is not a cosmetic problem.
+            'release_key' => ['nullable', 'string', 'max:100', 'unique:staff_messages,release_key'],
+
+            'steps' => ['sometimes', 'array', 'max:12'],
+            'steps.*.title' => ['nullable', 'string', 'max:150'],
+            'steps.*.body' => ['required', 'string', 'max:2000'],
+            'steps.*.image_path' => ['nullable', 'string', 'max:255', 'starts_with:staff-messages/'],
+
             'audience' => ['required', 'array'],
             'audience.everyone' => ['sometimes', 'boolean'],
             'audience.roles' => ['sometimes', 'array'],
@@ -57,6 +68,20 @@ class SendStaffMessageRequest extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
+            // A walkthrough with nothing to walk through renders as an empty
+            // modal that still has to be acknowledged.
+            if ($this->input('kind') === StaffMessageKind::Release->value
+                && count((array) $this->input('steps', [])) === 0) {
+                $validator->errors()->add('steps', 'A release needs at least one slide.');
+            }
+
+            // Slides on any other kind would be dropped silently on save, which
+            // reads to the sender as having been sent.
+            if ($this->input('kind') !== StaffMessageKind::Release->value
+                && count((array) $this->input('steps', [])) > 0) {
+                $validator->errors()->add('steps', 'Only a release can carry slides.');
+            }
+
             $audience = (array) $this->input('audience', []);
 
             $hasSelection = data_get($audience, 'everyone')

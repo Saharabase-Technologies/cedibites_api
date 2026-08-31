@@ -19,6 +19,7 @@ class StaffMessage extends Model
         'rule_id',
         'parent_id',
         'kind',
+        'release_key',
         'subject',
         'body',
         'image_path',
@@ -61,6 +62,18 @@ class StaffMessage extends Model
     public function sender(): BelongsTo
     {
         return $this->belongsTo(User::class, 'sender_user_id');
+    }
+
+    /**
+     * The slides, in the order an admin arranged them.
+     *
+     * Ordered here rather than at every call site: a walkthrough shown out of
+     * order is worse than no walkthrough, and the ordering is not something a
+     * caller should be able to forget.
+     */
+    public function steps(): HasMany
+    {
+        return $this->hasMany(StaffMessageStep::class)->orderBy('position');
     }
 
     public function rule(): BelongsTo
