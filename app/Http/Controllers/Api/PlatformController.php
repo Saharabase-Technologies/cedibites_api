@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Enums\BranchRule;
 use App\Enums\EmployeeStatus;
 use App\Enums\Role;
+use App\Events\CustomerSessionEvent;
+use App\Events\StaffSessionEvent;
 use App\Http\Controllers\Controller;
+use App\Models\AcknowledgedError;
 use App\Models\Employee;
 use App\Models\SmsDeliveryAttempt;
 use App\Models\User;
@@ -15,6 +18,7 @@ use App\Services\SmsHealthService;
 use App\Services\SystemHealthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -23,6 +27,12 @@ use Illuminate\Validation\Rules\Password;
 
 class PlatformController extends Controller
 {
+    /** A session that has made a request this recently is somebody at a screen. */
+    private const SESSION_ONLINE_SECONDS = 300;
+
+    /** Beyond this it is a terminal left signed in, not a person working. */
+    private const SESSION_IDLE_SECONDS = 1800;
+
     public function __construct(
         private SystemHealthService $healthService,
         private SmartErrorService $errorService,
@@ -78,8 +88,121 @@ class PlatformController extends Controller
         $limit = min((int) ($request->limit ?? 50), 100);
 
         return response()->json([
-            'data' => $this->errorService->getFeed($limit),
+            'data' => $this->errorService->getFeed(
+                $limit,
+                $request->boolean('include_acknowledged'),
+            ),
         ]);
+    }
+
+    /**
+     * Mark one fault as dealt with, so the feed stops showing it.
+     *
+     * Not passcode-gated. A passcode belongs on the actions that cannot be
+     * undone; this one can be undone by the button next to it, and putting a
+     * six-digit code in front of dismissing a notice is how a feed ends up
+     * permanently full of notices nobody dismisses.
+     */
+    public function acknowledgeError(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'fingerprint' => ['required', 'string', 'size:64'],
+            'title' => ['required', 'string', 'max:255'],
+            'category' => ['nullable', 'string', 'max:40'],
+            'severity' => ['nullable', 'string', 'max:20'],
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        AcknowledgedError::updateOrCreate(
+            ['fingerprint' => $validated['fingerprint']],
+            [
+                'title' => $validated['title'],
+                'category' => $validated['category'] ?? null,
+                'severity' => $validated['severity'] ?? null,
+                'note' => $validated['note'] ?? null,
+                'acknowledged_by' => $request->user()?->id,
+                'acknowledged_at' => now(),
+            ],
+        );
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('error_acknowledged')
+            ->withProperties(['fingerprint' => $validated['fingerprint'], 'title' => $validated['title']])
+            ->log("Acknowledged: {$validated['title']}");
+
+        return response()->json(['message' => 'Acknowledged.']);
+    }
+
+    /**
+     * Put a fault back on the feed.
+     */
+    public function unacknowledgeError(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'fingerprint' => ['required', 'string', 'size:64'],
+        ]);
+
+        $ack = AcknowledgedError::where('fingerprint', $validated['fingerprint'])->first();
+
+        if (! $ack) {
+            return response()->json(['message' => 'That was not acknowledged.'], 404);
+        }
+
+        $ack->delete();
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('error_unacknowledged')
+            ->withProperties(['fingerprint' => $validated['fingerprint']])
+            ->log("Reopened: {$ack->title}");
+
+        return response()->json(['message' => 'Back on the feed.']);
+    }
+
+    /**
+     * Acknowledge everything currently outstanding, in one go.
+     *
+     * The client sends the fingerprints it can actually see rather than the
+     * server clearing the whole feed, so a fault that arrives between the page
+     * rendering and the button being pressed is not silently swallowed along
+     * with the ones the reader actually looked at.
+     */
+    public function acknowledgeAllErrors(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'errors' => ['required', 'array', 'min:1', 'max:100'],
+            'errors.*.fingerprint' => ['required', 'string', 'size:64'],
+            'errors.*.title' => ['required', 'string', 'max:255'],
+            'errors.*.category' => ['nullable', 'string', 'max:40'],
+            'errors.*.severity' => ['nullable', 'string', 'max:20'],
+        ]);
+
+        $now = now();
+        $userId = $request->user()?->id;
+
+        foreach ($validated['errors'] as $error) {
+            AcknowledgedError::updateOrCreate(
+                ['fingerprint' => $error['fingerprint']],
+                [
+                    'title' => $error['title'],
+                    'category' => $error['category'] ?? null,
+                    'severity' => $error['severity'] ?? null,
+                    'acknowledged_by' => $userId,
+                    'acknowledged_at' => $now,
+                ],
+            );
+        }
+
+        $count = count($validated['errors']);
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('errors_acknowledged')
+            ->withProperties(['count' => $count])
+            ->log("Acknowledged {$count} error(s)");
+
+        return response()->json(['message' => "Acknowledged {$count} item(s)."]);
     }
 
     /**
@@ -100,12 +223,80 @@ class PlatformController extends Controller
                     'uuid' => $job->uuid,
                     'job' => class_basename($payload['displayName'] ?? 'Unknown'),
                     'queue' => $job->queue,
+                    'connection' => $job->connection,
                     'error' => mb_substr($firstLine, 0, 200),
                     'failed_at' => $job->failed_at,
                 ];
             });
 
-        return response()->json(['data' => $jobs]);
+        return response()->json([
+            'data' => $jobs,
+            'meta' => [
+                // The list is capped at 50 but the queue is not, and a backlog
+                // of hundreds reading as "50" is how one stops being alarming.
+                'total' => DB::table('failed_jobs')->count(),
+            ],
+        ]);
+    }
+
+    /**
+     * Drop one failed job from the queue without retrying it.
+     *
+     * Passcode-gated and irreversible: `queue:forget` deletes the row, and with
+     * it the payload, so the job can never be retried afterwards. Use it on
+     * failures that have been understood, not on ones that have merely been
+     * read.
+     */
+    public function forgetJob(Request $request): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        $validated = $request->validate(['uuid' => ['required', 'string']]);
+
+        $job = DB::table('failed_jobs')->where('uuid', $validated['uuid'])->first();
+
+        if (! $job) {
+            return response()->json(['message' => 'That job is no longer in the queue.'], 404);
+        }
+
+        $payload = json_decode($job->payload, true);
+
+        DB::table('failed_jobs')->where('uuid', $validated['uuid'])->delete();
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('job_forgotten')
+            ->withProperties([
+                'uuid' => $validated['uuid'],
+                'job' => class_basename($payload['displayName'] ?? 'Unknown'),
+            ])
+            ->log("Cleared failed job: {$validated['uuid']}");
+
+        return response()->json(['message' => 'Cleared from the queue.']);
+    }
+
+    /**
+     * Empty the failed queue.
+     */
+    public function flushJobs(Request $request): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        $count = DB::table('failed_jobs')->count();
+
+        if ($count === 0) {
+            return response()->json(['message' => 'The failed queue is already empty.']);
+        }
+
+        Artisan::call('queue:flush');
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('jobs_flushed')
+            ->withProperties(['count' => $count])
+            ->log("Cleared {$count} failed job(s) from the queue");
+
+        return response()->json(['message' => "Cleared {$count} failed job(s)."]);
     }
 
     /**
@@ -564,15 +755,31 @@ class PlatformController extends Controller
     /**
      * Active sessions overview.
      */
-    public function activeSessions(): JsonResponse
+    public function activeSessions(Request $request): JsonResponse
     {
-        $tokens = DB::table('personal_access_tokens')
+        // Sanctum expires a token `expiration` minutes after it was created,
+        // and nothing prunes the dead rows — there is no `sanctum:prune-expired`
+        // on the schedule. So the cutoff has to be applied here, or the list
+        // shows sessions that cannot make a single request as though somebody
+        // were signed in on them.
+        $expiration = config('sanctum.expiration');
+        $mintedAfter = $expiration ? now()->subMinutes((int) $expiration) : null;
+
+        $currentTokenId = $request->user()?->currentAccessToken()?->id;
+
+        $query = DB::table('personal_access_tokens')
             ->join('users', 'personal_access_tokens.tokenable_id', '=', 'users.id')
             ->leftJoin('employees', 'users.id', '=', 'employees.user_id')
             ->where('personal_access_tokens.tokenable_type', User::class)
-            ->whereNotNull('personal_access_tokens.last_used_at')
-            ->where('personal_access_tokens.last_used_at', '>=', now()->subHours(24))
+            ->whereNotNull('personal_access_tokens.last_used_at');
+
+        if ($mintedAfter) {
+            $query->where('personal_access_tokens.created_at', '>=', $mintedAfter);
+        }
+
+        $tokens = $query
             ->select([
+                'personal_access_tokens.id as token_id',
                 'users.id as user_id',
                 'users.name',
                 'users.phone',
@@ -582,19 +789,159 @@ class PlatformController extends Controller
                 'personal_access_tokens.created_at as token_created_at',
             ])
             ->orderByDesc('personal_access_tokens.last_used_at')
-            ->limit(100)
+            ->limit(200)
             ->get()
-            ->map(fn ($t) => [
-                'user_id' => $t->user_id,
-                'name' => $t->name,
-                'phone' => $t->phone,
-                'employee_no' => $t->employee_no,
-                'token_type' => $t->token_name === 'employee-auth-token' ? 'staff' : 'customer',
-                'last_active' => $t->last_used_at,
-                'session_started' => $t->token_created_at,
-            ]);
+            ->map(function ($t) use ($currentTokenId, $expiration) {
+                $lastUsed = Carbon::parse($t->last_used_at);
+                $created = Carbon::parse($t->token_created_at);
 
-        return response()->json(['data' => $tokens]);
+                return [
+                    'token_id' => (int) $t->token_id,
+                    'user_id' => $t->user_id,
+                    'name' => $t->name,
+                    'phone' => $t->phone,
+                    'employee_no' => $t->employee_no,
+                    'token_type' => $t->token_name === 'employee-auth-token' ? 'staff' : 'customer',
+                    'status' => $this->sessionStatus($lastUsed),
+                    'idle_seconds' => (int) $lastUsed->diffInSeconds(now()),
+                    'last_active' => $lastUsed->toIso8601String(),
+                    'session_started' => $created->toIso8601String(),
+                    'expires_at' => $expiration
+                        ? $created->copy()->addMinutes((int) $expiration)->toIso8601String()
+                        : null,
+                    'is_current' => (int) $t->token_id === (int) $currentTokenId,
+                ];
+            });
+
+        return response()->json([
+            'data' => $tokens,
+            'meta' => [
+                // "Right now" is the only figure worth reading at a glance. The
+                // rest of the list is people who used the app today and walked
+                // away without signing out, which is every POS terminal.
+                'online' => $tokens->where('status', 'online')->count(),
+                'idle' => $tokens->where('status', 'idle')->count(),
+                'away' => $tokens->where('status', 'away')->count(),
+                'online_window_seconds' => self::SESSION_ONLINE_SECONDS,
+                'idle_window_seconds' => self::SESSION_IDLE_SECONDS,
+            ],
+        ]);
+    }
+
+    /**
+     * Sign one device out.
+     *
+     * Deliberately does NOT broadcast. `StaffSessionEvent` and
+     * `CustomerSessionEvent` go to `App.Models.User.{id}`, which every one of
+     * that person's devices is subscribed to — so broadcasting here would clear
+     * the session on their phone as well as the terminal you meant to reach.
+     * The device instead discovers it on its next request: the API returns 401
+     * and the client's own interceptor drops the token and sends them to the
+     * login screen. On a POS or kitchen display, which poll constantly, that is
+     * a matter of seconds.
+     */
+    public function revokeSession(Request $request, int $token): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        $row = DB::table('personal_access_tokens')
+            ->where('id', $token)
+            ->where('tokenable_type', User::class)
+            ->first();
+
+        if (! $row) {
+            return response()->json(['message' => 'That session has already ended.'], 404);
+        }
+
+        if ($token === (int) $request->user()?->currentAccessToken()?->id) {
+            return response()->json([
+                'message' => 'That is the session you are using right now. Use Sign out to end it.',
+            ], 422);
+        }
+
+        $user = User::find($row->tokenable_id);
+
+        DB::table('personal_access_tokens')->where('id', $token)->delete();
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('session_revoked')
+            ->withProperties([
+                'token_id' => $token,
+                'token_name' => $row->name,
+                'target_user_id' => $row->tokenable_id,
+            ])
+            ->log('Signed out one device for '.($user?->name ?? "user {$row->tokenable_id}"));
+
+        return response()->json(['message' => 'Signed that device out.']);
+    }
+
+    /**
+     * Sign one person out of every device they are signed in on.
+     *
+     * This one does broadcast, because here the collateral is the point: every
+     * device holding a token for this person is meant to drop it at once.
+     */
+    public function revokeUserSessions(Request $request, User $user): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        if ($user->id === $request->user()?->id) {
+            return response()->json([
+                'message' => 'You cannot sign yourself out from here. Use Sign out.',
+            ], 422);
+        }
+
+        $tokenNames = DB::table('personal_access_tokens')
+            ->where('tokenable_type', User::class)
+            ->where('tokenable_id', $user->id)
+            ->pluck('name');
+
+        if ($tokenNames->isEmpty()) {
+            return response()->json(['message' => 'They have no active sessions.'], 404);
+        }
+
+        $user->tokens()->delete();
+
+        // One person can hold both kinds at once — the model is one user with
+        // many roles, so a cashier who also orders from the app has a staff
+        // token and a customer token. Each client listens on its own event
+        // name, so both have to go out or one of the two screens hangs on to a
+        // session that no longer exists.
+        if ($tokenNames->contains('employee-auth-token')) {
+            StaffSessionEvent::dispatch($user, 'session.revoked');
+        }
+
+        if ($tokenNames->contains(fn ($name) => $name !== 'employee-auth-token')) {
+            CustomerSessionEvent::dispatch($user);
+        }
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('all_sessions_revoked')
+            ->withProperties([
+                'sessions' => $tokenNames->count(),
+                'target_user_id' => $user->id,
+            ])
+            ->log("Signed {$user->name} out of {$tokenNames->count()} device(s)");
+
+        return response()->json([
+            'message' => "Signed {$user->name} out of {$tokenNames->count()} device(s).",
+        ]);
+    }
+
+    /**
+     * How live a session is, from the last request it made.
+     */
+    private function sessionStatus(Carbon $lastUsed): string
+    {
+        $idle = $lastUsed->diffInSeconds(now());
+
+        return match (true) {
+            $idle <= self::SESSION_ONLINE_SECONDS => 'online',
+            $idle <= self::SESSION_IDLE_SECONDS => 'idle',
+            default => 'away',
+        };
     }
 
     /**

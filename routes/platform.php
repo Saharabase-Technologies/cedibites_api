@@ -16,9 +16,20 @@ Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
     // Smart error feed
     Route::get('errors', [PlatformController::class, 'errors'])->middleware('permission:view_error_logs');
 
+    // Acknowledgements. Same permission as reading the feed: whoever is
+    // expected to act on a fault is the person who can mark it dealt with, and
+    // an acknowledgement is reversible by the route below it.
+    Route::post('errors/acknowledge', [PlatformController::class, 'acknowledgeError'])->middleware('permission:view_error_logs');
+    Route::post('errors/acknowledge-all', [PlatformController::class, 'acknowledgeAllErrors'])->middleware('permission:view_error_logs');
+    Route::post('errors/unacknowledge', [PlatformController::class, 'unacknowledgeError'])->middleware('permission:view_error_logs');
+
     // Failed jobs
     Route::get('failed-jobs', [PlatformController::class, 'failedJobs'])->middleware('permission:view_error_logs');
     Route::post('failed-jobs/retry', [PlatformController::class, 'retryJob'])->middleware('permission:view_error_logs');
+    // Both destroy the payload, so both are passcode-gated in the controller —
+    // a cleared job cannot be retried afterwards.
+    Route::post('failed-jobs/forget', [PlatformController::class, 'forgetJob'])->middleware('permission:view_error_logs');
+    Route::post('failed-jobs/flush', [PlatformController::class, 'flushJobs'])->middleware('permission:view_error_logs');
 
     // Password reset for staff
     Route::post('reset-password', [PlatformController::class, 'resetPassword'])->middleware('permission:reset_passwords');
@@ -27,8 +38,13 @@ Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
     Route::post('staff-passwords', [PlatformController::class, 'staffPasswords'])->middleware('permission:reset_passwords');
     Route::post('view-password', [PlatformController::class, 'viewPassword'])->middleware('permission:reset_passwords');
 
-    // Active sessions
+    // Active sessions. Reading the list is a health question; ending somebody
+    // else's session is not — it takes a working terminal off the floor
+    // mid-service — so the two are gated apart, and both revokes additionally
+    // ask for the passcode.
     Route::get('sessions', [PlatformController::class, 'activeSessions'])->middleware('permission:view_system_health');
+    Route::delete('sessions/{token}', [PlatformController::class, 'revokeSession'])->whereNumber('token')->middleware('permission:manage_platform');
+    Route::delete('sessions/user/{user}', [PlatformController::class, 'revokeUserSessions'])->middleware('permission:manage_platform');
 
     // Platform admin management
     Route::get('admins', [PlatformController::class, 'listAdmins'])->middleware('permission:manage_platform');
