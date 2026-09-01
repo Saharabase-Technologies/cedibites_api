@@ -13,6 +13,7 @@ use App\Models\Employee;
 use App\Models\SmsDeliveryAttempt;
 use App\Models\User;
 use App\Notifications\StaffAccountCreatedNotification;
+use App\Services\SessionDeviceService;
 use App\Services\SmartErrorService;
 use App\Services\SmsHealthService;
 use App\Services\SystemHealthService;
@@ -37,6 +38,7 @@ class PlatformController extends Controller
         private SystemHealthService $healthService,
         private SmartErrorService $errorService,
         private SmsHealthService $smsHealthService,
+        private SessionDeviceService $devices,
     ) {}
 
     /**
@@ -785,43 +787,56 @@ class PlatformController extends Controller
                 'users.phone',
                 'employees.employee_no',
                 'personal_access_tokens.name as token_name',
+                'personal_access_tokens.user_agent',
                 'personal_access_tokens.last_used_at',
                 'personal_access_tokens.created_at as token_created_at',
             ])
             ->orderByDesc('personal_access_tokens.last_used_at')
             ->limit(200)
-            ->get()
-            ->map(function ($t) use ($currentTokenId, $expiration) {
-                $lastUsed = Carbon::parse($t->last_used_at);
-                $created = Carbon::parse($t->token_created_at);
+            ->get();
 
-                return [
-                    'token_id' => (int) $t->token_id,
-                    'user_id' => $t->user_id,
-                    'name' => $t->name,
-                    'phone' => $t->phone,
-                    'employee_no' => $t->employee_no,
-                    'token_type' => $t->token_name === 'employee-auth-token' ? 'staff' : 'customer',
-                    'status' => $this->sessionStatus($lastUsed),
-                    'idle_seconds' => (int) $lastUsed->diffInSeconds(now()),
-                    'last_active' => $lastUsed->toIso8601String(),
-                    'session_started' => $created->toIso8601String(),
-                    'expires_at' => $expiration
-                        ? $created->copy()->addMinutes((int) $expiration)->toIso8601String()
-                        : null,
-                    'is_current' => (int) $t->token_id === (int) $currentTokenId,
-                ];
-            });
+        $posting = $this->postings($tokens->pluck('user_id')->unique()->all());
+
+        $sessions = $tokens->map(function ($t) use ($currentTokenId, $expiration, $posting) {
+            $lastUsed = Carbon::parse($t->last_used_at);
+            $created = Carbon::parse($t->token_created_at);
+            $where = $posting[$t->user_id] ?? ['role' => null, 'branches' => null];
+
+            return [
+                'token_id' => (int) $t->token_id,
+                'user_id' => $t->user_id,
+                'name' => $t->name,
+                'phone' => $t->phone,
+                'employee_no' => $t->employee_no,
+                'role' => $where['role'],
+                // Null for anyone the branch question does not apply to — an
+                // admin or a tech admin belongs to the company, not a branch,
+                // and printing "no branch" against their name reads as a gap in
+                // the data rather than the answer.
+                'branches' => $where['branches'],
+                'token_type' => $t->token_name === 'employee-auth-token' ? 'staff' : 'customer',
+                'device' => $this->devices->classify($t->user_agent),
+                'browser' => $this->devices->browser($t->user_agent),
+                'status' => $this->sessionStatus($lastUsed),
+                'idle_seconds' => (int) $lastUsed->diffInSeconds(now()),
+                'last_active' => $lastUsed->toIso8601String(),
+                'session_started' => $created->toIso8601String(),
+                'expires_at' => $expiration
+                    ? $created->copy()->addMinutes((int) $expiration)->toIso8601String()
+                    : null,
+                'is_current' => (int) $t->token_id === (int) $currentTokenId,
+            ];
+        });
 
         return response()->json([
-            'data' => $tokens,
+            'data' => $sessions,
             'meta' => [
                 // "Right now" is the only figure worth reading at a glance. The
                 // rest of the list is people who used the app today and walked
                 // away without signing out, which is every POS terminal.
-                'online' => $tokens->where('status', 'online')->count(),
-                'idle' => $tokens->where('status', 'idle')->count(),
-                'away' => $tokens->where('status', 'away')->count(),
+                'online' => $sessions->where('status', 'online')->count(),
+                'idle' => $sessions->where('status', 'idle')->count(),
+                'away' => $sessions->where('status', 'away')->count(),
                 'online_window_seconds' => self::SESSION_ONLINE_SECONDS,
                 'idle_window_seconds' => self::SESSION_IDLE_SECONDS,
             ],
@@ -829,16 +844,40 @@ class PlatformController extends Controller
     }
 
     /**
-     * Sign one device out.
+     * Role and branch for each signed-in person, in one pass.
      *
-     * Deliberately does NOT broadcast. `StaffSessionEvent` and
-     * `CustomerSessionEvent` go to `App.Models.User.{id}`, which every one of
-     * that person's devices is subscribed to — so broadcasting here would clear
-     * the session on their phone as well as the terminal you meant to reach.
-     * The device instead discovers it on its next request: the API returns 401
-     * and the client's own interceptor drops the token and sends them to the
-     * login screen. On a POS or kitchen display, which poll constantly, that is
-     * a matter of seconds.
+     * Branches come back null rather than empty for company-wide roles.
+     * `isCompanyWide()` reads the role's branch rule, and an admin genuinely
+     * having no branch row is the correct state for them — the distinction
+     * matters because an empty list on a cashier means something has gone
+     * wrong, and on an admin it means nothing at all.
+     *
+     * @param  array<int, int>  $userIds
+     * @return array<int, array{role: string|null, branches: array<int, string>|null}>
+     */
+    private function postings(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        return User::query()
+            ->whereIn('id', $userIds)
+            ->with(['roles:id,name', 'employee.branches:id,name'])
+            ->get()
+            ->mapWithKeys(fn (User $user) => [
+                $user->id => [
+                    'role' => $user->getRoleNames()->first(),
+                    'branches' => $user->isCompanyWide()
+                        ? null
+                        : $user->employee?->branches->pluck('name')->values()->all(),
+                ],
+            ])
+            ->all();
+    }
+
+    /**
+     * Sign one device out.
      */
     public function revokeSession(Request $request, int $token): JsonResponse
     {
@@ -863,6 +902,8 @@ class PlatformController extends Controller
 
         DB::table('personal_access_tokens')->where('id', $token)->delete();
 
+        $this->announceIfFullySignedOut($user);
+
         activity('platform')
             ->causedBy($request->user())
             ->event('session_revoked')
@@ -877,10 +918,69 @@ class PlatformController extends Controller
     }
 
     /**
-     * Sign one person out of every device they are signed in on.
+     * Sign out a set of devices in one go.
      *
-     * This one does broadcast, because here the collateral is the point: every
-     * device holding a token for this person is meant to drop it at once.
+     * The client sends the token ids it can actually see rather than a category
+     * name, so a till that came online between the page rendering and the
+     * button being pressed is not swept up with the ones the reader looked at.
+     * Their own session is skipped rather than refused — one live session in a
+     * selection of forty is not a reason to make somebody redo the selection.
+     */
+    public function revokeSessions(Request $request): JsonResponse
+    {
+        $this->verifyPasscode($request);
+
+        $validated = $request->validate([
+            'token_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'token_ids.*' => ['required', 'integer'],
+        ]);
+
+        $currentTokenId = (int) $request->user()?->currentAccessToken()?->id;
+        $requested = collect($validated['token_ids'])->map(fn ($id) => (int) $id)->unique();
+        $skippedSelf = $requested->contains($currentTokenId);
+
+        $targets = DB::table('personal_access_tokens')
+            ->whereIn('id', $requested->reject(fn ($id) => $id === $currentTokenId)->all())
+            ->where('tokenable_type', User::class)
+            ->get(['id', 'tokenable_id']);
+
+        if ($targets->isEmpty()) {
+            return response()->json([
+                'message' => $skippedSelf
+                    ? 'The only session selected was your own.'
+                    : 'Those sessions have already ended.',
+            ], 404);
+        }
+
+        DB::table('personal_access_tokens')->whereIn('id', $targets->pluck('id'))->delete();
+
+        $users = User::whereIn('id', $targets->pluck('tokenable_id')->unique())->get();
+
+        foreach ($users as $user) {
+            $this->announceIfFullySignedOut($user);
+        }
+
+        $count = $targets->count();
+
+        activity('platform')
+            ->causedBy($request->user())
+            ->event('sessions_revoked')
+            ->withProperties([
+                'sessions' => $count,
+                'people' => $users->count(),
+                'target_user_ids' => $users->pluck('id')->all(),
+            ])
+            ->log("Signed out {$count} device(s) across {$users->count()} person/people");
+
+        $message = "Signed out {$count} device".($count === 1 ? '' : 's').'.';
+
+        return response()->json([
+            'message' => $skippedSelf ? $message.' Your own session was left alone.' : $message,
+        ]);
+    }
+
+    /**
+     * Sign one person out of every device they are signed in on.
      */
     public function revokeUserSessions(Request $request, User $user): JsonResponse
     {
@@ -903,18 +1003,7 @@ class PlatformController extends Controller
 
         $user->tokens()->delete();
 
-        // One person can hold both kinds at once — the model is one user with
-        // many roles, so a cashier who also orders from the app has a staff
-        // token and a customer token. Each client listens on its own event
-        // name, so both have to go out or one of the two screens hangs on to a
-        // session that no longer exists.
-        if ($tokenNames->contains('employee-auth-token')) {
-            StaffSessionEvent::dispatch($user, 'session.revoked');
-        }
-
-        if ($tokenNames->contains(fn ($name) => $name !== 'employee-auth-token')) {
-            CustomerSessionEvent::dispatch($user);
-        }
+        $this->announce($user, $tokenNames);
 
         activity('platform')
             ->causedBy($request->user())
@@ -928,6 +1017,47 @@ class PlatformController extends Controller
         return response()->json([
             'message' => "Signed {$user->name} out of {$tokenNames->count()} device(s).",
         ]);
+    }
+
+    /**
+     * Tell a person's screens to clear, but only once nothing is left to clear.
+     *
+     * `StaffSessionEvent` and `CustomerSessionEvent` publish to
+     * `App.Models.User.{id}`, which every device that person holds is
+     * subscribed to. There is no way to address one device, so the broadcast is
+     * only safe when no device is meant to survive — otherwise ending the till
+     * would sign them out of the phone in their pocket too. When a session does
+     * survive, the revoked device finds out on its next request: 401, and the
+     * client's own interceptor drops the token and sends it to the login
+     * screen. On a POS or kitchen display, which poll constantly, that is a
+     * matter of seconds.
+     */
+    private function announceIfFullySignedOut(?User $user): void
+    {
+        if (! $user || $user->tokens()->exists()) {
+            return;
+        }
+
+        $this->announce($user, collect(['employee-auth-token', 'auth-token']));
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, string>  $tokenNames
+     */
+    private function announce(User $user, $tokenNames): void
+    {
+        // One person can hold both kinds at once — the model is one user with
+        // many roles, so a cashier who also orders from the app has a staff
+        // token and a customer token. Each client listens on its own event
+        // name, so both have to go out or one of the two screens hangs on to a
+        // session that no longer exists.
+        if ($tokenNames->contains('employee-auth-token')) {
+            StaffSessionEvent::dispatch($user, 'session.revoked');
+        }
+
+        if ($tokenNames->contains(fn ($name) => $name !== 'employee-auth-token')) {
+            CustomerSessionEvent::dispatch($user);
+        }
     }
 
     /**

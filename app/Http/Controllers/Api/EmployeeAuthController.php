@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Enums\EmployeeStatus;
 use App\Events\StaffSessionEvent;
 use App\Http\Controllers\Controller;
+use App\Services\SessionDeviceService;
 use App\Http\Requests\EmployeeLoginRequest;
 use App\Http\Requests\ForgotPasswordRequest;
 use App\Http\Requests\ResetPasswordRequest;
@@ -69,7 +70,9 @@ class EmployeeAuthController extends Controller
         // active-employee check and the password-reset gate above. A customer
         // OTP login on the same phone yields a `customer` token that cannot
         // reach any of it.
-        $token = $user->createToken('employee-auth-token', ['staff'])->plainTextToken;
+        $newToken = $user->createToken('employee-auth-token', ['staff']);
+        app(SessionDeviceService::class)->stamp($newToken->accessToken, $request);
+        $token = $newToken->plainTextToken;
 
         activity('auth')
             ->causedBy($user)
