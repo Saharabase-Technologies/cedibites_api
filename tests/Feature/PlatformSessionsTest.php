@@ -3,8 +3,10 @@
 use App\Enums\EmployeeStatus;
 use App\Events\CustomerSessionEvent;
 use App\Events\StaffSessionEvent;
+use App\Models\Branch;
 use App\Models\Employee;
 use App\Models\User;
+use App\Services\SessionDeviceService;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Support\Facades\DB;
@@ -215,4 +217,182 @@ it('says so plainly when there is nothing to end', function () {
     $this->actingAs($admin, 'sanctum')
         ->deleteJson("/v1/platform/sessions/user/{$nobody->id}", ['passcode' => PASSCODE])
         ->assertStatus(404);
+});
+
+/*
+|--------------------------------------------------------------------------
+| What machine, and which branch
+|--------------------------------------------------------------------------
+*/
+
+it('tells a phone from a tablet from a till', function () {
+    $service = app(SessionDeviceService::class);
+
+    expect($service->classify('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1'))->toBe('mobile')
+        ->and($service->classify('Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36'))->toBe('mobile')
+        ->and($service->classify('Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1'))->toBe('tablet')
+        // Every Android tablet also says "Android"; only the absence of
+        // "Mobile" separates it from a phone.
+        ->and($service->classify('Mozilla/5.0 (Linux; Android 13; SM-X200) AppleWebKit/537.36 Chrome/120 Safari/537.36'))->toBe('tablet')
+        ->and($service->classify('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'))->toBe('desktop')
+        ->and($service->classify('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1'))->toBe('desktop')
+        ->and($service->classify(null))->toBe('unknown')
+        ->and($service->classify(''))->toBe('unknown');
+});
+
+it('names the browser without being fooled by the ones that impersonate Chrome', function () {
+    $service = app(SessionDeviceService::class);
+
+    // Edge and Opera both carry "chrome" in their strings, and Chrome carries
+    // "safari" — order in the match is what keeps these apart.
+    expect($service->browser('Mozilla/5.0 Chrome/120 Safari/537.36 Edg/120'))->toBe('Edge')
+        ->and($service->browser('Mozilla/5.0 Chrome/120 Safari/537.36 OPR/106'))->toBe('Opera')
+        ->and($service->browser('Mozilla/5.0 Chrome/120 Safari/537.36'))->toBe('Chrome')
+        ->and($service->browser('Mozilla/5.0 (Macintosh) Version/17.0 Safari/605.1'))->toBe('Safari')
+        ->and($service->browser(null))->toBeNull();
+});
+
+it('records the device a session was signed in on', function () {
+    $this->seed(PermissionSeeder::class);
+    $this->seed(RoleSeeder::class);
+
+    $user = User::factory()->create([
+        'password' => Hash::make('secret-pass-1'),
+        'must_reset_password' => false,
+    ]);
+    $employee = Employee::factory()->create([
+        'user_id' => $user->id,
+        'status' => EmployeeStatus::Active,
+    ]);
+    $user->assignRole('sales_staff');
+
+    $this->withHeaders([
+        'User-Agent' => 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
+    ])->postJson('/v1/employee/login', [
+        'identifier' => $user->phone,
+        'password' => 'secret-pass-1',
+    ])->assertOk();
+
+    $token = DB::table('personal_access_tokens')
+        ->where('tokenable_id', $user->id)
+        ->first();
+
+    expect($token)->not->toBeNull()
+        ->and($token->user_agent)->toContain('iPad');
+});
+
+it('names the branch for branch staff and leaves it off for company-wide roles', function () {
+    $admin = techAdmin();
+
+    $branch = Branch::factory()->create(['name' => 'Ashaiman']);
+
+    $cashier = User::factory()->create(['name' => 'Ama']);
+    $cashierEmployee = Employee::factory()->create([
+        'user_id' => $cashier->id,
+        'status' => EmployeeStatus::Active,
+    ]);
+    $cashierEmployee->branches()->attach($branch->id);
+    $cashier->assignRole('sales_staff');
+
+    $boss = User::factory()->create(['name' => 'Kojo']);
+    Employee::factory()->create(['user_id' => $boss->id, 'status' => EmployeeStatus::Active]);
+    $boss->assignRole('admin');
+
+    sessionFor($cashier);
+    sessionFor($boss);
+
+    $rows = collect(
+        $this->actingAs($admin, 'sanctum')->getJson('/v1/platform/sessions')->json('data')
+    )->keyBy('name');
+
+    expect($rows['Ama']['branches'])->toBe(['Ashaiman'])
+        // Null, not an empty list. An admin belongs to the company, and
+        // printing "no branch" against their name reads as missing data rather
+        // than the answer.
+        ->and($rows['Kojo']['branches'])->toBeNull();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Signing out a whole category
+|--------------------------------------------------------------------------
+*/
+
+it('signs out a selection of devices in one go', function () {
+    $admin = techAdmin();
+
+    $one = User::factory()->create();
+    $two = User::factory()->create();
+
+    $a = sessionFor($one, idleSeconds: 7200);
+    $b = sessionFor($two, idleSeconds: 7200);
+    $keep = sessionFor($two, idleSeconds: 10);
+
+    $this->actingAs($admin, 'sanctum')->postJson('/v1/platform/sessions/revoke', [
+        'token_ids' => [$a, $b],
+        'passcode' => PASSCODE,
+    ])->assertOk();
+
+    expect(DB::table('personal_access_tokens')->whereIn('id', [$a, $b])->count())->toBe(0)
+        ->and(DB::table('personal_access_tokens')->where('id', $keep)->exists())->toBeTrue();
+});
+
+it('skips the admin\'s own session rather than refusing the whole batch', function () {
+    // One live session in a selection of forty is not a reason to make somebody
+    // redo the selection.
+    $admin = techAdmin();
+    $other = User::factory()->create();
+    $theirs = sessionFor($other);
+
+    $mine = $admin->createToken('employee-auth-token', ['staff']);
+
+    $response = $this->withToken($mine->plainTextToken)->postJson('/v1/platform/sessions/revoke', [
+        'token_ids' => [$mine->accessToken->id, $theirs],
+        'passcode' => PASSCODE,
+    ]);
+
+    $response->assertOk();
+
+    expect(DB::table('personal_access_tokens')->where('id', $mine->accessToken->id)->exists())->toBeTrue()
+        ->and(DB::table('personal_access_tokens')->where('id', $theirs)->exists())->toBeFalse()
+        ->and($response->json('message'))->toContain('own session');
+});
+
+it('needs the passcode for a bulk sign-out', function () {
+    $admin = techAdmin();
+    $other = User::factory()->create();
+    $token = sessionFor($other);
+
+    $this->actingAs($admin, 'sanctum')->postJson('/v1/platform/sessions/revoke', [
+        'token_ids' => [$token],
+        'passcode' => '000000',
+    ])->assertStatus(403);
+
+    expect(DB::table('personal_access_tokens')->where('id', $token)->exists())->toBeTrue();
+});
+
+it('tells the screens to clear only once nothing of theirs is left', function () {
+    Event::fake([StaffSessionEvent::class, CustomerSessionEvent::class]);
+
+    $admin = techAdmin();
+    $person = User::factory()->create();
+
+    $till = sessionFor($person, 'employee-auth-token');
+    $phone = sessionFor($person, 'auth-token');
+
+    // First device: a session survives, so a broadcast would clear the screen
+    // of a device that is still legitimately signed in.
+    $this->actingAs($admin, 'sanctum')
+        ->deleteJson("/v1/platform/sessions/{$till}", ['passcode' => PASSCODE])
+        ->assertOk();
+
+    Event::assertNotDispatched(StaffSessionEvent::class);
+    Event::assertNotDispatched(CustomerSessionEvent::class);
+
+    // Last one: nothing is meant to survive, so telling them is free.
+    $this->actingAs($admin, 'sanctum')
+        ->deleteJson("/v1/platform/sessions/{$phone}", ['passcode' => PASSCODE])
+        ->assertOk();
+
+    Event::assertDispatched(CustomerSessionEvent::class);
 });

@@ -43,6 +43,7 @@ Route::middleware('role:tech_admin')->prefix('platform')->group(function () {
     // mid-service — so the two are gated apart, and both revokes additionally
     // ask for the passcode.
     Route::get('sessions', [PlatformController::class, 'activeSessions'])->middleware('permission:view_system_health');
+    Route::post('sessions/revoke', [PlatformController::class, 'revokeSessions'])->middleware('permission:manage_platform');
     Route::delete('sessions/{token}', [PlatformController::class, 'revokeSession'])->whereNumber('token')->middleware('permission:manage_platform');
     Route::delete('sessions/user/{user}', [PlatformController::class, 'revokeUserSessions'])->middleware('permission:manage_platform');
 

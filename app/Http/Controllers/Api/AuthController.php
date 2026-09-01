@@ -16,6 +16,7 @@ use App\Notifications\OtpNotification;
 use App\Notifications\WelcomeNotification;
 use App\Services\HubtelSmsService;
 use App\Services\OTPService;
+use App\Services\SessionDeviceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -118,7 +119,9 @@ class AuthController extends Controller
                 $user->customer->update(['is_guest' => false]);
             }
 
-            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
+            $newToken = $user->createToken('auth-token', ['customer']);
+            app(SessionDeviceService::class)->stamp($newToken->accessToken, $request);
+            $token = $newToken->plainTextToken;
 
             activity('auth')
                 ->causedBy($user)
@@ -170,7 +173,9 @@ class AuthController extends Controller
             // Send welcome notification
             $user->notify(new WelcomeNotification);
 
-            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
+            $newToken = $user->createToken('auth-token', ['customer']);
+            app(SessionDeviceService::class)->stamp($newToken->accessToken, $request);
+            $token = $newToken->plainTextToken;
 
             return response()->created([
                 'token' => $token,
@@ -275,7 +280,9 @@ class AuthController extends Controller
                 ]);
             }
 
-            $token = $user->createToken('auth-token', ['customer'])->plainTextToken;
+            $newToken = $user->createToken('auth-token', ['customer']);
+            app(SessionDeviceService::class)->stamp($newToken->accessToken, $request);
+            $token = $newToken->plainTextToken;
 
             return response()->created([
                 'token' => $token,
