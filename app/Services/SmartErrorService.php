@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AcknowledgedError;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +19,7 @@ class SmartErrorService
      *
      * @return array<string, mixed>
      */
-    public function getFeed(int $limit = 50): array
+    public function getFeed(int $limit = 50, bool $includeAcknowledged = false): array
     {
         $errors = collect();
 
@@ -28,13 +29,83 @@ class SmartErrorService
             ->merge($this->paymentErrors())
             ->merge($this->recentExceptions())
             ->sortByDesc('timestamp')
-            ->take($limit)
             ->values();
 
+        $errors = $this->applyAcknowledgements($errors);
+
+        $outstanding = $errors->reject(fn ($e) => $e['acknowledged'])->values();
+        $acknowledged = $errors->filter(fn ($e) => $e['acknowledged'])->values();
+
+        $visible = $includeAcknowledged ? $errors : $outstanding;
+
         return [
-            'errors' => $errors->toArray(),
-            'summary' => $this->summary($errors),
+            'errors' => $visible->take($limit)->values()->toArray(),
+            'summary' => $this->summary($outstanding) + [
+                'acknowledged' => $acknowledged->count(),
+            ],
         ];
+    }
+
+    /**
+     * Stamp every error with its fingerprint and mark the ones already dealt with.
+     *
+     * An acknowledgement is a watermark, not a mute: it hides the fault only
+     * while the newest occurrence is older than the moment somebody dismissed
+     * it. The instant the same fault happens again it returns to the feed
+     * unacknowledged, which is the whole point — the reader is meant to notice
+     * new ones, not lose old ones.
+     *
+     * @param  Collection<int, array<string, mixed>>  $errors
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function applyAcknowledgements(Collection $errors): Collection
+    {
+        $errors = $errors->map(function (array $error) {
+            $error['fingerprint'] = $this->fingerprint($error);
+
+            return $error;
+        });
+
+        $acks = AcknowledgedError::query()
+            ->whereIn('fingerprint', $errors->pluck('fingerprint')->unique()->all())
+            ->get()
+            ->keyBy('fingerprint');
+
+        return $errors->map(function (array $error) use ($acks) {
+            $ack = $acks->get($error['fingerprint']);
+
+            $stillSilenced = $ack
+                && Carbon::parse($error['timestamp'])->lte($ack->acknowledged_at);
+
+            $error['acknowledged'] = (bool) $stillSilenced;
+            $error['acknowledged_at'] = $stillSilenced ? $ack->acknowledged_at->toIso8601String() : null;
+            $error['acknowledged_by'] = $stillSilenced ? $ack->acknowledgedBy?->name : null;
+
+            return $error;
+        });
+    }
+
+    /**
+     * A key for "this same fault", stable across occurrences.
+     *
+     * The feed's own `id` cannot be used. Log-file exceptions carry a
+     * positional index that shifts every time the log grows, and job ids and
+     * attempt counts change on every recurrence — so acknowledging by `id`
+     * would silence one sighting of a fault and let the next one through
+     * looking brand new. Hashing the category with a title stripped of every
+     * number, id and quoted value collapses all of that onto one key.
+     */
+    public function fingerprint(array $error): string
+    {
+        $title = mb_strtolower($error['title'] ?? '');
+
+        $normalised = preg_replace(
+            ['/[0-9a-f]{8}-[0-9a-f-]{27,}/i', '/\d+/', '/[\'"][^\'"]*[\'"]/', '/\s+/'],
+            ['<uuid>', '<n>', '<value>', ' '],
+            $title
+        );
+
+        return hash('sha256', ($error['category'] ?? 'unknown').'|'.trim((string) $normalised));
     }
 
     /**
