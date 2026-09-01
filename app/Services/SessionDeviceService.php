@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\PersonalAccessToken;
 
 /**
@@ -18,16 +19,27 @@ class SessionDeviceService
     /**
      * Record the device a freshly minted token was issued to.
      *
-     * Called right after `createToken`. A failure here must never take a login
-     * down with it — this is a label on a session, not part of authenticating
-     * one — so it is deliberately forgiving of a missing or absurd user agent.
+     * Called right after `createToken`, and deliberately unable to fail the
+     * call it sits inside. This is a label on a session, not part of
+     * authenticating one, and there is a real window where it would otherwise
+     * throw: a deploy pulls the code before it runs the migrations, so for a
+     * few seconds this method is live against a table that has no `user_agent`
+     * column yet. Nobody should be unable to sign in to a till because we
+     * wanted to know what browser they were on.
      */
     public function stamp(PersonalAccessToken $token, Request $request): void
     {
-        $token->forceFill([
-            'user_agent' => mb_substr((string) $request->userAgent(), 0, 1000) ?: null,
-            'ip_address' => $request->ip(),
-        ])->save();
+        try {
+            $token->forceFill([
+                'user_agent' => mb_substr((string) $request->userAgent(), 0, 1000) ?: null,
+                'ip_address' => $request->ip(),
+            ])->save();
+        } catch (\Throwable $e) {
+            Log::warning('Could not record the device for a new session', [
+                'token_id' => $token->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
