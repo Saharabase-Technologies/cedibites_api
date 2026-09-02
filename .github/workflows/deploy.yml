@@ -8,17 +8,38 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          envs: GH_TOKEN
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -e
             cd /var/www/production/laravel/cedibites_api
-            git fetch origin master
+            # GitHub stopped serving anonymous git fetches to this server on
+            # 2026-09-02. Every GET still works, but the git-upload-pack POST
+            # that carries the objects returns 401 with
+            # `www-authenticate: Basic realm="GitHub"`. The repos are public and
+            # the server's credential store has been empty since June, so these
+            # deploys had been relying on anonymous access all along.
+            #
+            # Deploy keys are disabled by org policy, so the fetch authenticates
+            # with the workflow's own GITHUB_TOKEN. It is minted for this job and
+            # expires with it, so nothing long-lived is stored on the server.
+            # `-c` keeps the header on this one command rather than writing it
+            # into .git/config.
+            #
+            # Trap: `git ls-remote` keeps working, because it only performs the
+            # discovery GET. It will tell you the box is fine while every actual
+            # fetch fails.
+            git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" fetch origin master
             git reset --hard origin/master
             composer install --no-dev --optimize-autoloader
             php artisan config:clear
