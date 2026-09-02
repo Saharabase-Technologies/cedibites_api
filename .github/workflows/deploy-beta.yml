@@ -55,6 +55,15 @@ jobs:
 
             php artisan migrate --force
 
+            # Idempotent, and beta went without it. Uploads land on the `public`
+            # disk and are served from APP_URL/storage, which is public/storage,
+            # which is a symlink this command creates. Beta never had it, so six
+            # uploaded staff-message images sat on disk while every URL to them
+            # returned 404. It read as "the image is broken on the What's new
+            # notice" and cost a long hunt, because prod happened to have the
+            # link already and menu photos therefore worked fine there.
+            php artisan storage:link
+
             # Permissions & roles are the source of truth — re-sync every deploy so
             # code that references new grants works without needing a migration.
             # All three seeders are idempotent, so re-running them is safe.
