@@ -47,6 +47,9 @@ class OrderResource extends JsonResource
             // shows "Print receipt" until it has, and "Reprint" after.
             'receipt_printed_at' => $this->receipt_printed_at?->toISOString(),
             'receipt_print_count' => (int) $this->receipt_print_count,
+            // Printed into the QR on the slip. Safe to hand to staff screens:
+            // it is the receipt's own identifier, not a credential.
+            'receipt_verification_code' => $this->receipt_verification_code,
             'assigned_employee_id' => $this->assigned_employee_id,
             'staff_name' => $this->assignedEmployee?->user?->name,
             'assigned_employee' => $this->assignedEmployee ? [

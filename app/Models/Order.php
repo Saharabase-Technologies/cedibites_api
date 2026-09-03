@@ -85,6 +85,7 @@ class Order extends Model
         'recorded_at',
         'receipt_printed_at',
         'receipt_print_count',
+        'receipt_verification_code',
         'momo_number',
         'internal_notes',
     ];
@@ -128,11 +129,36 @@ class Order extends Model
     protected static function booted(): void
     {
         static::creating(function (self $order) {
+            // Every order gets one, whatever path created it. Assigned here
+            // rather than in the creation services because there are two of
+            // those and a third would be easy to forget; an order with no code
+            // is a receipt that can never be verified.
+            if ($order->receipt_verification_code === null) {
+                $order->receipt_verification_code = static::freshVerificationCode();
+            }
+
             if ($order->estimated_prep_time === null) {
                 $order->estimated_prep_time = app(\App\Domain\Orders\PrepTimeEstimator::class)
                     ->forBranch($order->branch_id ? (int) $order->branch_id : null);
             }
         });
+    }
+
+    /**
+     * A receipt code nothing else is using.
+     *
+     * The column is unique, so a collision would throw on insert and lose the
+     * order. Random(24) makes that vanishingly unlikely, but "vanishingly" is
+     * not "never" across enough orders, and losing a sale to a coin flip is not
+     * a trade worth making for one saved query.
+     */
+    public static function freshVerificationCode(): string
+    {
+        do {
+            $code = \Illuminate\Support\Str::random(24);
+        } while (static::where('receipt_verification_code', $code)->exists());
+
+        return $code;
     }
 
     /**

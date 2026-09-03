@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PromoController;
+use App\Http\Controllers\Api\ReceiptVerificationController;
 use App\Http\Controllers\Api\RecruitmentController;
 use App\Http\Controllers\Api\ShortLinkController;
 use App\Http\Controllers\Api\SmartCategoryController;
@@ -17,6 +18,14 @@ Route::prefix('employee')->group(function () {
     Route::post('login', [EmployeeAuthController::class, 'login'])->middleware('throttle:5,1');
     Route::post('check-identifier', [EmployeeAuthController::class, 'checkIdentifier'])->middleware('throttle:10,1');
 });
+
+// A customer scanning the QR on a printed receipt. Public because the scanner
+// is a customer, not staff; the random code in the URL is the whole credential,
+// and a wrong one 404s without saying whether the order exists. Throttled
+// because it is unauthenticated and takes a lookup key straight from the URL.
+Route::get('receipts/{code}/verify', [ReceiptVerificationController::class, 'verify'])
+    ->middleware('throttle:30,1')
+    ->name('receipts.verify');
 
 Route::get('branches', [BranchController::class, 'index']);
 Route::get('branches/by-name/{name}', [BranchController::class, 'getByName']);
