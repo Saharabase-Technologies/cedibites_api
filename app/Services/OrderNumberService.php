@@ -11,6 +11,11 @@ class OrderNumberService
      * Generate a unique order number, retrying inside a transaction if two
      * concurrent requests race to the same value. The orders table must have
      * a unique index on order_number to make this safe.
+     *
+     * Every read here includes soft-deleted orders. The unique index counts a
+     * soft-deleted row, so a generator that cannot see one will hand out a
+     * number the insert then rejects. Deleting the newest order is enough to
+     * jam the series until somebody notices.
      */
     public function generate(): string
     {
@@ -18,7 +23,7 @@ class OrderNumberService
             $last = $this->lastAlphabeticCode();
             $next = $last ? $this->increment($last) : 'A001';
 
-            while (Order::lockForUpdate()->where('order_number', $next)->exists()) {
+            while (Order::withTrashed()->lockForUpdate()->where('order_number', $next)->exists()) {
                 $next = $this->increment($next);
             }
 
@@ -28,7 +33,7 @@ class OrderNumberService
 
     private function lastAlphabeticCode(): ?string
     {
-        $candidates = Order::query()
+        $candidates = Order::withTrashed()
             ->pluck('order_number')
             ->filter(fn (string $n) => (bool) preg_match('/^[A-Z]+\d{3}$/', $n));
 
