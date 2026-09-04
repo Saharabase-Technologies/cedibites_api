@@ -98,10 +98,38 @@ class EmployeeOrderController extends Controller
             return response()->error('You can only print receipts for orders at your branch.', 403);
         }
 
+        // The server's clock, never the caller's. A till at Ashaiman printed a
+        // reprint stamped an hour before the order it belonged to, because the
+        // only timestamp on that slip not coming from here was the one the
+        // machine supplied. Nothing about a print time is accepted from the
+        // request.
+        $printedAt = now();
+
+        // Decided here rather than trusted from the client for the same reason
+        // the timestamp is. The count is the server's, so what the slip is is
+        // the server's too.
+        $isOriginal = $order->receipt_print_count === 0;
+
         $order->forceFill([
-            'receipt_printed_at' => $order->receipt_printed_at ?? now(),
+            'receipt_printed_at' => $order->receipt_printed_at ?? $printedAt,
             'receipt_print_count' => $order->receipt_print_count + 1,
         ])->save();
+
+        // One row per slip. `receipt_printed_at` holds only the first print and
+        // the count is a bare total, so before this there was no way to say
+        // when a reprint happened or who produced it — which is exactly what
+        // gets asked when a customer brings a receipt back.
+        $order->receiptPrints()->create([
+            'employee_id' => $employee?->id,
+            'user_id' => $user->id,
+            'kind' => $isOriginal ? 'original' : 'reprint',
+            // The original is print 1, so the first reprint is number 1, the
+            // next 2. Matches what the slip itself says.
+            'reprint_number' => $isOriginal ? null : $order->receipt_print_count - 1,
+            'copies' => $isOriginal ? 2 : 1,
+            'source' => $request->input('source'),
+            'printed_at' => $printedAt,
+        ]);
 
         return response()->success(
             new OrderResource($order->fresh()->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments'])),

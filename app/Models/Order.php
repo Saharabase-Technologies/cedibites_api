@@ -184,6 +184,12 @@ class Order extends Model
         return round((float) $this->total_amount - (float) $this->delivery_fee, 2);
     }
 
+    /** Every receipt ever produced for this order, oldest first. */
+    public function receiptPrints(): HasMany
+    {
+        return $this->hasMany(OrderReceiptPrint::class)->orderBy('printed_at');
+    }
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
