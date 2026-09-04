@@ -33,4 +33,14 @@ class CampaignFactory extends Factory
             'started_at' => now(),
         ]);
     }
+
+    /** Gone out and finished. Nothing about it can be edited, tested or resent. */
+    public function sent(): static
+    {
+        return $this->state(fn () => [
+            'status' => CampaignStatus::Sent,
+            'started_at' => now()->subMinutes(5),
+            'completed_at' => now(),
+        ]);
+    }
 }

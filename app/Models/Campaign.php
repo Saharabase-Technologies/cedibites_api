@@ -69,6 +69,9 @@ class Campaign extends Model
         'approved_by_user_id',
         'started_at',
         'completed_at',
+        'last_tested_at',
+        'last_tested_phone',
+        'last_tested_by_user_id',
     ];
 
     protected function casts(): array
@@ -81,6 +84,7 @@ class Campaign extends Model
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
             'delivery_checked_at' => 'datetime',
+            'last_tested_at' => 'datetime',
             'batch_ids' => 'array',
             'delivered_count' => 'integer',
             'estimated_cost' => 'decimal:4',
@@ -120,6 +124,12 @@ class Campaign extends Model
     public function shortLink(): BelongsTo
     {
         return $this->belongsTo(ShortLink::class);
+    }
+
+    /** Who last sent themselves a copy of this before it went out. */
+    public function lastTestedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'last_tested_by_user_id');
     }
 
     /** Per-recipient detail. Prunable — see the migration. */

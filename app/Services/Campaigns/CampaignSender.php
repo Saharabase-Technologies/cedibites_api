@@ -47,7 +47,7 @@ class CampaignSender
         $recipients = $this->recipientsFor($campaign);
         $effective = count($recipients);
 
-        $cap = (int) config('campaigns.recipient_cap', 2000);
+        $cap = $this->recipientCap();
 
         return [
             // What the segment actually holds, always reported honestly even in
@@ -64,8 +64,11 @@ class CampaignSender
 
             'estimated_cost' => $this->meter->estimateCost($campaign->message, $effective),
 
+            // 0 means there is no cap. The frontend already reads it that way,
+            // so an open console reports the same shape as a capped one rather
+            // than needing a second field to say "ignore the number above".
             'cap' => $cap,
-            'over_cap' => ! $this->seedMode() && $audienceSize > $cap,
+            'over_cap' => $this->overCap($audienceSize),
         ];
     }
 
@@ -88,11 +91,10 @@ class CampaignSender
             throw new RuntimeException('Nobody is in that segment right now, so there is nothing to send.');
         }
 
-        if (! $this->seedMode() && count($recipients) > (int) config('campaigns.recipient_cap', 2000)) {
-            $cap = (int) config('campaigns.recipient_cap', 2000);
-
+        if ($this->overCap(count($recipients))) {
             throw new RuntimeException(
-                'That segment holds '.number_format(count($recipients)).' people, over the '.number_format($cap).
+                'That segment holds '.number_format(count($recipients)).' people, over the '.
+                number_format($this->recipientCap()).
                 ' limit for one campaign. Raise the limit deliberately, or pick a narrower segment.'
             );
         }
@@ -235,6 +237,33 @@ class CampaignSender
         return $rules->isEmpty()
             ? $this->audience->count($campaign->segment)
             : $this->audience->countRules($rules);
+    }
+
+    /**
+     * The most people one campaign may reach, or 0 for no limit.
+     *
+     * 0 is the default and the ordinary case. There was a 2,000 ceiling here
+     * until the whole customer base became the point rather than the accident;
+     * config/campaigns.php has the reasoning and the env value that puts a
+     * figure back.
+     */
+    public function recipientCap(): int
+    {
+        return max(0, (int) config('campaigns.recipient_cap', 0));
+    }
+
+    /**
+     * Whether this many people is more than one campaign is allowed to reach.
+     *
+     * False whenever the cap is 0, and false in seed mode whatever the audience
+     * holds — seed mode texts the staff list, so the size of the segment behind
+     * it is a reported figure and not a bill.
+     */
+    public function overCap(int $audienceSize): bool
+    {
+        $cap = $this->recipientCap();
+
+        return $cap > 0 && ! $this->seedMode() && $audienceSize > $cap;
     }
 
     public function seedMode(): bool
