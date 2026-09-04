@@ -14,7 +14,7 @@ use Illuminate\Support\Collection;
  * alongside the ones that genuinely needed a pan, and the board is meant to
  * show what is outstanding.
  *
- * Two rules, and the reasoning matters more than the code:
+ * Three rules, and the reasoning matters more than the code:
  *
  *  1. **One line that needs cooking keeps the whole ticket on the board.** A
  *     burger with a Coke is still a burger. The alternative — splitting it into
@@ -28,6 +28,16 @@ use Illuminate\Support\Collection;
  *     complete. Ordered online, the same two drinks still have to be picked and
  *     given to a rider, so it lands in Ready with the Complete button waiting.
  *     Nothing is ever marked done without a person doing it.
+ *
+ *  3. **A sale rung up at the till opens already accepted.** Accepting an order
+ *     means a person has taken responsibility for it, and at the till that
+ *     already happened: the cashier took the money. Opening it in New asked
+ *     that same cashier to walk to the board and acknowledge their own sale,
+ *     which 355 of 359 of them duly did, a median of 45 seconds later. The
+ *     click recorded nothing the order row did not already hold, because
+ *     `assigned_employee_id` is written from the till session at creation.
+ *     Online and WhatsApp still open in New, where somebody genuinely does
+ *     have to accept.
  */
 final class PreparationRouter
 {
@@ -49,16 +59,22 @@ final class PreparationRouter
      */
     public function initialStatus(Collection $menuItems, string $orderSource): string
     {
+        // Where it was taken decides what "waiting" means. At the till the
+        // sale is already somebody's, so there is nobody left to accept it.
+        $openingStatus = in_array($orderSource, self::HANDED_OVER_AT_THE_TILL, true)
+            ? 'accepted'
+            : 'received';
+
         // No idea what is on it — treat it as normal work.
         if ($menuItems->isEmpty()) {
-            return 'received';
+            return $openingStatus;
         }
 
         $this->ensureCategoriesLoaded($menuItems);
 
         foreach ($menuItems as $menuItem) {
             if ($menuItem->requiresPreparation()) {
-                return 'received';
+                return $openingStatus;
             }
         }
 
@@ -70,10 +86,19 @@ final class PreparationRouter
     /**
      * True when the order never needed the kitchen. Useful for callers that
      * want to skip kitchen-facing side effects, not just the status.
+     *
+     * Both New and Accepted are kitchen work that has not started yet, so
+     * neither counts as skipping it. Testing against `received` alone was
+     * correct only while that was the sole opening status; a till sale now
+     * opens in Accepted and still needs a pan.
      */
     public function skipsKitchen(Collection $menuItems, string $orderSource): bool
     {
-        return $this->initialStatus($menuItems, $orderSource) !== 'received';
+        return ! in_array(
+            $this->initialStatus($menuItems, $orderSource),
+            ['received', 'accepted'],
+            true,
+        );
     }
 
     /**

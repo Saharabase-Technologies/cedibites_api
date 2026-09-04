@@ -280,7 +280,7 @@ class OrderManagementService
         return Order::with(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'branch'])
             ->whereIn('branch_id', $branchIds)
             ->paymentConfirmed()
-            ->whereIn('status', ['received', 'preparing', 'ready', 'ready_for_pickup', 'out_for_delivery'])
+            ->whereIn('status', ['received', 'accepted', 'preparing', 'ready', 'ready_for_pickup', 'out_for_delivery'])
             ->latest();
     }
 
