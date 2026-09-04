@@ -104,6 +104,27 @@ class StaffInboxController extends Controller
     }
 
     /**
+     * The client reporting that it has just put this on screen.
+     *
+     * Called by the interstitial itself, once per appearance, and it is the only
+     * thing that can report this. The server knows when it wrote a receipt; it
+     * cannot know whether the till was showing the modal or sitting behind a
+     * locked screen in an empty room.
+     *
+     * Returns no body. It is fire and forget from the client's point of view,
+     * and a failure here must never stop the walkthrough rendering, so nothing
+     * downstream should depend on the response.
+     */
+    public function markShown(Request $request, StaffMessageRecipient $recipient): JsonResponse
+    {
+        $this->assertOwn($request, $recipient);
+
+        $recipient->markShown();
+
+        return response()->success(null, 'Noted.');
+    }
+
+    /**
      * Reply — a quick reply, free text, or both.
      *
      * `allow_custom_reply` is enforced HERE, not only hidden in the UI. A toggle

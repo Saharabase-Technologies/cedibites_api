@@ -15,6 +15,9 @@ class StaffMessageRecipient extends Model
         'user_id',
         'branch_id',
         'delivered_at',
+        'shown_at',
+        'last_shown_at',
+        'shown_count',
         'read_at',
         'acknowledged_at',
         'quick_reply',
@@ -28,11 +31,37 @@ class StaffMessageRecipient extends Model
     {
         return [
             'delivered_at' => 'datetime',
+            'shown_at' => 'datetime',
+            'last_shown_at' => 'datetime',
             'read_at' => 'datetime',
             'acknowledged_at' => 'datetime',
             'replied_at' => 'datetime',
             'sms_sent_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Record that this message actually took the person's screen.
+     *
+     * Deliberately NOT the same as `delivered_at`, which the dispatcher stamps
+     * when it writes this row. That one says a message was addressed to
+     * somebody. This one says it reached their eyes, which on a release nobody
+     * opens from the bell was previously unknowable: the only evidence was
+     * `acknowledged_at`, so a walkthrough that appeared and was walked away from
+     * looked exactly like one that never appeared.
+     *
+     * First and last are both kept, and the count with them. A release keeps
+     * interrupting until it is acknowledged, so "shown four times, still not
+     * acknowledged" is a different problem from "never shown once", and no
+     * single timestamp separates those.
+     */
+    public function markShown(): void
+    {
+        $this->forceFill([
+            'shown_at' => $this->shown_at ?? now(),
+            'last_shown_at' => now(),
+            'shown_count' => $this->shown_count + 1,
+        ])->save();
     }
 
     public function message(): BelongsTo

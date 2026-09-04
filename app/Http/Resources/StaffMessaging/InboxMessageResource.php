@@ -59,6 +59,17 @@ class InboxMessageResource extends JsonResource
             'sent_at' => $message->sent_at?->toIso8601String(),
             'expires_at' => $message->expires_at?->toIso8601String(),
 
+            // Which moment may put this on screen. The client enforces it,
+            // because every case turns on something only the browser knows. The
+            // server has already enforced the `visible_from` floor by keeping
+            // anything early out of `live`, so a message that reaches here is
+            // eligible on time and waiting only on the event.
+            'display_trigger' => $message->display_trigger?->value ?? 'immediate',
+
+            // Whether it has ever been on this person's screen, so a client
+            // that reloads does not re-report a first appearance.
+            'shown_at' => $this->shown_at?->toIso8601String(),
+
             'requires_acknowledgement' => $message->requires_acknowledgement,
             'allow_custom_reply' => $message->allow_custom_reply,
             'quick_replies' => $message->quick_replies ?? [],
