@@ -103,6 +103,45 @@ describe('the rails that stop an accidental blast', function () {
     });
 
     /*
+     * 0 is the default and the ordinary case now. The cap used to be 2,000,
+     * which refused the whole customer base — the audience the console exists to
+     * reach. See config/campaigns.php for why it came off and how to put a
+     * figure back.
+     */
+    it('sends to the whole audience when the cap is 0', function () {
+        Bus::fake();
+        config(['campaigns.recipient_cap' => 0]);
+
+        orderingCustomer('+233241111111');
+        orderingCustomer('+233242222222');
+        orderingCustomer('+233243333333');
+
+        $campaign = Campaign::factory()->create(['created_by_user_id' => campaignAdmin()->id]);
+
+        $this->actingAs(campaignAdmin(), 'sanctum')
+            ->postJson("/v1/admin/campaigns/{$campaign->id}/send")
+            ->assertOk();
+
+        expect($campaign->fresh()->recipient_count)->toBe(3);
+    });
+
+    /* And the preview stops claiming an audience is over a limit that is gone. */
+    it('never reports over the cap when the cap is 0', function () {
+        config(['campaigns.recipient_cap' => 0]);
+
+        orderingCustomer('+233241111111');
+        orderingCustomer('+233242222222');
+
+        $campaign = Campaign::factory()->create(['created_by_user_id' => campaignAdmin()->id]);
+
+        $this->actingAs(campaignAdmin(), 'sanctum')
+            ->getJson("/v1/admin/campaigns/{$campaign->id}/preview")
+            ->assertOk()
+            ->assertJsonPath('data.cap', 0)
+            ->assertJsonPath('data.over_cap', false);
+    });
+
+    /*
      * Seed mode is how the whole mechanism gets proven for a few cedis instead
      * of four figures. The chosen segment is still resolved and still reported,
      * so the operator sees the real reach next to the handful actually messaged.

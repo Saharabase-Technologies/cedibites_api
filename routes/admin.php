@@ -133,6 +133,16 @@ Route::prefix('admin')->group(function () {
 
         Route::get('campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
         Route::post('campaigns/{campaign}/send', [CampaignController::class, 'send']);
+
+        /*
+         * One copy of the campaign to one number, before the real send.
+         *
+         * Throttled because it spends money and its button is small. Five a
+         * minute is more tests than anybody needs and far fewer than a stuck
+         * finger can post.
+         */
+        Route::post('campaigns/{campaign}/test', [CampaignController::class, 'test'])
+            ->middleware('throttle:5,1');
         Route::post('campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
 
         // What customers said about their orders. Not marketing, but gated with

@@ -30,13 +30,28 @@ return [
     | Hard recipient cap
     |--------------------------------------------------------------------------
     |
-    | Refuses to send to more than this many people in one campaign. The audience
-    | is 28,000+ and this console is new; a mistyped segment must not be able to
-    | become a real blast. Raise it deliberately, once a send has been done and
-    | the numbers have been checked.
+    | THERE IS NO CAP BY DEFAULT. 0 means send to whoever the audience holds.
+    |
+    | It used to refuse anything over 2,000, on the reasoning that the console
+    | was new and a mistyped segment must not become a real blast. The number was
+    | picked before a single campaign had gone out, and it was picked to be
+    | survivable rather than correct: 2,000 people is about GHS 48, the whole
+    | 28,000 base is about GHS 680. Nothing about 2,000 describes an audience
+    | anybody actually wants to reach.
+    |
+    | Reaching the whole customer base is the point of the console. A limit that
+    | refuses the ordinary case, and is only movable by editing a server file, is
+    | a limit that gets in the way every time and stops nothing on the day it
+    | matters. What actually stands between a wrong click and 28,000 handsets is
+    | seed mode, which is on, and the confirm screen, which spells out the count
+    | and the total before it will do anything.
+    |
+    | The check is still here, exactly as it was, so a figure can be put back
+    | with one env value if a mistake ever earns one. Set CAMPAIGN_RECIPIENT_CAP
+    | to a number and it refuses again.
     |
     */
-    'recipient_cap' => (int) env('CAMPAIGN_RECIPIENT_CAP', 2000),
+    'recipient_cap' => (int) env('CAMPAIGN_RECIPIENT_CAP', 0),
 
     /*
     |--------------------------------------------------------------------------
@@ -45,14 +60,35 @@ return [
     |
     | Hubtel's batch ceiling is widely reported as 5,000 and has never been
     | confirmed in primary documentation — their docs are gone (see
-    | docs/SMS_CAMPAIGNS_PLAN.md). 1,000 is a conservative default: a rejected
-    | chunk costs a thousand recipients rather than five thousand, and the size
-    | can be raised the moment a real send confirms the ceiling.
+    | docs/SMS_CAMPAIGNS_PLAN.md). So the size here is chosen against our own
+    | failure modes rather than against a number nobody can verify.
+    |
+    | 500 is the standing default, not a figure waiting to be raised.
+    |
+    | Three reasons, none of them about Hubtel's limit:
+    |
+    |   A rejected chunk costs 500 people. The job does not retry, on purpose
+    |   (see SendCampaignChunk), so whatever a chunk holds is what a rejection
+    |   quietly loses. There is no resend endpoint to recover it with.
+    |
+    |   Every recipient gets its own INSERT in HubtelSmsService::recordBatch,
+    |   so the chunk size is also the number of round trips one job makes to
+    |   Postgres. At 500 the job finishes well inside the worker timeout. At
+    |   1,000, a slow Hubtel response plus a loaded database can approach it —
+    |   and a job killed after the batch was accepted but before
+    |   recordChunkResult runs leaves a campaign that sent the messages, kept no
+    |   batch id, and can never reach isFinished(). It sits in `sending` for
+    |   good.
+    |
+    |   The delivery poll re-reads every batch every fifteen minutes for two
+    |   days. More chunks means more batch ids, which is the one thing smaller
+    |   chunks cost. It is a GET per batch and it is cheap.
     |
     | The delay spaces chunks out so a campaign does not arrive as one spike.
+    | 3,000 recipients is six chunks over twenty-five seconds.
     |
     */
-    'chunk_size' => (int) env('CAMPAIGN_CHUNK_SIZE', 1000),
+    'chunk_size' => (int) env('CAMPAIGN_CHUNK_SIZE', 500),
     'inter_batch_delay_seconds' => (int) env('CAMPAIGN_INTER_BATCH_DELAY', 5),
 
     /*

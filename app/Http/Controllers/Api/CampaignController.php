@@ -7,6 +7,7 @@ use App\Enums\CampaignStatus;
 use App\Enums\ContactSource;
 use App\Enums\DeliveryOutcome;
 use App\Enums\GhanaNetwork;
+use App\Helpers\PhoneHelper;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SaveCampaignRequest;
 use App\Http\Resources\CampaignResource;
@@ -21,6 +22,8 @@ use App\Services\Campaigns\AudienceRules;
 use App\Services\Campaigns\CampaignDeliveryReport;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\MessageMeter;
+use App\Services\Contacts\PhoneNormaliser;
+use App\Services\HubtelSmsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -40,11 +43,12 @@ class CampaignController extends Controller
         private readonly CampaignSender $sender,
         private readonly AudienceResolver $audience,
         private readonly MessageMeter $meter,
+        private readonly HubtelSmsService $sms,
     ) {}
 
     public function index(Request $request): JsonResponse
     {
-        $campaigns = Campaign::with(['createdBy', 'approvedBy', 'shortLink'])
+        $campaigns = Campaign::with(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->latest()
             ->paginate($request->integer('per_page', 25));
@@ -57,7 +61,7 @@ class CampaignController extends Controller
     public function show(Campaign $campaign): JsonResponse
     {
         return response()->success(
-            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
+            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
         );
     }
 
@@ -96,7 +100,7 @@ class CampaignController extends Controller
         $this->stampProjection($campaign);
 
         return response()->success(
-            (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
+            (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
             'Campaign saved.',
         );
     }
@@ -198,6 +202,115 @@ class CampaignController extends Controller
     }
 
     /**
+     * One copy of this campaign, to one number, now.
+     *
+     * The thing you do before you press send. It texts `$campaign->message`
+     * character for character, which is the only way to find out what the
+     * message actually looks like on a handset: whether the short link survived
+     * the paste, whether a curly quote off Word has quietly turned 160
+     * characters into 70, whether the line breaks land where they were written.
+     * Reading it in the composer proves none of that.
+     *
+     * Deliberately exempt from three rails, for the same reason
+     * DirectMessageController is exempt from two:
+     *
+     *   Seed mode — would redirect the test to the staff list instead of the
+     *   number that was typed, which is the one outcome a test must never
+     *   produce. You would be shown somebody else's phone as proof.
+     *
+     *   The send window — a test is one text to a colleague standing next to
+     *   you, not 28,000 landing at six in the morning.
+     *
+     *   The recipient cap — it counts an audience, and this has an audience of
+     *   one. (There is no cap by default now anyway; see config/campaigns.php.)
+     *
+     * What it does NOT touch is every counter on the campaign. The status stays
+     * draft, sent_count stays where it was, no cost is recorded and no batch id
+     * is kept. A campaign that has been tested is a campaign that has not been
+     * sent, and the confirm screen must still show a first send as a first send.
+     */
+    public function test(Request $request, Campaign $campaign): JsonResponse
+    {
+        // Testing a campaign that has already gone out tells you nothing you
+        // cannot read on the report, and spends money to say it.
+        if (! $campaign->status->isEditable()) {
+            return response()->unprocessable(
+                'This campaign has already gone out. There is nothing left to test.'
+            );
+        }
+
+        if (trim((string) $campaign->message) === '') {
+            return response()->unprocessable('There is no message to test yet.');
+        }
+
+        $validated = $request->validate([
+            'phone' => ['required', 'string', 'max:20'],
+        ], [
+            'phone.required' => 'Which number should the test go to?',
+        ]);
+
+        // The same reader the importer and the direct sender use, so 0241234567,
+        // +233241234567 and a number pasted out of WhatsApp all reach the same
+        // handset. Anything that is not a Ghana mobile is refused here rather
+        // than by Hubtel after we have been billed for the attempt.
+        $phone = PhoneNormaliser::normalise($validated['phone']);
+
+        if ($phone === null) {
+            return response()->unprocessable(
+                'That is not a Ghana mobile number. It should look like 0241234567.'
+            );
+        }
+
+        $measurement = $this->meter->measure($campaign->message);
+
+        try {
+            $this->sms->sendSingle(
+                PhoneHelper::toInternational($phone),
+                $campaign->message,
+                'campaign_test',
+            );
+        } catch (\Throwable $e) {
+            activity('admin')
+                ->causedBy($request->user())
+                ->performedOn($campaign)
+                ->event('campaign_test_failed')
+                ->withProperties(['phone' => $phone, 'error' => $e->getMessage()])
+                ->log('Campaign test failed to '.$phone);
+
+            return response()->unprocessable('That test could not be sent: '.$e->getMessage());
+        }
+
+        // Written straight to the row rather than through save(), so the model's
+        // activity log does not record a test as an edit to the campaign. The
+        // test has its own log line below.
+        $campaign->forceFill([
+            'last_tested_at' => now(),
+            'last_tested_phone' => $phone,
+            'last_tested_by_user_id' => $request->user()->id,
+        ])->saveQuietly();
+
+        activity('admin')
+            ->causedBy($request->user())
+            ->performedOn($campaign)
+            ->event('campaign_tested')
+            ->withProperties([
+                'phone' => $phone,
+                // The text as it was at the moment of the test. A campaign edited
+                // afterwards is a campaign nobody has actually seen on a phone,
+                // and this is what shows that.
+                'message' => $campaign->message,
+                'segments' => $measurement['segments'],
+                'cost' => $this->meter->estimateCost($campaign->message, 1),
+            ])
+            ->log('Campaign "'.$campaign->name.'" tested to '.$phone);
+
+        return response()->success(
+            (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
+            'Test sent to '.$phone.'. Check the handset before you send this to anybody else.',
+        );
+    }
+
+    /**
      * Send it. The only call here that spends money.
      */
     public function send(Request $request, Campaign $campaign): JsonResponse
@@ -211,7 +324,7 @@ class CampaignController extends Controller
         }
 
         return response()->success(
-            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
+            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
             $this->sender->seedMode()
                 ? 'Sent to the test list. Seed mode is on, so no customers were messaged.'
                 : 'Campaign sending.',
@@ -233,7 +346,7 @@ class CampaignController extends Controller
         $campaign->update(['status' => CampaignStatus::Cancelled]);
 
         return response()->success(
-            (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink'])))->resolve(),
+            (new CampaignResource($campaign->fresh(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
             'Campaign cancelled.',
         );
     }

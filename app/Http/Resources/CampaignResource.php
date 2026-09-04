@@ -73,6 +73,18 @@ class CampaignResource extends JsonResource
             'created_by' => $this->whenLoaded('createdBy', fn () => $this->createdBy?->name),
             'approved_by' => $this->whenLoaded('approvedBy', fn () => $this->approvedBy?->name),
 
+            /*
+             * The last time somebody read this on an actual handset.
+             *
+             * Kept apart from every count above it, because a test is not a
+             * send: nothing here moves sent_count, actual_cost or the status.
+             * It answers one question, and it is the question asked after a
+             * campaign goes out wrong. Did anybody look at it first.
+             */
+            'last_tested_at' => $this->last_tested_at?->toIso8601String(),
+            'last_tested_phone' => $this->last_tested_phone,
+            'last_tested_by' => $this->whenLoaded('lastTestedBy', fn () => $this->lastTestedBy?->name),
+
             'started_at' => $this->started_at?->toIso8601String(),
             'completed_at' => $this->completed_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
