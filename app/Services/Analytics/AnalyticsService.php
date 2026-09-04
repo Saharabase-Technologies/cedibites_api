@@ -1059,12 +1059,16 @@ class AnalyticsService
         $branchFilter = ['branch_ids' => $branchIds];
 
         return [
+            // Accepted is acknowledged work that has not started, which is
+            // pending, not preparing. Splitting on `received` alone was right
+            // while every order opened there; a till sale now opens in
+            // Accepted and would otherwise be counted as already cooking.
             'pending_orders' => (clone $this->queryBuilder->activeOrders($branchFilter))
-                ->where('status', 'received')
+                ->whereIn('status', ['received', 'accepted'])
                 ->count(),
 
             'preparing_orders' => (clone $this->queryBuilder->activeOrders($branchFilter))
-                ->where('status', '!=', 'received')
+                ->whereNotIn('status', ['received', 'accepted'])
                 ->count(),
 
             'today_orders' => $this->queryBuilder->computePlacedOrderCount($todayFilters),

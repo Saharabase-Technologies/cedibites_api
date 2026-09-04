@@ -186,6 +186,12 @@ class OrderObserver
         try {
             $customer = $order->customer?->user;
 
+            // `accepted` is deliberately absent, and adding it here would not
+            // do what it looks like. A till sale is *created* in Accepted, and
+            // this method only runs when the status changes on a row that
+            // already exists, so an accepted-stage message added here would
+            // work for online orders and silently skip the 97% of orders taken
+            // at the till. It would have to be sent from created() as well.
             match ($order->status) {
                 'preparing' => $customer?->notify(new OrderPreparingNotification($order)),
                 'ready', 'ready_for_pickup' => $customer?->notify(new OrderReadyNotification($order)),

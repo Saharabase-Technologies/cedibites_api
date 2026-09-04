@@ -315,7 +315,11 @@ class OrderController extends Controller
 
         $query = Order::with(['branch', 'customer.user', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
             ->paymentConfirmed()
-            ->whereIn('status', ['received', 'preparing', 'ready'])
+            // Accepted belongs here. It was omitted while nothing opened in it
+            // and every order passed through on its way to Preparing, so the
+            // gap never showed. A till sale now opens in Accepted, and without
+            // this it would never reach a display board at all.
+            ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
 
         $user = Auth::guard('sanctum')->user();
