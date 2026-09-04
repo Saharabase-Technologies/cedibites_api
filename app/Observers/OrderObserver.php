@@ -133,9 +133,28 @@ class OrderObserver
                 $payment = $order->payments->first();
                 $isPaid = $payment && in_array($payment->payment_status, ['completed', 'no_charge']);
 
-                // Only send order-confirmed SMS/notification once payment is confirmed.
+                // Only send the customer anything once payment is confirmed.
+                //
+                // Which message depends on the status the order was CREATED in,
+                // not on the fact that it was created. An order with nothing to
+                // cook does not start at the beginning of the journey: a till
+                // sale of two drinks is born `completed`, because the drinks
+                // were handed over as the money was taken, and an online one is
+                // born `ready`, because it still has to be given to a rider.
+                //
+                // Sending the confirmation for those told somebody holding a
+                // bottle of water to expect it in twenty minutes. And because
+                // updated() only fires when a status *changes*, an order born
+                // finished never changed, so the completion message never came
+                // either — the one wrong SMS was the only SMS they got.
                 if ($isPaid) {
-                    $order->customer?->user?->notify(new OrderConfirmedNotification($order));
+                    $customer = $order->customer?->user;
+
+                    match ($order->status) {
+                        'completed', 'delivered' => $customer?->notify(new OrderCompletedNotification($order)),
+                        'ready', 'ready_for_pickup' => $customer?->notify(new OrderReadyNotification($order)),
+                        default => $customer?->notify(new OrderConfirmedNotification($order)),
+                    };
                 }
 
                 // Notify all active employees at the branch

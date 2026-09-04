@@ -125,16 +125,42 @@ it('measures each branch separately', function () {
         ->and($estimator->forBranch($slow->id))->toBe(30);
 });
 
-it('stamps the estimate on every order at creation', function () {
+it('stamps the estimate on an order that will be prepared', function () {
     // The hook is on the model, not the three controllers that create orders,
     // so a path nobody remembered to update still gets it.
+    //
+    // The status is set explicitly rather than left to the factory, which picks
+    // one at random from six. Three of those six are statuses an order can only
+    // be born in when it skips the kitchen, and this assertion is about the
+    // orders that do not — left to chance it passed about half the time.
     config()->set('orders.prep_time.default_minutes', 12);
     config()->set('orders.prep_time.min_minutes', 5);
     config()->set('orders.prep_time.max_minutes', 15);
 
-    $order = Order::factory()->create(['estimated_prep_time' => null]);
+    $order = Order::factory()->create([
+        'estimated_prep_time' => null,
+        'status' => 'received',
+    ]);
 
     expect($order->fresh()->estimated_prep_time)->toBe(12);
+});
+
+it('stamps no estimate on an order created already finished', function () {
+    // A till sale of two drinks is born `completed`: the drinks were handed
+    // over as the money was taken, so there is no preparation ahead of it. It
+    // used to be stamped with one anyway, and that figure was read straight
+    // into the customer's SMS — telling somebody holding a bottle of water to
+    // expect it in twenty minutes.
+    config()->set('orders.prep_time.default_minutes', 12);
+
+    foreach (['completed', 'delivered', 'ready', 'ready_for_pickup'] as $status) {
+        $order = Order::factory()->create([
+            'estimated_prep_time' => null,
+            'status' => $status,
+        ]);
+
+        expect($order->fresh()->estimated_prep_time)->toBeNull();
+    }
 });
 
 it('leaves an estimate the caller supplied alone', function () {

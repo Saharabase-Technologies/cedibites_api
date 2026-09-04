@@ -137,7 +137,20 @@ class Order extends Model
                 $order->receipt_verification_code = static::freshVerificationCode();
             }
 
-            if ($order->estimated_prep_time === null) {
+            // Only for an order that is actually going to be prepared.
+            //
+            // The estimate was stamped on everything, so a bottle of water
+            // carried a twenty-minute prep time it was never going to spend,
+            // and that figure was read straight into the customer's SMS. An
+            // order created already finished, or already waiting to be handed
+            // over, has no preparation ahead of it and should not claim one.
+            //
+            // Nothing downstream loses a sample: PrepTimeEstimator measures
+            // observed `preparing` to `ready` transitions in the status
+            // history, and an order that skips the kitchen never records one.
+            $skipsKitchen = in_array($order->status, ['completed', 'delivered', 'ready', 'ready_for_pickup'], true);
+
+            if ($order->estimated_prep_time === null && ! $skipsKitchen) {
                 $order->estimated_prep_time = app(\App\Domain\Orders\PrepTimeEstimator::class)
                     ->forBranch($order->branch_id ? (int) $order->branch_id : null);
             }
