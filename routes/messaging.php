@@ -26,6 +26,7 @@ Route::prefix('messages')->group(function () {
     Route::get('inbox/summary', [StaffInboxController::class, 'summary']);
     Route::get('inbox/{recipient}', [StaffInboxController::class, 'show']);
     Route::post('inbox/{recipient}/acknowledge', [StaffInboxController::class, 'acknowledge']);
+    Route::post('inbox/{recipient}/shown', [StaffInboxController::class, 'markShown']);
     Route::post('inbox/{recipient}/reply', [StaffInboxController::class, 'reply']);
 
     // ─── Upward: raising something with the IT team ──────────────────────────

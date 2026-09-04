@@ -4,6 +4,7 @@ namespace App\Http\Requests\StaffMessaging;
 
 use App\Enums\Role as RoleEnum;
 use App\Enums\StaffMessageKind;
+use App\Enums\StaffMessageTrigger;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -62,6 +63,14 @@ class SendStaffMessageRequest extends FormRequest
 
             'sms_fallback_after_minutes' => ['nullable', 'integer', 'min:0', 'max:1440'],
             'expires_at' => ['nullable', 'date', 'after:now'],
+
+            // ─── When it is allowed to appear ─────────────────────────────
+            // A floor, not a schedule. The message is sent immediately and the
+            // receipts are written immediately; this only holds it out of `live`
+            // until the time comes. Deliberately allows a past date, which reads
+            // as "no delay" rather than as an error worth blocking a send over.
+            'visible_from' => ['nullable', 'date'],
+            'display_trigger' => ['sometimes', Rule::enum(StaffMessageTrigger::class)],
         ];
     }
 
@@ -80,6 +89,19 @@ class SendStaffMessageRequest extends FormRequest
             if ($this->input('kind') !== StaffMessageKind::Release->value
                 && count((array) $this->input('steps', [])) > 0) {
                 $validator->errors()->add('steps', 'Only a release can carry slides.');
+            }
+
+            // A window that closes before it opens delivers to nobody and
+            // reports nothing, which reads as a broken send rather than as the
+            // mistake it is.
+            $visibleFrom = $this->input('visible_from');
+            $expiresAt = $this->input('expires_at');
+
+            if ($visibleFrom && $expiresAt && strtotime($visibleFrom) >= strtotime($expiresAt)) {
+                $validator->errors()->add(
+                    'visible_from',
+                    'This would expire before anybody could see it. Move the start earlier or the expiry later.',
+                );
             }
 
             $audience = (array) $this->input('audience', []);

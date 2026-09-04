@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\StaffMessageKind;
+use App\Enums\StaffMessageTrigger;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -29,6 +30,8 @@ class StaffMessage extends Model
         'quick_replies',
         'sms_fallback_after_minutes',
         'expires_at',
+        'visible_from',
+        'display_trigger',
         'sent_at',
         'recipient_count',
     ];
@@ -42,6 +45,8 @@ class StaffMessage extends Model
             'requires_acknowledgement' => 'boolean',
             'allow_custom_reply' => 'boolean',
             'expires_at' => 'datetime',
+            'visible_from' => 'datetime',
+            'display_trigger' => StaffMessageTrigger::class,
             'sent_at' => 'datetime',
         ];
     }
@@ -102,6 +107,13 @@ class StaffMessage extends Model
         return $query->whereNotNull('sent_at')
             ->where(function (Builder $q) {
                 $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
+            })
+            // The start of the window, enforced here rather than in the clients.
+            // A message held until Monday must be invisible to the inbox, the
+            // bell count and the SMS escalation alike, and the only way to get
+            // that for free everywhere is to keep it out of `live`.
+            ->where(function (Builder $q) {
+                $q->whereNull('visible_from')->orWhere('visible_from', '<=', now());
             });
     }
 
@@ -126,6 +138,10 @@ class StaffMessage extends Model
 
         return [
             'total' => (clone $recipients)->count(),
+            // How many people it actually reached. On a kind nobody opens from
+            // the bell this is the only honest reach figure; `read` stays at
+            // zero for a walkthrough until somebody finishes it.
+            'shown' => (clone $recipients)->whereNotNull('shown_at')->count(),
             'read' => (clone $recipients)->whereNotNull('read_at')->count(),
             'acknowledged' => $this->requires_acknowledgement
                 ? (clone $recipients)->whereNotNull('acknowledged_at')->count()

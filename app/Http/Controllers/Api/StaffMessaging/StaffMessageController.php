@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\StaffMessaging;
 
+use App\Enums\StaffMessageTrigger;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StaffMessaging\SendStaffMessageRequest;
 use App\Http\Resources\StaffMessaging\StaffMessageResource;
@@ -135,6 +136,8 @@ class StaffMessageController extends Controller
             'quick_replies' => $data['quick_replies'] ?? null,
             'sms_fallback_after_minutes' => $data['sms_fallback_after_minutes'] ?? null,
             'expires_at' => $data['expires_at'] ?? null,
+            'visible_from' => $data['visible_from'] ?? null,
+            'display_trigger' => $data['display_trigger'] ?? StaffMessageTrigger::Immediate,
         ]);
 
         // Position comes from the order they were sent in, not from anything
