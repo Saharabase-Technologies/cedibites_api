@@ -332,7 +332,7 @@ class AshaimanRecipeSeeder extends Seeder
      *
      * Built up and compared whole, never split apart on the separator: a third
      * of this menu has " / " inside the dish name itself ("Fried Rice / Jollof
-     * Rice / Noodles + 3 Drumsticks"), so splitting on the first one tears the
+     * Rice / Noodles + 3 pieces of Chicken"), so splitting on the first one tears the
      * name in half and every such dish is refused as drifted.
      */
     private function matches(object $option, string $expected): bool
@@ -481,11 +481,11 @@ class AshaimanRecipeSeeder extends Seeder
     {
         return [
             // ── Combos ───────────────────────────────────────────────────────
-            16 => ['Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / fried-rice',
+            16 => ['Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / fried-rice',
                 $this->merge(self::FRIED_RICE, $this->drums(3), self::PACK_HOT)],
-            52 => ['Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / jollof-rice',
+            52 => ['Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / jollof-rice',
                 $this->merge(self::JOLLOF, $this->drums(3), self::PACK_HOT)],
-            59 => ['Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / noodles',
+            59 => ['Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / noodles',
                 $this->merge(self::NOODLES, $this->drums(3), self::PACK_HOT)],
 
             72 => ['Jollof + Chicken + Fried Egg / standard',
@@ -494,20 +494,20 @@ class AshaimanRecipeSeeder extends Seeder
                 $this->merge(self::FRIED_RICE, $this->drums(2), self::FRIED_EGG, self::PACK_HOT)],
 
             // Sharing platters - a double rice portion, not a single.
-            21 => ['Fried Rice / Jollof Rice + 7 Drums + Kɔkɔɔ / fried-rice',
+            21 => ['Fried Rice / Jollof Rice + 7 pieces of Chicken + Kɔkɔɔ / fried-rice',
                 $this->merge($this->scale(self::FRIED_RICE, 2), $this->drums(7), self::KOKOO, self::PACK_HOT)],
-            51 => ['Fried Rice / Jollof Rice + 7 Drums + Kɔkɔɔ / jollof-rice',
+            51 => ['Fried Rice / Jollof Rice + 7 pieces of Chicken + Kɔkɔɔ / jollof-rice',
                 $this->merge($this->scale(self::JOLLOF, 2), $this->drums(7), self::KOKOO, self::PACK_HOT)],
-            54 => ['Assorted Fried Rice / Noodles + 7 Drums + Kɔkɔɔ / assorted-fried-rice',
+            54 => ['Assorted Fried Rice / Jollof Rice / Noodles + 7 pieces of Chicken + Kɔkɔɔ / assorted-fried-rice',
                 $this->merge($this->scale(self::FRIED_RICE, 2), $this->scale(self::ASSORTED, 2), $this->drums(7), self::KOKOO, self::PACK_HOT)],
-            55 => ['Assorted Fried Rice / Noodles + 7 Drums + Kɔkɔɔ / assorted-noodles',
+            55 => ['Assorted Fried Rice / Jollof Rice / Noodles + 7 pieces of Chicken + Kɔkɔɔ / assorted-noodles',
                 $this->merge($this->scale(self::NOODLES, 2), $this->scale(self::ASSORTED, 2), $this->drums(7), self::KOKOO, self::PACK_HOT)],
 
-            42 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / assorted-fried-rice',
+            42 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / assorted-fried-rice',
                 $this->merge(self::FRIED_RICE, self::ASSORTED, $this->drums(3), self::PACK_HOT)],
-            43 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / assorted-jollof-rice',
+            43 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / assorted-jollof-rice',
                 $this->merge(self::JOLLOF, self::ASSORTED, $this->drums(3), self::PACK_HOT)],
-            44 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 Drumsticks / assorted-noodles',
+            44 => ['Assorted Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken / assorted-noodles',
                 $this->merge(self::NOODLES, self::ASSORTED, $this->drums(3), self::PACK_HOT)],
 
             60 => ['Assorted Fried Rice / Jollof Rice / Noodles + Full Chicken + Kɔkɔɔ / assorted-fried-rice',

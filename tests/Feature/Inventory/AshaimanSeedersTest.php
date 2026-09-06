@@ -106,7 +106,7 @@ it('matches a dish whose own name contains the separator', function () {
     // A third of this menu is named like this. Comparing by splitting the
     // expected label on its first " / " tears the name in half and refuses the
     // dish as drifted - which is exactly what happened on the first prod run.
-    ashaimanOption($this->branch->id, 16, 'Fried Rice / Jollof Rice / Noodles + 3 Drumsticks', 'fried-rice');
+    ashaimanOption($this->branch->id, 16, 'Fried Rice / Jollof Rice / Noodles + 3 pieces of Chicken', 'fried-rice');
 
     (new AshaimanRecipeSeeder)->run();
 
