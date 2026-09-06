@@ -105,8 +105,8 @@ class MenuSeeder extends Seeder
             ],
             'combos' => [
                 [
-                    'name' => 'Fried Rice / Jollof + 3 Drums',
-                    'description' => '"For the street" — Choose Fried Rice or Jollof with 3 drumsticks',
+                    'name' => 'Fried Rice / Jollof + 3 pieces of Chicken',
+                    'description' => '"For the street" — Choose Fried Rice or Jollof with 3 pieces of chicken',
                     'is_popular' => true,
                     'sizes' => [
                         ['name' => 'Fried Rice', 'price' => 90.00],
@@ -114,8 +114,8 @@ class MenuSeeder extends Seeder
                     ],
                 ],
                 [
-                    'name' => 'Assorted Fried Rice / Jollof / Noodles + 3 Drums',
-                    'description' => '"For the street" — Assorted Fried Rice, Jollof, or Noodles with 3 drumsticks',
+                    'name' => 'Assorted Fried Rice / Jollof / Noodles + 3 pieces of Chicken',
+                    'description' => '"For the street" — Assorted Fried Rice, Jollof, or Noodles with 3 pieces of chicken',
                     'is_popular' => true,
                     'sizes' => [
                         ['name' => 'Fried Rice', 'price' => 110.00],
@@ -124,16 +124,16 @@ class MenuSeeder extends Seeder
                     ],
                 ],
                 [
-                    'name' => 'Fried Rice / Jollof + 7 Drums + Kɔkɔɔ',
-                    'description' => '"Big budget meal" — Choose Fried Rice or Jollof with 7 drumsticks and kɔkɔɔ',
+                    'name' => 'Fried Rice / Jollof + 7 pieces of Chicken + Kɔkɔɔ',
+                    'description' => '"Big budget meal" — Choose Fried Rice or Jollof with 7 pieces of chicken and kɔkɔɔ',
                     'sizes' => [
                         ['name' => 'Fried Rice', 'price' => 145.00],
                         ['name' => 'Jollof', 'price' => 150.00],
                     ],
                 ],
                 [
-                    'name' => 'Assorted Fried Rice / Jollof / Noodles + 7 Drums + Kɔkɔɔ',
-                    'description' => '"Big budget meal" — Assorted Fried Rice, Jollof, or Noodles with 7 drumsticks and kɔkɔɔ',
+                    'name' => 'Assorted Fried Rice / Jollof / Noodles + 7 pieces of Chicken + Kɔkɔɔ',
+                    'description' => '"Big budget meal" — Assorted Fried Rice, Jollof, or Noodles with 7 pieces of chicken and kɔkɔɔ',
                     'sizes' => [
                         ['name' => 'Fried Rice', 'price' => 165.00],
                         ['name' => 'Jollof', 'price' => 150.00],
