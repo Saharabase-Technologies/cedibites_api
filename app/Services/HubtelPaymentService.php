@@ -802,9 +802,17 @@ class HubtelPaymentService
                         'client_reference' => $clientReference,
                     ]);
                 } elseif ($paymentStatus === 'failed') {
+                    // The code goes in beside the sentence. A customer whose
+                    // wallet was short needs a different next step from one whose
+                    // payment failed because our own merchant account is
+                    // misconfigured, and only the code can tell them apart.
                     $checkoutSession->update([
                         'status' => 'failed',
                         'failure_reason' => $this->mapRmpResponseCodeToMessage($responseCode),
+                        'payment_gateway_response' => array_merge(
+                            $checkoutSession->payment_gateway_response ?? [],
+                            ['failureCode' => $responseCode],
+                        ),
                     ]);
 
                     Log::info('Hubtel RMP callback: checkout session payment failed', [
@@ -876,6 +884,29 @@ class HubtelPaymentService
     /**
      * Map Hubtel RMP response codes to user-friendly messages
      */
+    /**
+     * Whose problem the failure was.
+     *
+     * The message alone cannot carry this. "Payment failed" reads the same to a
+     * customer whether their wallet was short or our merchant account is not
+     * cleared to take mobile money, and those two want opposite things offered
+     * next: one wants another go, the other wants to be told to pay cash and
+     * not to keep trying.
+     *
+     * customer - their wallet, their PIN, their timeout. Another go may work.
+     * number   - the number itself cannot be charged. Correct it.
+     * ours     - our configuration or our gateway. Do not make them retry.
+     */
+    public function classifyRmpFailure(string $responseCode): string
+    {
+        return match ($responseCode) {
+            '2001' => 'customer',
+            '4000' => 'number',
+            '4070', '4101', '4103' => 'ours',
+            default => 'unknown',
+        };
+    }
+
     protected function mapRmpResponseCodeToMessage(string $responseCode): string
     {
         return match ($responseCode) {

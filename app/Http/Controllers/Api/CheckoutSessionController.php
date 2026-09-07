@@ -343,6 +343,24 @@ class CheckoutSessionController extends Controller
             'can_change_number' => $isRecoverable && $isMomo,
         ];
 
+        /**
+         * Why it failed, and whose problem it was.
+         *
+         * The reason has been written to the session by the RMP callback since
+         * that callback was built, and it has never once left the server. The
+         * customer got a screen that said the payment failed and offered them a
+         * retry, whether their wallet was short or our merchant account was the
+         * thing that could not take the money.
+         */
+        if ($session->status === 'failed') {
+            $code = (string) ($session->payment_gateway_response['failureCode'] ?? '');
+
+            $data['failure_reason'] = $session->failure_reason;
+            $data['failure_kind'] = $code !== ''
+                ? app(HubtelPaymentService::class)->classifyRmpFailure($code)
+                : 'unknown';
+        }
+
         if ($session->status === 'confirmed' && $session->order_id) {
             $order = $session->order()->with(['customer.user', 'branch', 'items.menuItem', 'items.menuItemOption.media', 'payments'])->first();
             $data['order'] = new OrderResource($order);
