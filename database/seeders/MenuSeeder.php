@@ -7,6 +7,7 @@ use App\Models\MenuCategory;
 use App\Models\MenuItem;
 use App\Models\MenuItemOption;
 use App\Models\MenuTag;
+use App\Support\Menu\ReceiptNames;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Str;
 
@@ -172,7 +173,12 @@ class MenuSeeder extends Seeder
             unset($itemData['sizes'], $itemData['is_popular']);
 
             $slug = Str::slug($itemData['name']);
-            $displayNameMap = self::displayNames()[$slug] ?? [];
+            // Through ReceiptNames rather than the raw slug, so the four combos
+            // resolve whether this file still calls them "3 Drums" or the
+            // renamed "3 pieces of Chicken". Keying on the slug alone meant a
+            // seed run on one side of that rename silently wrote no receipt
+            // names at all.
+            $displayNameMap = ReceiptNames::forItemName((string) $itemData['name']);
 
             $expectedOptionKeys = [];
             foreach ($sizes as $sizeData) {
@@ -215,65 +221,20 @@ class MenuSeeder extends Seeder
         }
     }
 
-    /** @return array<string, array<string, string>> item slug → option key → display name */
+    /**
+     * The receipt names, from the one place they are written down.
+     *
+     * They used to live in this file, which meant they only ever reached a
+     * branch being seeded from scratch. Every menu already in production was
+     * left with display_name null on nearly every option, and the receipt fell
+     * back to the menu pill. See App\Support\Menu\ReceiptNames and
+     * `php artisan menu:stamp-receipt-names`, which applies the same list to a
+     * menu that is already live.
+     *
+     * @return array<string, array<string, string>> item slug → option key → display name
+     */
     private static function displayNames(): array
     {
-        return [
-            'jollof' => [
-                'plain' => 'Plain Jollof',
-                'assorted' => 'Assorted Jollof',
-                'seafood' => 'Seafood Jollof',
-            ],
-            'fried-rice' => [
-                'plain' => 'Plain Fried Rice',
-                'assorted' => 'Assorted Fried Rice',
-                'seafood' => 'Seafood Fried Rice',
-            ],
-            'noodles' => [
-                'assorted' => 'Assorted Noodles',
-                'seafood' => 'Seafood Noodles',
-            ],
-            'banku' => [
-                'grilled-tilapia' => 'Banku with Grilled Tilapia',
-            ],
-            'drumsticks' => [
-                'special-crunch-5-pieces' => 'Special Crunch Drumsticks (5 pcs)',
-                'special-crunch-10-pieces' => 'Special Crunch Drumsticks (10 pcs)',
-                'juicy-fried-5-pieces' => 'Juicy Fried Drumsticks (5 pcs)',
-                'juicy-fried-10-pieces' => 'Juicy Fried Drumsticks (10 pcs)',
-            ],
-            'rotisserie-grilled' => [
-                'full' => 'Full Rotisserie Grilled Chicken',
-                'half-cut' => 'Half Cut Rotisserie Grilled Chicken',
-            ],
-            'fried-rice-jollof-3-drums' => [
-                'fried-rice' => 'Fried Rice + 3 Drumsticks',
-                'jollof' => 'Jollof + 3 Drumsticks',
-            ],
-            'assorted-fried-rice-jollof-noodles-3-drums' => [
-                'fried-rice' => 'Assorted Fried Rice + 3 Drumsticks',
-                'jollof' => 'Assorted Jollof + 3 Drumsticks',
-                'noodles' => 'Assorted Noodles + 3 Drumsticks',
-            ],
-            'fried-rice-jollof-7-drums-kk' => [
-                'fried-rice' => 'Fried Rice + 7 Drumsticks + Kɔkɔɔ',
-                'jollof' => 'Jollof + 7 Drumsticks + Kɔkɔɔ',
-            ],
-            'assorted-fried-rice-jollof-noodles-7-drums-kk' => [
-                'fried-rice' => 'Assorted Fried Rice + 7 Drumsticks + Kɔkɔɔ',
-                'jollof' => 'Assorted Jollof + 7 Drumsticks + Kɔkɔɔ',
-                'noodles' => 'Assorted Noodles + 7 Drumsticks + Kɔkɔɔ',
-            ],
-            'assorted-fried-rice-jollof-noodles-full-chicken-kk' => [
-                'fried-rice' => 'Assorted Fried Rice + Full Chicken + Kɔkɔɔ',
-                'jollof' => 'Assorted Jollof + Full Chicken + Kɔkɔɔ',
-                'noodles' => 'Assorted Noodles + Full Chicken + Kɔkɔɔ',
-            ],
-            'cedi-wraps' => [
-                'chicken' => 'Chicken Cedi Wrap',
-                'beef' => 'Beef Cedi Wrap',
-                'mix' => 'Mix Cedi Wrap',
-            ],
-        ];
+        return ReceiptNames::map();
     }
 }

@@ -272,7 +272,7 @@ class OrderController extends Controller
      */
     public function showByNumber(Request $request, string $orderNumber): JsonResponse
     {
-        $order = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
+        $order = Order::with(['branch', 'customer', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
             ->where('order_number', $orderNumber)
             ->first();
 
@@ -304,6 +304,23 @@ class OrderController extends Controller
          */
         $token = (string) $request->query('t', '');
         $holdsLink = $token !== '' && hash_equals($order->trackingToken(), $token);
+
+        /**
+         * Or it is simply their own order.
+         *
+         * The route is public, so nothing resolves a user for us; the guard has
+         * to ask sanctum itself. A signed-in customer looking at an order placed
+         * under their own account was being told the delivery address is only on
+         * the tracking link we texted them — about the address they typed in
+         * themselves twenty minutes earlier. Holding the account the order
+         * belongs to is at least as good a claim as holding the link.
+         */
+        $viewer = Auth::guard('sanctum')->user();
+        $ownsOrder = $viewer !== null
+            && $order->customer !== null
+            && $order->customer->user_id === $viewer->id;
+
+        $entitled = $holdsLink || $ownsOrder;
 
         return response()->success([
             'id' => $order->id,
@@ -337,6 +354,22 @@ class OrderController extends Controller
                 'menu_item' => [
                     'name' => $item->menuItem?->name,
                 ],
+                /**
+                 * The option as the menu holds it today, behind the snapshot.
+                 *
+                 * Every other screen in the app resolves a line's name as
+                 * snapshot display_name, snapshot option_label, then the live
+                 * option's. This payload carried no live option at all, so the
+                 * tracking page was the one place that could not reach the last
+                 * two, and any order placed before a receipt name was filled in
+                 * had nothing to fall back to. Nothing here identifies anybody:
+                 * it is the same option the public menu already publishes.
+                 */
+                'menu_item_option' => $item->menuItemOption ? [
+                    'option_key' => $item->menuItemOption->option_key,
+                    'option_label' => $item->menuItemOption->option_label,
+                    'display_name' => $item->menuItemOption->display_name,
+                ] : null,
             ]),
 
             'status_history' => $order->statusHistory->map(fn ($history) => [
@@ -349,10 +382,11 @@ class OrderController extends Controller
                 ->first()?->changed_at?->toIso8601String(),
             'created_at' => $order->created_at?->toIso8601String(),
 
-            // Only for the holder of the link. A guessed order number sees the
-            // stage and the money and never learns whose door this is.
-            'delivery_address' => $holdsLink ? $order->delivery_address : null,
-            'contact_name' => $holdsLink ? $order->contact_name : null,
+            // Only for the holder of the link, or the account the order belongs
+            // to. A guessed order number sees the stage and the money and never
+            // learns whose door this is.
+            'delivery_address' => $entitled ? $order->delivery_address : null,
+            'contact_name' => $entitled ? $order->contact_name : null,
         ]);
     }
 
