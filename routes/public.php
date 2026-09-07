@@ -58,6 +58,14 @@ Route::post('promos/resolve', [PromoController::class, 'resolve']);
 // usually never signed in; the staff copy of the same question lives behind
 // permissions in routes/employee.php. Throttled hard because every call that
 // reaches Hubtel is a paid one.
+// Being told when your order moves, without an account. The tracking token
+// from the link we texted stands in for a login; see subscribeToOrder.
+Route::get('push/public-key', [App\Http\Controllers\Api\PushSubscriptionController::class, 'publicVapidKey'])
+    ->middleware('throttle:60,1');
+Route::post('orders/{orderNumber}/push-subscribe', [App\Http\Controllers\Api\PushSubscriptionController::class, 'subscribeToOrder'])
+    ->middleware('throttle:20,1')
+    ->name('orders.push-subscribe');
+
 // Which letters the order series is currently on, so the tracking field can
 // fill them in and the customer types only the three digits off their SMS.
 Route::get('orders/current-prefix', [App\Http\Controllers\Api\OrderController::class, 'currentPrefix'])

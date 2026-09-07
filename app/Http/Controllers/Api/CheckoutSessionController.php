@@ -212,6 +212,10 @@ class CheckoutSessionController extends Controller
                 'session_token' => $sessionToken,
                 'status' => 'confirmed',
                 'order' => new OrderResource($order),
+                // Beside the order, never inside it. OrderResource is what
+                // `OrderBroadcastEvent` puts on a public channel, so a token
+                // living in there would be handed to anyone listening.
+                'tracking_token' => $order->trackingToken(),
             ], 201);
         }
 
@@ -364,6 +368,8 @@ class CheckoutSessionController extends Controller
         if ($session->status === 'confirmed' && $session->order_id) {
             $order = $session->order()->with(['customer.user', 'branch', 'items.menuItem', 'items.menuItemOption.media', 'payments'])->first();
             $data['order'] = new OrderResource($order);
+            // Beside the order, never inside it. See the note in store().
+            $data['tracking_token'] = $order->trackingToken();
         }
 
         return response()->json($data);

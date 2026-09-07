@@ -2,6 +2,8 @@
 
 namespace App\Notifications;
 
+use NotificationChannels\WebPush\WebPushChannel;
+use NotificationChannels\WebPush\WebPushMessage;
 use App\Channels\SmsChannel;
 use App\Models\Order;
 use Illuminate\Bus\Queueable;
@@ -29,6 +31,13 @@ class OrderConfirmedNotification extends Notification implements ShouldQueue
     public function via(object $notifiable): array
     {
         $channels = ['database', SmsChannel::class];
+
+        // Only for somebody who asked. `pushSubscriptions` is empty for every
+        // customer who never tapped the button, and an empty list would make
+        // the channel do work for nothing on every order.
+        if (method_exists($notifiable, 'pushSubscriptions') && $notifiable->pushSubscriptions()->exists()) {
+            $channels[] = WebPushChannel::class;
+        }
 
         // Add email if user has email address
         if ($notifiable->email) {
@@ -92,5 +101,21 @@ class OrderConfirmedNotification extends Notification implements ShouldQueue
             'estimated_time' => $this->order->estimated_prep_time,
             'message' => "Your order #{$this->order->order_number} has been confirmed!",
         ];
+    }
+
+    public function toWebPush(mixed $notifiable, mixed $notification): WebPushMessage
+    {
+        $n = $this->order->order_number;
+
+        return (new WebPushMessage)
+            ->title("Order {$n} confirmed")
+            ->body('The branch has your order.')
+            ->badge('/cblogo.webp')
+            ->icon('/cblogo.webp')
+            ->tag("order-{$this->order->id}")
+            ->data([
+                'order_number' => $n,
+                'url' => "/orders/{$n}?t=".$this->order->trackingToken(),
+            ]);
     }
 }
