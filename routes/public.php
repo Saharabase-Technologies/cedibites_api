@@ -54,6 +54,14 @@ Route::get('orders/by-number/{orderNumber}', [OrderController::class, 'showByNum
     ->middleware('throttle:20,1');
 Route::post('promos/resolve', [PromoController::class, 'resolve']);
 
+// Whose Mobile Money number is this. Public because the person checking out has
+// usually never signed in; the staff copy of the same question lives behind
+// permissions in routes/employee.php. Throttled hard because every call that
+// reaches Hubtel is a paid one.
+Route::post('momo/verify', [App\Http\Controllers\Api\PaymentController::class, 'verifyMomo'])
+    ->middleware('throttle:12,1')
+    ->name('momo.verify');
+
 // Public checkout config (service charge settings for frontend display)
 Route::get('checkout-config', function () {
     $service = app(\App\Services\SystemSettingService::class);

@@ -663,10 +663,38 @@ class HubtelPaymentService
             'customerMsisdn' => $localPhone,
         ]);
 
-        if (! $response->successful() || $response->json('responseCode') !== '0000') {
-            Log::warning('Hubtel MoMo verification failed or not registered', [
+        /**
+         * Not being able to ask is not the same as being told no.
+         *
+         * These two used to share a branch and both came back as
+         * `isRegistered: false`. That is fine at a till, where a cashier reads
+         * it and uses their judgement, and dangerous on a checkout that refuses
+         * to take the order: a wrong credential or an hour of Hubtel being
+         * unreachable would have told every customer in the country that their
+         * own MoMo number does not exist.
+         *
+         * A transport failure answers null, which callers are expected to read
+         * as unknown and carry on with.
+         */
+        if (! $response->successful()) {
+            Log::warning('Hubtel MoMo verification unreachable', [
                 'phone' => substr($localPhone, 0, 3).'****'.substr($localPhone, -2),
                 'status_code' => $response->status(),
+            ]);
+
+            return [
+                'isRegistered' => null,
+                'name' => null,
+                'status' => null,
+                'profile' => null,
+                'channel' => $channel,
+                'reachable' => false,
+            ];
+        }
+
+        if ($response->json('responseCode') !== '0000') {
+            Log::info('Hubtel says this number is not registered', [
+                'phone' => substr($localPhone, 0, 3).'****'.substr($localPhone, -2),
                 'response_code' => $response->json('responseCode'),
             ]);
 
@@ -675,6 +703,8 @@ class HubtelPaymentService
                 'name' => null,
                 'status' => null,
                 'profile' => null,
+                'channel' => $channel,
+                'reachable' => true,
             ];
         }
 
@@ -691,6 +721,11 @@ class HubtelPaymentService
             'name' => $data['name'] ?? null,
             'status' => $data['status'] ?? null,
             'profile' => $data['profile'] ?? null,
+            // The caller has the prefix too, but working it out a second time is
+            // how the app and the gateway end up disagreeing about which network
+            // a number belongs to. This is the one that will be charged.
+            'channel' => $channel,
+            'reachable' => true,
         ];
     }
 

@@ -50,7 +50,9 @@ class CheckoutSessionController extends Controller
             'delivery_longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'special_instructions' => ['nullable', 'string'],
             'payment_method' => ['required', 'in:mobile_money,cash'],
-            'momo_number' => ['nullable', 'string', 'max:20'],
+            'momo_number' => ['nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
+        ], [
+            'momo_number.regex' => 'That is not a Ghana mobile money number.',
         ]);
 
         // ── Branch availability checks ──────────────────────────────────
@@ -213,10 +215,52 @@ class CheckoutSessionController extends Controller
             ], 201);
         }
 
-        // Mobile money → initiate Hubtel standard payment
+        // Mobile money → the prompt goes to the phone, not the browser to Hubtel
         try {
             $hubtel = app(HubtelPaymentService::class);
             $branch = Branch::find($validated['branch_id']);
+            $momoNumber = $session->momo_number;
+
+            /**
+             * A number given means a direct Receive Money prompt, which is what
+             * the till has always done. The customer stays on our page and
+             * approves on their handset, instead of being handed to a Hubtel
+             * page that asks for the number all over again and loses everybody
+             * who does not come back.
+             *
+             * No number falls through to the hosted checkout below, so an older
+             * client that never sends one keeps working exactly as it did.
+             */
+            if ($momoNumber) {
+                $result = $hubtel->initializeReceiveMoney([
+                    'order' => (object) [
+                        'id' => $session->id,
+                        'order_number' => $sessionToken,
+                        'total_amount' => $totalAmount,
+                        'delivery_fee' => $deliveryFee,
+                        'customer_id' => $identity['customer_id'],
+                        'contact_name' => $validated['customer_name'],
+                        'contact_phone' => PhoneHelper::toInternational($momoNumber),
+                    ],
+                    'description' => "Order at {$branch->name}",
+                    'customer_name' => $validated['customer_name'],
+                    'customer_phone' => PhoneHelper::toLocal($momoNumber),
+                ]);
+
+                $session->update([
+                    'status' => 'payment_initiated',
+                    'hubtel_transaction_id' => $result['transactionId'] ?? null,
+                    'payment_gateway_response' => $result,
+                    'last_momo_sent_at' => now(),
+                ]);
+
+                return response()->json([
+                    'session_token' => $sessionToken,
+                    'status' => 'payment_initiated',
+                    'checkout_url' => null,
+                    'momo_channel' => $result['channel'] ?? null,
+                ], 201);
+            }
 
             // Hubtel standard uses a temporary order-like object for the payload
             $frontendUrl = config('app.frontend_url');
@@ -249,6 +293,13 @@ class CheckoutSessionController extends Controller
                 'status' => 'payment_initiated',
                 'checkout_url' => $hubtelResult['checkoutUrl'] ?? null,
             ], 201);
+        } catch (\InvalidArgumentException $e) {
+            // A number whose prefix belongs to no network we can charge. That is
+            // a typo, not a failure, so the session stays open and they can fix
+            // the number rather than starting the whole order again.
+            return response()->json([
+                'message' => 'That number is not on MTN, Telecel or AirtelTigo.',
+            ], 422);
         } catch (\Exception $e) {
             $session->update(['status' => 'failed']);
             Log::error('Checkout session payment initiation failed', [

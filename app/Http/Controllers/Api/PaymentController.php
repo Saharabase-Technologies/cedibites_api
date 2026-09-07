@@ -391,4 +391,49 @@ class PaymentController extends Controller
             return response()->error('Failed to process refund', 500);
         }
     }
+
+    /**
+     * POST /momo/verify - whose Mobile Money number is this?
+     *
+     * The customer half of what routes/employee.php already gives a cashier at
+     * the till. A prompt sent to a mistyped number is money asked of a stranger
+     * and a customer waiting on an approval that will never come, so the name
+     * on the account is read back before anything is sent.
+     *
+     * Public, because the person checking out has usually never signed in.
+     * Throttled per minute, because every call is a paid request to Hubtel and
+     * the endpoint takes a phone number straight from the body. It answers only
+     * with what is already printed on the customer's own MoMo prompt: whether
+     * the number is registered, and the name on it.
+     */
+    public function verifyMomo(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'momo_number' => ['required', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
+        ], [
+            'momo_number.regex' => 'That is not a Ghana mobile money number.',
+        ]);
+
+        try {
+            $result = app(HubtelPaymentService::class)->verifyMomoNumber($validated['momo_number']);
+        } catch (\InvalidArgumentException $e) {
+            // An unmappable prefix. Not an error worth a 500: the number simply
+            // does not belong to a network we can charge.
+            return response()->json([
+                'isRegistered' => false,
+                'name' => null,
+                'message' => 'That number is not on MTN, Telecel or AirtelTigo.',
+            ]);
+        } catch (\Throwable $e) {
+            // Hubtel being unreachable must not stop somebody ordering. The
+            // prompt still goes out; they just do not get the name read back.
+            \Illuminate\Support\Facades\Log::warning('MoMo verification unavailable', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json(['isRegistered' => null, 'name' => null]);
+        }
+
+        return response()->json($result);
+    }
 }
