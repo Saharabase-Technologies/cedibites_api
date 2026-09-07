@@ -3,10 +3,20 @@
 use App\Http\Controllers\Api\PromoController;
 use Illuminate\Support\Facades\Route;
 
-// Promo resolution — accessible to any authenticated user (POS staff + customers)
-Route::post('promos/resolve', [PromoController::class, 'resolve']);
-
-// Promo administration is a staff surface, unlike resolution above.
+/*
+ * Resolution is NOT here. It lives in routes/public.php, because the person it
+ * answers for is usually a guest at checkout who has never signed in, and it
+ * reads nothing about the caller: item ids, a branch and a subtotal go in, a
+ * promo comes out.
+ *
+ * It used to be declared in both files. This one is required inside the
+ * auth:sanctum group in api.php and public.php is required above it, so the
+ * later registration replaced the earlier one and the public route was dead.
+ * Every guest checkout got a 401 from it, and the frontend read that 401 as a
+ * dead session and threw them back to the home page mid-order.
+ *
+ * Promo administration is a staff surface, and that part does belong here.
+ */
 Route::middleware(['token.staff', 'permission:manage_menu'])->group(function () {
     Route::get('promos', [PromoController::class, 'index']);
     Route::get('promos/{promo}', [PromoController::class, 'show']);
