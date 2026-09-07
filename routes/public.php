@@ -58,6 +58,12 @@ Route::post('promos/resolve', [PromoController::class, 'resolve']);
 // usually never signed in; the staff copy of the same question lives behind
 // permissions in routes/employee.php. Throttled hard because every call that
 // reaches Hubtel is a paid one.
+// Which letters the order series is currently on, so the tracking field can
+// fill them in and the customer types only the three digits off their SMS.
+Route::get('orders/current-prefix', [App\Http\Controllers\Api\OrderController::class, 'currentPrefix'])
+    ->middleware('throttle:60,1')
+    ->name('orders.current-prefix');
+
 Route::post('momo/verify', [App\Http\Controllers\Api\PaymentController::class, 'verifyMomo'])
     ->middleware('throttle:12,1')
     ->name('momo.verify');

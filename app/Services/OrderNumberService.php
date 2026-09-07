@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Order;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class OrderNumberService
@@ -28,6 +29,29 @@ class OrderNumberService
             }
 
             return $next;
+        });
+    }
+
+    /**
+     * The letters the series is currently handing out: A, then B, and after
+     * Z999 the two-letter cycles, AA through ZZ.
+     *
+     * The tracking screen fills this in for the customer so they type three
+     * digits off their SMS instead of a code they have to read character by
+     * character. Somebody chasing an older order can still type the whole
+     * thing; this is a head start, not a restriction.
+     *
+     * Cached, because it is reachable without signing in and the underlying
+     * read walks the order numbers. Five minutes is far shorter than a cycle
+     * of 999 orders takes to turn over, so nobody sees a stale letter for long
+     * enough to matter.
+     */
+    public function currentPrefix(): string
+    {
+        return Cache::remember('orders:current_prefix', now()->addMinutes(5), function () {
+            $last = $this->lastAlphabeticCode();
+
+            return $last ? $this->parse($last)['letters'] : 'A';
         });
     }
 

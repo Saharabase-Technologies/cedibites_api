@@ -484,4 +484,19 @@ class OrderController extends Controller
             new OrderResource($order->fresh(['customer.user', 'branch', 'items', 'payments']))
         );
     }
+
+    /**
+     * GET /orders/current-prefix - the letters the order series is on.
+     *
+     * Public, because the person tracking an order has usually never signed in,
+     * and it gives away nothing: the letters are printed on every receipt and
+     * texted to every customer. The tracking field fills them in so somebody
+     * reading their SMS types 637 rather than AH637.
+     */
+    public function currentPrefix(): JsonResponse
+    {
+        return response()->json([
+            'prefix' => app(\App\Services\OrderNumberService::class)->currentPrefix(),
+        ]);
+    }
 }
