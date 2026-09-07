@@ -238,4 +238,35 @@ class Order extends Model
     {
         $query->whereHas('payments', fn (Builder $q) => $q->whereIn('payment_status', ['completed', 'no_charge']));
     }
+
+    /**
+     * The secret half of a tracking link.
+     *
+     * An order number is one or two letters and three digits, so a whole prefix
+     * is 999 codes and can be walked in an afternoon. That is fine for showing
+     * a stranger which stage an order is on, and not fine for showing them the
+     * address it is going to. The link we text carries this alongside the
+     * number, and the address only renders for a request holding it.
+     *
+     * Derived rather than stored: an HMAC over the number and the id keyed on
+     * the app key. No column, no migration, and every order ever placed already
+     * has one. Rotating APP_KEY invalidates every outstanding link, which is
+     * the correct behaviour for a secret keyed on it.
+     */
+    public function trackingToken(): string
+    {
+        return substr(
+            hash_hmac('sha256', $this->order_number.'|'.$this->id, (string) config('app.key')),
+            0,
+            16,
+        );
+    }
+
+    /** Where the customer follows this order, with the token that opens it. */
+    public function trackingUrl(): string
+    {
+        $base = rtrim((string) config('app.frontend_url'), '/');
+
+        return "{$base}/orders/{$this->order_number}?t={$this->trackingToken()}";
+    }
 }

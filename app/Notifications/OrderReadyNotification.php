@@ -45,7 +45,7 @@ class OrderReadyNotification extends Notification implements ShouldQueue
     {
         $type = $this->order->order_type === 'delivery' ? 'ready for delivery' : 'ready for pickup';
 
-        return "CediBites: Order #{$this->order->order_number} is {$type} at {$this->order->branch->name}!";
+        return "CediBites: Order #{$this->order->order_number} is {$type} at {$this->order->branch->name}!"."\n\nTrack it: ".$this->order->trackingUrl();
     }
 
     public function toArray(object $notifiable): array

@@ -182,8 +182,11 @@ it('omits the estimate sentence rather than rendering it empty', function () {
 
     $sms = (new OrderConfirmedNotification($order->fresh()))->toSms($order->customer);
 
-    expect($sms)->toBe('CediBites: Order #AG013 confirmed! Total: GHS 0.10.')
-        ->and($sms)->not->toContain('mins');
+    // The tracking link is appended to every confirmation now, so the assertion
+    // is on the sentence rather than the whole message.
+    expect($sms)->toStartWith('CediBites: Order #AG013 confirmed! Total: GHS 0.10.')
+        ->and($sms)->not->toContain('mins')
+        ->and($sms)->toContain('Track it: ');
 });
 
 it('includes the estimate when there is one', function () {
@@ -194,7 +197,8 @@ it('includes the estimate when there is one', function () {
     ]);
 
     expect((new OrderConfirmedNotification($order))->toSms($order->customer))
-        ->toBe('CediBites: Order #AG014 confirmed! Total: GHS 45.50. Estimated time: 15 mins.');
+        ->toStartWith('CediBites: Order #AG014 confirmed! Total: GHS 45.50. Estimated time: 15 mins.')
+        ->toContain('Track it: ');
 });
 
 it('formats a large total with a thousands separator', function () {

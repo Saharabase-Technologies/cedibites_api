@@ -43,7 +43,7 @@ class OrderPreparingNotification extends Notification implements ShouldQueue
 
     public function toSms(object $notifiable): string
     {
-        return "CediBites: Your order #{$this->order->order_number} is now being prepared!";
+        return "CediBites: Your order #{$this->order->order_number} is now being prepared!"."\n\nTrack it: ".$this->order->trackingUrl();
     }
 
     public function toArray(object $notifiable): array

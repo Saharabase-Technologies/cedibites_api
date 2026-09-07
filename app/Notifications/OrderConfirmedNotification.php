@@ -67,7 +67,7 @@ class OrderConfirmedNotification extends Notification implements ShouldQueue
             $message .= " Estimated time: {$this->order->estimated_prep_time} mins.";
         }
 
-        return $message;
+        return $message."\n\nTrack it: ".$this->order->trackingUrl();
     }
 
     /**

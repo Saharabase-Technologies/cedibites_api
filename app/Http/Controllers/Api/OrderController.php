@@ -270,7 +270,7 @@ class OrderController extends Controller
      * Display order by order number (public, for guest tracking).
      * Returns a minimal response without PII for unauthenticated callers.
      */
-    public function showByNumber(string $orderNumber): JsonResponse
+    public function showByNumber(Request $request, string $orderNumber): JsonResponse
     {
         $order = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
             ->where('order_number', $orderNumber)
@@ -295,6 +295,16 @@ class OrderController extends Controller
          * branch's own contact details, which are public anyway, and the item
          * ids and option labels the list needs to render itself.
          */
+        /**
+         * Whoever holds the link we texted gets the personal half.
+         *
+         * `hash_equals` rather than `===`, because comparing a secret with a
+         * short-circuiting operator leaks its length and its prefix to anyone
+         * timing the responses.
+         */
+        $token = (string) $request->query('t', '');
+        $holdsLink = $token !== '' && hash_equals($order->trackingToken(), $token);
+
         return response()->success([
             'id' => $order->id,
             'order_number' => $order->order_number,
@@ -338,6 +348,11 @@ class OrderController extends Controller
                 ->sortByDesc(fn ($h) => $h->changed_at ?? $h->created_at)
                 ->first()?->changed_at?->toIso8601String(),
             'created_at' => $order->created_at?->toIso8601String(),
+
+            // Only for the holder of the link. A guessed order number sees the
+            // stage and the money and never learns whose door this is.
+            'delivery_address' => $holdsLink ? $order->delivery_address : null,
+            'contact_name' => $holdsLink ? $order->contact_name : null,
         ]);
     }
 

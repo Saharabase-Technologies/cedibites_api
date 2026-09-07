@@ -45,7 +45,7 @@ class OrderOutForDeliveryNotification extends Notification implements ShouldQueu
     {
         $eta = $this->order->estimated_delivery_time?->format('g:i A') ?? '15-30 mins';
 
-        return "CediBites: Your order #{$this->order->order_number} is out for delivery! ETA: {$eta}";
+        return "CediBites: Your order #{$this->order->order_number} is out for delivery! ETA: {$eta}"."\n\nTrack it: ".$this->order->trackingUrl();
     }
 
     public function toArray(object $notifiable): array
