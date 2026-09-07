@@ -280,27 +280,63 @@ class OrderController extends Controller
             return response()->error('Order not found.', 404);
         }
 
+        /**
+         * Deliberately not an OrderResource.
+         *
+         * This route is public and throttled at twenty a minute, and an order
+         * number is one or two letters and three digits. A prefix holds 999 of
+         * them, so the whole live cycle can be walked in under an hour. Handing
+         * back the full resource would put the customer's name, their phone and
+         * the address the food is going to behind a guess.
+         *
+         * So the rule for this payload is: enough to see where the order has
+         * got to and what it cost, and nothing that identifies who placed it or
+         * says where they live. What was missing was the money breakdown, the
+         * branch's own contact details, which are public anyway, and the item
+         * ids and option labels the list needs to render itself.
+         */
         return response()->success([
             'id' => $order->id,
             'order_number' => $order->order_number,
             'status' => $order->status,
             'order_type' => $order->order_type,
+
+            'subtotal' => (float) $order->subtotal,
+            'discount' => (float) $order->discount,
+            'promo_name' => $order->promo_name,
+            'delivery_fee' => (float) $order->delivery_fee,
             'total_amount' => (float) $order->total_amount,
+
+            // A branch address and phone are on the public branches endpoint
+            // already, and somebody chasing an order needs the number to ring.
             'branch' => [
                 'name' => $order->branch?->name ?? '—',
+                'address' => $order->branch?->address,
+                'phone' => $order->branch?->phone,
             ],
+
             'items' => $order->items->map(fn ($item) => [
+                'id' => $item->id,
                 'quantity' => $item->quantity,
                 'unit_price' => (float) $item->unit_price,
                 'subtotal' => (float) $item->subtotal,
+                // The snapshot is what the menu said when the order was placed.
+                // A dish renamed since must not rewrite an old receipt.
+                'menu_item_snapshot' => $item->menu_item_snapshot,
+                'menu_item_option_snapshot' => $item->menu_item_option_snapshot,
                 'menu_item' => [
                     'name' => $item->menuItem?->name,
                 ],
             ]),
+
             'status_history' => $order->statusHistory->map(fn ($history) => [
                 'status' => $history->status,
                 'changed_at' => $history->changed_at?->toIso8601String(),
             ]),
+            'stage_changed_at' => $order->statusHistory
+                ->where('status', $order->status)
+                ->sortByDesc(fn ($h) => $h->changed_at ?? $h->created_at)
+                ->first()?->changed_at?->toIso8601String(),
             'created_at' => $order->created_at?->toIso8601String(),
         ]);
     }
