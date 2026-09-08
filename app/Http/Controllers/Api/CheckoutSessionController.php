@@ -161,8 +161,21 @@ class CheckoutSessionController extends Controller
         $resolvedPromo = $promoService->resolve($itemIds, (string) $validated['branch_id'], $subtotal);
         $discount = $resolvedPromo ? $promoService->calculateDiscount($resolvedPromo, $subtotal) : 0;
 
-        // Calculate totals — service charge on customer orders (percentage with cap)
-        $serviceChargeEnabled = $this->settingService->getBoolean('service_charge_enabled', true);
+        /**
+         * The service charge follows the payment, not the basket.
+         *
+         * It covers what the gateway takes off a mobile money collection, so a
+         * cash order owes nothing: there is no gateway in one, and billing for
+         * it would be a fee for a service nobody performed. The setting decides
+         * whether there is a charge at all; this decides who carries it.
+         *
+         * Checked here rather than only on the client, because this figure is
+         * what gets written to the session and then to the order. A total the
+         * browser worked out is a suggestion.
+         */
+        $chargeableMethod = $validated['payment_method'] !== 'cash';
+        $serviceChargeEnabled = $chargeableMethod
+            && $this->settingService->getBoolean('service_charge_enabled', true);
         $serviceCharge = 0;
         if ($serviceChargeEnabled) {
             $serviceChargePercent = $this->settingService->getInteger('service_charge_percent', 1);
