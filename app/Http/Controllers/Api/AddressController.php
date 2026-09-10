@@ -97,12 +97,22 @@ class AddressController extends Controller
             ];
 
             if ($existing) {
-                // Keep whatever the customer had typed as a label or note if
-                // this call did not bring one; an automatic save from checkout
-                // must not wipe "Mum's house".
+                /**
+                 * The row is already there, so only fill the gaps in it.
+                 *
+                 * `full_address` is deliberately left alone. The match is
+                 * case-insensitive and trims, so "  17 alhaji sulley road  "
+                 * finds the row holding "17 Alhaji Sulley Road" — and writing
+                 * the new text over it replaced a properly typed address with
+                 * whatever casing an automatic save from checkout happened to
+                 * carry. The customer typed it correctly the first time.
+                 *
+                 * Same for the label and the note: an automatic save carries
+                 * neither, and must not wipe "Mum's house".
+                 */
                 $existing->fill(array_filter(
                     $attributes,
-                    fn ($value, $key) => $value !== null || in_array($key, ['full_address'], true),
+                    fn ($value, $key) => $value !== null && $key !== 'full_address',
                     ARRAY_FILTER_USE_BOTH,
                 ));
                 $address = $existing;

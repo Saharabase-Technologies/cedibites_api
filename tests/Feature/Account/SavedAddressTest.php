@@ -72,6 +72,9 @@ it('does not save the same address twice', function () {
     expect(Address::query()->count())->toBe(1);
     // And the automatic save must not wipe a label the customer typed.
     expect(Address::query()->first()->label)->toBe('Home');
+    // Nor rewrite the address itself in whatever casing the later call carried.
+    // The customer typed it properly the first time.
+    expect(Address::query()->first()->full_address)->toBe('17 Alhaji Sulley Road, Abelenkpe, Accra');
 });
 
 it('lists the default first', function () {
