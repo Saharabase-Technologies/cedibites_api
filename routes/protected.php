@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AddressController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\OrderController;
@@ -17,6 +18,14 @@ Route::middleware('customer.active')->group(function () {
 
     Route::get('orders', [OrderController::class, 'index']);
     Route::get('orders/{order}', [OrderController::class, 'show']);
+
+    // Saved delivery addresses. Every one of these is scoped to the caller's
+    // own customer row inside the controller; the id in the path is never
+    // trusted on its own. See AddressController.
+    Route::get('addresses', [AddressController::class, 'index']);
+    Route::post('addresses', [AddressController::class, 'store']);
+    Route::patch('addresses/{address}', [AddressController::class, 'update']);
+    Route::delete('addresses/{address}', [AddressController::class, 'destroy']);
 
     Route::get('notifications', [NotificationController::class, 'index']);
     Route::get('notifications/unread-count', [NotificationController::class, 'unreadCount']);
