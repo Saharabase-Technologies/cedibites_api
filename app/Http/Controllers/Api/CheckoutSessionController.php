@@ -15,6 +15,7 @@ use App\Services\HubtelPaymentService;
 use App\Services\OrderCreationService;
 use App\Services\PromoResolutionService;
 use App\Services\SystemSettingService;
+use App\Support\Promos\PromoCodeRefused;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -51,6 +52,7 @@ class CheckoutSessionController extends Controller
             'special_instructions' => ['nullable', 'string'],
             'payment_method' => ['required', 'in:mobile_money,cash'],
             'momo_number' => ['nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
+            'promo_code' => ['nullable', 'string', 'max:40'],
         ], [
             'momo_number.regex' => 'That is not a Ghana mobile money number.',
         ]);
@@ -155,11 +157,24 @@ class CheckoutSessionController extends Controller
             ];
         }
 
-        // Resolve best applicable promo for this cart
-        $promoService = app(PromoResolutionService::class);
-        $itemIds = array_column($itemSnapshots, 'menu_item_id');
-        $resolvedPromo = $promoService->resolve($itemIds, (string) $validated['branch_id'], $subtotal);
-        $discount = $resolvedPromo ? $promoService->calculateDiscount($resolvedPromo, $subtotal) : 0;
+        // The one discount this order carries: the best promo that applies by
+        // itself, or the code the customer typed if that gives more. A code
+        // that cannot be used is refused outright rather than dropped, because
+        // the customer has just been shown a total with it taken off.
+        try {
+            $offer = app(PromoResolutionService::class)->bestOffer(
+                (string) $validated['branch_id'],
+                $subtotal,
+                $this->promoLines($itemSnapshots),
+                $validated['promo_code'] ?? null,
+                $validated['customer_phone'],
+                $identity['customer_id'],
+            );
+        } catch (PromoCodeRefused $refused) {
+            return $this->promoRefusedResponse($refused);
+        }
+        $resolvedPromo = $offer->promo;
+        $discount = $offer->discount;
 
         /**
          * The service charge follows the payment, not the basket.
@@ -447,6 +462,7 @@ class CheckoutSessionController extends Controller
             'contact_phone' => ['required', 'string', 'max:20'],
             'customer_notes' => ['nullable', 'string'],
             'discount' => ['nullable', 'numeric', 'min:0', 'max:99999'],
+            'promo_code' => ['nullable', 'string', 'max:40'],
             'delivery_fee' => ['nullable', 'numeric', 'min:0', 'max:99999'],
             'momo_number' => ['required_if:payment_method,mobile_money', 'nullable', 'string', 'regex:/^(0[0-9]{9}|\+?233[0-9]{9})$/'],
 
@@ -529,15 +545,23 @@ class CheckoutSessionController extends Controller
             ];
         }
 
-        $discount = (float) ($validated['discount'] ?? 0);
-
-        // Server-side promo validation: resolve the best promo and cap discount
-        $promoService = app(PromoResolutionService::class);
-        $itemIdsForPromo = array_column($itemSnapshots, 'menu_item_id');
-        $resolvedPromo = $promoService->resolve($itemIdsForPromo, (string) $branchId, $subtotal);
-        $maxAllowedDiscount = $resolvedPromo ? $promoService->calculateDiscount($resolvedPromo, $subtotal) : 0;
-        // Cap the POS discount to the resolved promo discount (prevent arbitrary amounts)
-        $discount = min($discount, $maxAllowedDiscount);
+        // Worked out here, the same way the online checkout does it. The till
+        // used to send a `discount` that was capped at the promo's figure, so it
+        // could never give more than the promo anyway; it is still accepted from
+        // older tills and ignored.
+        try {
+            $offer = app(PromoResolutionService::class)->bestOffer(
+                (string) $branchId,
+                $subtotal,
+                $this->promoLines($itemSnapshots),
+                $validated['promo_code'] ?? null,
+                $validated['contact_phone'],
+            );
+        } catch (PromoCodeRefused $refused) {
+            return $this->promoRefusedResponse($refused);
+        }
+        $resolvedPromo = $offer->promo;
+        $discount = $offer->discount;
 
         // Delivery fee only applies to delivery orders (staff-entered, e.g. phone-in deliveries)
         $deliveryFee = $validated['fulfillment_type'] === 'delivery'
@@ -1118,6 +1142,29 @@ class CheckoutSessionController extends Controller
             'status' => 'confirmed',
             'order' => new OrderResource($order),
         ], 201);
+    }
+
+    /**
+     * The basket as the promo service reads it: each line's dish and amount.
+     *
+     * @param  array<int, array{menu_item_id: int, quantity: int, unit_price: float|int|string}>  $itemSnapshots
+     * @return array<int, array{menu_item_id: int, amount: float}>
+     */
+    private function promoLines(array $itemSnapshots): array
+    {
+        return array_map(fn (array $snap) => [
+            'menu_item_id' => (int) $snap['menu_item_id'],
+            'amount' => $snap['quantity'] * (float) $snap['unit_price'],
+        ], $itemSnapshots);
+    }
+
+    private function promoRefusedResponse(PromoCodeRefused $refused): JsonResponse
+    {
+        return response()->json([
+            'code' => 'promo_code_refused',
+            'reason' => $refused->reason,
+            'message' => $refused->getMessage(),
+        ], 422);
     }
 
     private function resolveCartIdentity(Request $request): array

@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Promo;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdatePromoRequest extends FormRequest
 {
@@ -38,6 +40,35 @@ class UpdatePromoRequest extends FormRequest
             'end_date' => ['sometimes', 'date'],
             'is_active' => ['sometimes', 'boolean'],
             'accounting_code' => ['nullable', 'string', 'max:50'],
+            'code' => [
+                'nullable', 'string', 'regex:/^[A-Z0-9-]{3,20}$/',
+                Rule::unique('promos', 'code')->whereNull('deleted_at')->ignore($this->route('promo')),
+            ],
+            'max_uses' => ['nullable', 'integer', 'min:1'],
+            'max_uses_per_customer' => ['nullable', 'integer', 'min:1'],
+            'first_order_only' => ['sometimes', 'boolean'],
+        ];
+    }
+
+    /**
+     * The code is compared in capitals with no spaces, the way it is stored, so
+     * "cedi20" cannot sit beside "CEDI20" as a second promo.
+     */
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('code')) {
+            $this->merge(['code' => Promo::normaliseCode($this->input('code'))]);
+        }
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'code.regex' => 'A code is 3 to 20 letters, numbers or dashes.',
+            'code.unique' => 'Another promo already uses that code.',
         ];
     }
 }

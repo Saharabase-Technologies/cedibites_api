@@ -2,9 +2,11 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Spatie\Activitylog\LogOptions;
 use Spatie\Activitylog\Traits\LogsActivity;
@@ -17,13 +19,14 @@ class Promo extends Model
     {
         return LogOptions::defaults()
             ->useLogName('admin')
-            ->logOnly(['name', 'type', 'value', 'is_active', 'start_date', 'end_date'])
+            ->logOnly(['name', 'code', 'type', 'value', 'is_active', 'start_date', 'end_date', 'max_uses', 'max_uses_per_customer', 'first_order_only'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
 
     protected $fillable = [
         'name',
+        'code',
         'type',
         'value',
         'scope',
@@ -31,6 +34,9 @@ class Promo extends Model
         'min_order_value',
         'max_order_value',
         'max_discount',
+        'max_uses',
+        'max_uses_per_customer',
+        'first_order_only',
         'start_date',
         'end_date',
         'is_active',
@@ -47,7 +53,39 @@ class Promo extends Model
             'start_date' => 'date',
             'end_date' => 'date',
             'is_active' => 'boolean',
+            'max_uses' => 'integer',
+            'max_uses_per_customer' => 'integer',
+            'first_order_only' => 'boolean',
         ];
+    }
+
+    /**
+     * Codes are kept in capitals with no spaces, so "cedi20 " typed at a till
+     * and "CEDI20" printed on a flyer are the same code. An empty box means no
+     * code, which means the promo applies by itself.
+     */
+    protected function code(): Attribute
+    {
+        return Attribute::make(
+            set: fn (?string $value) => self::normaliseCode($value),
+        );
+    }
+
+    public static function normaliseCode(?string $value): ?string
+    {
+        $value = strtoupper(preg_replace('/\s+/', '', (string) $value));
+
+        return $value === '' ? null : $value;
+    }
+
+    public function hasCode(): bool
+    {
+        return $this->code !== null;
+    }
+
+    public function orders(): HasMany
+    {
+        return $this->hasMany(Order::class);
     }
 
     public function branches(): BelongsToMany

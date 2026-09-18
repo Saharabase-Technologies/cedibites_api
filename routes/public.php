@@ -54,6 +54,13 @@ Route::get('orders/by-number/{orderNumber}', [OrderController::class, 'showByNum
     ->middleware('throttle:20,1');
 Route::post('promos/resolve', [PromoController::class, 'resolve']);
 
+// What comes off a basket, with or without a code. Public for the same reason
+// as resolve: most people checking out never sign in, and the till asks here
+// too. The controller limits codes that do not exist, not requests, because a
+// till re-checks a good code every time a dish goes on the order.
+Route::post('promos/offer', [PromoController::class, 'offer'])
+    ->middleware('throttle:120,1,promo-offer');
+
 // Whose Mobile Money number is this. Public because the person checking out has
 // usually never signed in; the staff copy of the same question lives behind
 // permissions in routes/employee.php. Throttled hard because every call that

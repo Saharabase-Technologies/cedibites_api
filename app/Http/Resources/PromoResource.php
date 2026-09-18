@@ -20,6 +20,7 @@ class PromoResource extends JsonResource
         return [
             'id' => (string) $this->id,
             'name' => $this->name,
+            'code' => $this->code,
             'type' => $this->type,
             'value' => (float) $this->value,
             'scope' => $this->scope,
@@ -29,6 +30,11 @@ class PromoResource extends JsonResource
             'minOrderValue' => $this->min_order_value !== null ? (float) $this->min_order_value : null,
             'maxOrderValue' => $this->max_order_value !== null ? (float) $this->max_order_value : null,
             'maxDiscount' => $this->max_discount !== null ? (float) $this->max_discount : null,
+            'maxUses' => $this->max_uses,
+            'maxUsesPerCustomer' => $this->max_uses_per_customer,
+            'firstOrderOnly' => (bool) $this->first_order_only,
+            // Only the admin list counts uses; nobody else is shown it.
+            'timesUsed' => $this->when($this->resource->getAttribute('times_used') !== null, fn () => (int) $this->times_used),
             'startDate' => $this->start_date->format('Y-m-d'),
             'endDate' => $this->end_date->format('Y-m-d'),
             'isActive' => (bool) $this->is_active,

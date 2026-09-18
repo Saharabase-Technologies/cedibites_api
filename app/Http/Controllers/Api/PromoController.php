@@ -3,13 +3,16 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PromoOfferRequest;
 use App\Http\Requests\ResolvePromoRequest;
 use App\Http\Requests\StorePromoRequest;
 use App\Http\Requests\UpdatePromoRequest;
 use App\Http\Resources\PromoResource;
 use App\Models\Promo;
 use App\Services\PromoResolutionService;
+use App\Support\Promos\PromoCodeRefused;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\RateLimiter;
 
 class PromoController extends Controller
 {
@@ -22,7 +25,11 @@ class PromoController extends Controller
      */
     public function index(): JsonResponse
     {
-        $promos = Promo::query()->with(['branches', 'menuItems'])->orderBy('name')->get();
+        $promos = Promo::query()
+            ->with(['branches', 'menuItems'])
+            ->withCount(['orders as times_used' => fn ($q) => $q->where('status', '!=', 'cancelled')])
+            ->orderBy('name')
+            ->get();
 
         return response()->success(PromoResource::collection($promos));
     }
@@ -87,16 +94,77 @@ class PromoController extends Controller
     }
 
     /**
-     * Resolve the best applicable promo.
+     * The best promo that applies by itself.
+     *
+     * Kept for tills and browsers still running the build before codes. It
+     * never returns a promo that has a code, since nobody typed one.
      */
     public function resolve(ResolvePromoRequest $request): JsonResponse
     {
+        $subtotal = (float) ($request->subtotal ?? 0);
         $promo = $this->promoResolution->resolve(
             $request->item_ids,
-            $request->branch_id,
-            (float) ($request->subtotal ?? 0)
+            (string) $request->branch_id,
+            $subtotal
         );
 
-        return response()->success($promo ? new PromoResource($promo) : null);
+        if (! $promo) {
+            return response()->success(null);
+        }
+
+        return response()->success([
+            ...(new PromoResource($promo))->resolve($request),
+            'discount' => $this->promoResolution->calculateDiscount($promo, $subtotal),
+        ]);
+    }
+
+    /**
+     * What comes off this basket, with or without a code.
+     *
+     * The checkout and the till both ask here, and both ask again when the
+     * order is placed, so the figure a customer is shown and the figure they
+     * are charged come from the same rule.
+     *
+     * Guessing is limited by misses, not by requests. A till re-checks the same
+     * good code every time a dish is added, and that must never lock it out; a
+     * run of codes that do not exist is what somebody guessing looks like.
+     */
+    public function offer(PromoOfferRequest $request): JsonResponse
+    {
+        $missKey = 'promo-code-miss:'.$request->ip();
+
+        if ($request->filled('code') && RateLimiter::tooManyAttempts($missKey, 10)) {
+            return response()->json([
+                'code' => 'promo_code_refused',
+                'reason' => 'too_many',
+                'message' => 'Too many codes tried. Wait a minute and try again.',
+            ], 429);
+        }
+
+        try {
+            $offer = $this->promoResolution->bestOffer(
+                (string) $request->branch_id,
+                (float) $request->subtotal,
+                $request->lines,
+                $request->code,
+                $request->phone,
+            );
+        } catch (PromoCodeRefused $refused) {
+            if ($refused->reason === 'not_found') {
+                RateLimiter::hit($missKey, 60);
+            }
+
+            return response()->json([
+                'code' => 'promo_code_refused',
+                'reason' => $refused->reason,
+                'message' => $refused->getMessage(),
+            ], 422);
+        }
+
+        return response()->success([
+            'promo' => $offer->promo ? (new PromoResource($offer->promo))->resolve($request) : null,
+            'discount' => $offer->discount,
+            'code_beaten' => $offer->codeBeaten,
+        ]);
     }
 }
