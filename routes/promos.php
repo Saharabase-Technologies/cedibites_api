@@ -23,4 +23,9 @@ Route::middleware(['token.staff', 'permission:manage_menu'])->group(function () 
     Route::post('promos', [PromoController::class, 'store']);
     Route::patch('promos/{promo}', [PromoController::class, 'update']);
     Route::delete('promos/{promo}', [PromoController::class, 'destroy']);
+
+    // One-off codes: a batch made for one promo, each code good for one order.
+    Route::get('promos/{promo}/codes', [PromoController::class, 'codes']);
+    Route::post('promos/{promo}/codes', [PromoController::class, 'generateCodes']);
+    Route::delete('promos/{promo}/codes/{promoCode}', [PromoController::class, 'destroyCode']);
 });

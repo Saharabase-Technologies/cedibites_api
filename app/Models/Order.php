@@ -72,6 +72,7 @@ class Order extends Model
         'discount',
         'promo_id',
         'promo_name',
+        'promo_code_id',
         'total_amount',
         'status',
         'estimated_prep_time',

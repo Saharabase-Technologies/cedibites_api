@@ -36,6 +36,7 @@ class CheckoutSession extends Model
         'discount',
         'promo_id',
         'promo_name',
+        'promo_code_id',
         'total_amount',
         'staff_id',
         'cart_id',

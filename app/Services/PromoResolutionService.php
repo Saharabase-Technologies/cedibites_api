@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Helpers\PhoneHelper;
 use App\Models\Branch;
+use App\Models\CheckoutSession;
 use App\Models\Order;
 use App\Models\Promo;
+use App\Models\PromoCode;
 use App\Support\Promos\PromoCodeRefused;
 use App\Support\Promos\PromoOffer;
 use Carbon\Carbon;
@@ -14,10 +16,13 @@ use Illuminate\Database\Eloquent\Builder;
 /**
  * Which discount an order gets.
  *
- * Two kinds of promo. One without a code applies by itself to every order that
- * qualifies, as promos always have. One with a code applies only when somebody
- * types it, at checkout or at the till. An order carries one discount, and when
- * both kinds qualify the bigger one wins, so typing a code can never cost the
+ * Three kinds of promo, by `redemption`. One applies by itself to every order
+ * that qualifies, as promos always have. One has a single code anybody can type.
+ * One has a batch of one-off codes, each good for one order. A code is typed at
+ * checkout or at the till, and the same rules answer both.
+ *
+ * An order carries one discount. When a code and a promo that applies by
+ * itself both qualify, the bigger one wins, so typing a code can never cost the
  * customer money.
  *
  * A basket is passed as lines: `menu_item_id` and the line's `amount`. The
@@ -52,7 +57,7 @@ class PromoResolutionService
 
         $candidates = Promo::query()
             ->with(['branches', 'menuItems'])
-            ->whereNull('code')
+            ->where('redemption', Promo::AUTOMATIC)
             ->where('is_active', true)
             ->whereDate('start_date', '<=', $today)
             ->whereDate('end_date', '>=', $today)
@@ -100,7 +105,12 @@ class PromoResolutionService
     /**
      * The promo behind a code, or the reason this order cannot have it.
      *
+     * A shared code is looked for first, then the one-off codes. Both are
+     * matched without dashes or spaces, so JOLLOF-K7Q2MX typed as jollofk7q2mx
+     * still finds itself.
+     *
      * @param  array<int, array{menu_item_id: int|string, amount?: float|int|string|null}>  $lines
+     * @return array{0: Promo, 1: ?PromoCode, 2: string} the promo, the one-off code if it was one, and the code as it is written
      *
      * @throws PromoCodeRefused
      */
@@ -111,24 +121,76 @@ class PromoResolutionService
         array $lines,
         ?string $phone = null,
         ?int $customerId = null,
-    ): Promo {
-        $code = (string) Promo::normaliseCode($code);
-        $promo = $code === ''
+    ): array {
+        $key = PromoCode::lookupKey($code);
+        $typed = (string) Promo::normaliseCode($code);
+        $single = null;
+
+        $promo = $key === ''
             ? null
-            : Promo::query()->with(['branches', 'menuItems'])->where('code', $code)->first();
+            : Promo::query()->with(['branches', 'menuItems'])
+                ->where('redemption', Promo::SHARED_CODE)
+                ->whereRaw("replace(code, '-', '') = ?", [$key])
+                ->first();
+
+        if (! $promo && $key !== '') {
+            $single = PromoCode::query()->where('lookup', $key)->first();
+            // A deleted promo takes its codes with it: the relation skips it.
+            $promo = $single?->promo()->with(['branches', 'menuItems'])->first();
+            if ($promo && $promo->redemption !== Promo::SINGLE_USE) {
+                $promo = null;
+            }
+        }
 
         if (! $promo) {
-            throw new PromoCodeRefused('not_found', "There is no code {$code}. Check the spelling.");
+            throw new PromoCodeRefused('not_found', "There is no code {$typed}. Check the spelling.");
+        }
+
+        $written = $single ? $single->code : (string) $promo->code;
+        $phone = $this->knownPhone($phone);
+
+        if ($single && $this->isTaken($single, $phone)) {
+            throw new PromoCodeRefused('code_used', "{$written} has already been used.");
         }
 
         $lines = $this->lines($lines, []);
-        $reason = $this->refusal($promo, (int) $branchId, $subtotal, $lines, $this->knownPhone($phone), $customerId);
+        $reason = $this->refusal($promo, (int) $branchId, $subtotal, $lines, $phone, $customerId);
 
         if ($reason !== null) {
-            throw new PromoCodeRefused($reason, $this->explain($reason, $promo, (int) $branchId));
+            throw new PromoCodeRefused($reason, $this->explain($reason, $promo, (int) $branchId, $written));
         }
 
-        return $promo;
+        return [$promo, $single, $written];
+    }
+
+    /**
+     * Whether a one-off code has gone.
+     *
+     * Used, when an order that is not cancelled carries it. Held, when somebody
+     * else's checkout is still waiting on a Mobile Money payment with it: that
+     * session becomes the order once the money lands, and the code would be
+     * spent twice. The hold lasts as long as the session, five minutes. The
+     * same phone number's own session never holds a code against itself, or
+     * going back to change something would lock the customer out of their own
+     * voucher.
+     */
+    public function isTaken(PromoCode $code, ?string $phone = null): bool
+    {
+        $used = Order::query()
+            ->where('promo_code_id', $code->id)
+            ->where('status', '!=', 'cancelled')
+            ->exists();
+
+        if ($used) {
+            return true;
+        }
+
+        return CheckoutSession::query()
+            ->where('promo_code_id', $code->id)
+            ->whereIn('status', ['pending', 'payment_initiated'])
+            ->where('expires_at', '>', now())
+            ->when($phone !== null, fn ($q) => $q->where('customer_phone', '!=', $phone))
+            ->exists();
     }
 
     /**
@@ -149,17 +211,17 @@ class PromoResolutionService
         $automatic = $this->resolve([], $branchId, $subtotal, $lines, $phone, $customerId);
         $automaticDiscount = $automatic ? $this->calculateDiscount($automatic, $subtotal, $lines) : 0.0;
 
-        if (Promo::normaliseCode($code) === null) {
+        if (PromoCode::lookupKey($code) === '') {
             return $automatic ? new PromoOffer($automatic, $automaticDiscount) : PromoOffer::none();
         }
 
-        $coded = $this->resolveCode((string) $code, $branchId, $subtotal, $lines, $phone, $customerId);
+        [$coded, $single, $written] = $this->resolveCode((string) $code, $branchId, $subtotal, $lines, $phone, $customerId);
         $codedDiscount = $this->calculateDiscount($coded, $subtotal, $lines);
 
         // A tie goes to the code: the customer asked for it, and the receipt
         // should name what they asked for.
         if ($codedDiscount >= $automaticDiscount) {
-            return new PromoOffer($coded, $codedDiscount);
+            return new PromoOffer($coded, $codedDiscount, promoCode: $single, appliedCode: $written);
         }
 
         return new PromoOffer($automatic, $automaticDiscount, codeBeaten: true);
@@ -262,16 +324,14 @@ class PromoResolutionService
     }
 
     /** Words for the person at the screen. */
-    private function explain(string $reason, Promo $promo, int $branchId): string
+    private function explain(string $reason, Promo $promo, int $branchId, string $code): string
     {
-        $code = $promo->code;
-
         return match ($reason) {
             'inactive' => "{$code} is switched off at the moment.",
             'not_started' => "{$code} starts on {$promo->start_date->format('j F')}.",
             'ended' => "{$code} ended on {$promo->end_date->format('j F')}.",
             'branch' => "{$code} cannot be used at ".(Branch::find($branchId)?->name ?? 'this branch').'.',
-            'items' => $this->explainItems($promo),
+            'items' => $this->explainItems($promo, $code),
             'min_order' => "{$code} needs an order of ".$this->money($promo->min_order_value).' or more.',
             'max_order' => "{$code} is for orders up to ".$this->money($promo->max_order_value).'.',
             'used_up' => "{$code} has been used up.",
@@ -284,15 +344,15 @@ class PromoResolutionService
         };
     }
 
-    private function explainItems(Promo $promo): string
+    private function explainItems(Promo $promo, string $code): string
     {
         $names = $promo->menuItems->pluck('name')->all();
 
         if (count($names) <= 2) {
-            return "{$promo->code} is for ".implode(' or ', $names).'. Add one to the order to use it.';
+            return "{$code} is for ".implode(' or ', $names).'. Add one to the order to use it.';
         }
 
-        return "{$promo->code} is for certain dishes, and none of them is in this order.";
+        return "{$code} is for certain dishes, and none of them is in this order.";
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

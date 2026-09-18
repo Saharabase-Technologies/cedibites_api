@@ -15,11 +15,37 @@ class Promo extends Model
 {
     use HasFactory, LogsActivity, SoftDeletes;
 
+    /** Applies by itself to every order that qualifies. */
+    public const AUTOMATIC = 'automatic';
+
+    /** One code, `code`, typed by anybody who has it. */
+    public const SHARED_CODE = 'shared_code';
+
+    /** A batch of codes in `promo_codes`, each good for one order. */
+    public const SINGLE_USE = 'single_use';
+
+    public const REDEMPTIONS = [self::AUTOMATIC, self::SHARED_CODE, self::SINGLE_USE];
+
+    /**
+     * A promo saved with a code and no word on how it applies is a shared-code
+     * promo. The column's default is `automatic`, so without this a seeder, a
+     * test or a tinker session writing `code` alone would make a promo meant
+     * for one flyer apply to every order.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (Promo $promo) {
+            if ($promo->redemption === null) {
+                $promo->redemption = $promo->code !== null ? self::SHARED_CODE : self::AUTOMATIC;
+            }
+        });
+    }
+
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
             ->useLogName('admin')
-            ->logOnly(['name', 'code', 'type', 'value', 'is_active', 'start_date', 'end_date', 'max_uses', 'max_uses_per_customer', 'first_order_only'])
+            ->logOnly(['name', 'code', 'redemption', 'type', 'value', 'is_active', 'start_date', 'end_date', 'max_uses', 'max_uses_per_customer', 'first_order_only'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
@@ -27,6 +53,7 @@ class Promo extends Model
     protected $fillable = [
         'name',
         'code',
+        'redemption',
         'type',
         'value',
         'scope',
@@ -78,9 +105,15 @@ class Promo extends Model
         return $value === '' ? null : $value;
     }
 
-    public function hasCode(): bool
+    /** A promo nobody has to type anything for. */
+    public function isAutomatic(): bool
     {
-        return $this->code !== null;
+        return $this->redemption === self::AUTOMATIC;
+    }
+
+    public function codes(): HasMany
+    {
+        return $this->hasMany(PromoCode::class);
     }
 
     public function orders(): HasMany

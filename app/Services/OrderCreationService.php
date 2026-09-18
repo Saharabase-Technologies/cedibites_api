@@ -114,6 +114,7 @@ class OrderCreationService
                 'discount' => $session->discount ?? 0,
                 'promo_id' => $session->promo_id ?? null,
                 'promo_name' => $session->promo_name ?? null,
+                'promo_code_id' => $session->promo_code_id ?? null,
                 'total_amount' => $session->total_amount,
                 'status' => $initialStatus,
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,

@@ -11,6 +11,7 @@ use App\Models\MenuItem;
 use App\Models\MenuItemOption;
 use App\Models\Order;
 use App\Models\Promo;
+use App\Models\PromoCode;
 use App\Models\SystemSetting;
 use App\Models\User;
 use Database\Seeders\PermissionSeeder;
@@ -549,5 +550,220 @@ describe('setting up a code', function () {
         $this->actingAs($this->admin)->getJson('/v1/promos')
             ->assertOk()
             ->assertJsonPath('data.0.timesUsed', 2);
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| One-off codes
+|--------------------------------------------------------------------------
+|
+| A batch of vouchers for one promo, each good for one order. The promo says
+| it is one of these in `redemption`, so a batch not yet made cannot leave it
+| looking like a promo that applies to everybody.
+|
+*/
+
+/** A one-off promo with codes already made, as the admin screen would make them. */
+function pcSingleUse(array $attrs = [], array $codes = ['JOLLOF-K7Q2MX']): Promo
+{
+    $promo = pcPromo(array_merge(['name' => 'Radio giveaway', 'redemption' => Promo::SINGLE_USE, 'value' => 25], $attrs));
+    foreach ($codes as $code) {
+        PromoCode::create(['promo_id' => $promo->id, 'code' => $code, 'lookup' => PromoCode::lookupKey($code)]);
+    }
+
+    return $promo;
+}
+
+describe('a one-off code', function () {
+    beforeEach(function () {
+        SystemSetting::updateOrCreate(['key' => 'service_charge_enabled'], ['value' => 'false']);
+    });
+
+    it('never applies by itself, even before any codes are made', function () {
+        $branch = pcBranch();
+        $jollof = pcDish($branch, 'Jollof', 100);
+        pcSingleUse(codes: []);
+
+        pcOffer($branch, [[$jollof, 100]])->assertOk()->assertJsonPath('data.promo', null);
+    });
+
+    it('applies once, typed any way, and shows as it is written', function () {
+        $branch = pcBranch();
+        $jollof = pcDish($branch, 'Jollof', 100);
+        pcSingleUse();
+
+        pcOffer($branch, [[$jollof, 100]], 'jollofk7q2mx')
+            ->assertOk()
+            ->assertJsonPath('data.promo.name', 'Radio giveaway')
+            ->assertJsonPath('data.discount', 25)
+            ->assertJsonPath('data.applied_code', 'JOLLOF-K7Q2MX');
+    });
+
+    it('is spent by the order that uses it, and a cancelled order gives it back', function () {
+        $branch = pcBranch();
+        pcGuestCart($branch, 'guest-single-use-spent');
+        $promo = pcSingleUse();
+        $code = PromoCode::first();
+
+        pcPlace($branch, 'guest-single-use-spent', 'JOLLOF-K7Q2MX')->assertSuccessful();
+
+        $order = Order::latest('id')->first();
+        expect($order->promo_code_id)->toBe($code->id);
+        expect($order->promo_id)->toBe($promo->id);
+        expect((float) $order->discount)->toBe(25.00);
+
+        $jollof = MenuItem::where('name', 'Jollof')->first();
+        pcOffer($branch, [[$jollof, 100]], 'JOLLOF-K7Q2MX', '0551234567')
+            ->assertStatus(422)
+            ->assertJsonPath('reason', 'code_used')
+            ->assertJsonPath('message', 'JOLLOF-K7Q2MX has already been used.');
+
+        $order->update(['status' => 'cancelled']);
+
+        pcOffer($branch, [[$jollof, 100]], 'JOLLOF-K7Q2MX', '0551234567')->assertOk();
+    });
+
+    it('is held by somebody else paying with it, but never against its own number', function () {
+        $branch = pcBranch();
+        $jollof = pcDish($branch, 'Jollof', 100);
+        $promo = pcSingleUse();
+
+        // A Mobile Money payment in progress on another phone, five minutes long.
+        CheckoutSession::create([
+            'session_token' => 'held-by-another-phone',
+            'branch_id' => $branch->id,
+            'session_type' => 'online',
+            'status' => 'payment_initiated',
+            'customer_name' => 'Kofi',
+            'customer_phone' => '+233241234567',
+            'fulfillment_type' => 'pickup',
+            'payment_method' => 'mobile_money',
+            'items' => [],
+            'subtotal' => 100,
+            'service_charge' => 0,
+            'delivery_fee' => 0,
+            'discount' => 25,
+            'promo_id' => $promo->id,
+            'promo_code_id' => PromoCode::first()->id,
+            'total_amount' => 75,
+            'expires_at' => now()->addMinutes(5),
+        ]);
+
+        pcOffer($branch, [[$jollof, 100]], 'JOLLOF-K7Q2MX', '0551234567')
+            ->assertStatus(422)
+            ->assertJsonPath('reason', 'code_used');
+
+        // Kofi going back to change something still has his own voucher.
+        pcOffer($branch, [[$jollof, 100]], 'JOLLOF-K7Q2MX', '0241234567')->assertOk();
+    });
+
+    it('is taken at the till and written onto the sale', function () {
+        $this->seed(PermissionSeeder::class);
+        $this->seed(RoleSeeder::class);
+        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+
+        $this->branch = pcBranch();
+        $this->jollof = pcDish($this->branch, 'Jollof', 100);
+        $user = User::factory()->create();
+        $employee = Employee::factory()->create(['user_id' => $user->id, 'status' => EmployeeStatus::Active]);
+        $employee->branches()->attach($this->branch);
+        $user->syncRoles([RoleEnum::SalesStaff->value]);
+        $this->cashier = $user->fresh();
+
+        pcSingleUse();
+
+        pcSale(['promo_code' => 'jollof-k7q2mx'])->assertSuccessful();
+
+        $session = CheckoutSession::latest('id')->first();
+        expect($session->promo_code_id)->toBe(PromoCode::first()->id);
+        expect((float) $session->discount)->toBe(25.00);
+    });
+});
+
+describe('making one-off codes', function () {
+    beforeEach(function () {
+        $this->seed(PermissionSeeder::class);
+        $this->seed(RoleSeeder::class);
+        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+
+        $this->admin = User::factory()->create();
+        Employee::factory()->create(['user_id' => $this->admin->id, 'status' => EmployeeStatus::Active]);
+        $this->admin->syncRoles([RoleEnum::Admin->value]);
+    });
+
+    it('makes a batch under a prefix, every code different and easy to read', function () {
+        $promo = pcSingleUse(codes: []);
+
+        $made = $this->actingAs($this->admin)
+            ->postJson("/v1/promos/{$promo->id}/codes", ['count' => 50, 'prefix' => 'jollof', 'batch' => 'Radio'])
+            ->assertCreated()
+            ->json('data');
+
+        expect($made)->toHaveCount(50);
+        $codes = array_column($made, 'code');
+        expect(array_unique($codes))->toHaveCount(50);
+        foreach ($codes as $code) {
+            expect($code)->toMatch('/^JOLLOF-[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{6}$/');
+        }
+        expect(PromoCode::where('batch', 'Radio')->count())->toBe(50);
+    });
+
+    it('lists each code with the order that used it', function () {
+        $branch = pcBranch();
+        pcGuestCart($branch, 'guest-single-use-list');
+        $promo = pcSingleUse(codes: ['A-AAAAAA', 'B-BBBBBB']);
+        SystemSetting::updateOrCreate(['key' => 'service_charge_enabled'], ['value' => 'false']);
+        pcPlace($branch, 'guest-single-use-list', 'A-AAAAAA')->assertSuccessful();
+        $number = Order::latest('id')->value('order_number');
+
+        $rows = $this->actingAs($this->admin)->getJson("/v1/promos/{$promo->id}/codes")->assertOk()->json('data');
+
+        expect($rows[0])->toMatchArray(['code' => 'A-AAAAAA', 'used' => true, 'orderNumber' => $number]);
+        expect($rows[1])->toMatchArray(['code' => 'B-BBBBBB', 'used' => false, 'orderNumber' => null]);
+
+        $this->actingAs($this->admin)->getJson("/v1/promos/{$promo->id}")
+            ->assertJsonPath('data.codesCount', 2)
+            ->assertJsonPath('data.codesUsed', 1);
+    });
+
+    it('takes back an unused code but keeps a used one on record', function () {
+        $branch = pcBranch();
+        pcGuestCart($branch, 'guest-single-use-delete');
+        $promo = pcSingleUse(codes: ['A-AAAAAA', 'B-BBBBBB']);
+        SystemSetting::updateOrCreate(['key' => 'service_charge_enabled'], ['value' => 'false']);
+        pcPlace($branch, 'guest-single-use-delete', 'A-AAAAAA')->assertSuccessful();
+        [$used, $unused] = PromoCode::orderBy('id')->get();
+
+        $this->actingAs($this->admin)->deleteJson("/v1/promos/{$promo->id}/codes/{$used->id}")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'A-AAAAAA was used on order '.Order::latest('id')->value('order_number').', so it stays on record.');
+
+        $this->actingAs($this->admin)->deleteJson("/v1/promos/{$promo->id}/codes/{$unused->id}")->assertSuccessful();
+        expect(PromoCode::count())->toBe(1);
+    });
+
+    it('refuses a batch for a promo that is not given out as one-off codes', function () {
+        $promo = pcPromo(['code' => 'CEDI20']);
+
+        $this->actingAs($this->admin)->postJson("/v1/promos/{$promo->id}/codes", ['count' => 5])->assertStatus(422);
+    });
+
+    it('will not let a shared code be the same word as a one-off code', function () {
+        pcSingleUse(codes: ['CEDI-20']);
+
+        pcCreate(['redemption' => 'shared_code', 'code' => 'cedi20'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.code.0', 'That is already one of the one-off codes.');
+    });
+
+    it('drops the code when a promo is switched to apply by itself', function () {
+        $promo = pcPromo(['code' => 'CEDI20']);
+        expect($promo->redemption)->toBe(Promo::SHARED_CODE);
+
+        $this->actingAs($this->admin)->patchJson("/v1/promos/{$promo->id}", ['redemption' => 'automatic'])
+            ->assertOk()
+            ->assertJsonPath('data.redemption', 'automatic')
+            ->assertJsonPath('data.code', null);
     });
 });
