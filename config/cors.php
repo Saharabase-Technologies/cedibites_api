@@ -31,7 +31,13 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    // `Date` has to be listed, or the browser hides it. The frontend learns
+    // the server's clock from this header (lib/utils/serverClock.ts) and
+    // stamps receipts with it, and `Date` is not one of the headers a browser
+    // lets a cross-origin page read by default. With this empty, every till
+    // printed its own clock: a reprint at Ashaiman on 2026-09-18 read 05:03 pm
+    // for a print the server logged at 18:04, an hour and a minute behind.
+    'exposed_headers' => ['Date'],
 
     'max_age' => 0,
 

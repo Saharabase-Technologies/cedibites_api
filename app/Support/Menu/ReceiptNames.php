@@ -7,6 +7,14 @@ use Illuminate\Support\Str;
 /**
  * What a line of an order is called on a receipt.
  *
+ * THE RULE (the owner's, 2026-09-18): a line is named by the option bought,
+ * on its own, which is its `display_name` here. The menu item's name is used
+ * only for a dish with no real option. The frontend applies it everywhere a
+ * line is shown or printed (lib/utils/receiptName.mjs, checked by the deploy
+ * gate). So an option with no `display_name` prints its bare menu pill;
+ * fill the name in here and run `menu:stamp-receipt-names`, never join the
+ * item name back on.
+ *
  * A menu item and the option under it are written for somebody standing at the
  * menu board, where the item name is the question and the option is the answer:
  *
