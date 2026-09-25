@@ -26,6 +26,10 @@ class BranchOpeningAnswerResource extends JsonResource
             'kind' => $this->kind,
             'weight' => $this->weight,
             'allows_na' => $this->allows_na,
+            'show_if' => $this->show_if,
+            // Whether the line is asked, given the answers so far. Worked out by
+            // whoever loaded every line; a line on its own counts as asked.
+            'relevant' => $this->resource->asked ?? true,
             'answer' => $this->answer,
             'value' => $this->value,
             'note' => $this->note,

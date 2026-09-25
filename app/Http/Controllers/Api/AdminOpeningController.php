@@ -41,6 +41,8 @@ class AdminOpeningController extends Controller
         return response()->success([
             'business_date' => $date,
             'today' => $this->openings->businessDate(),
+            // The testing reset, shown only where it works.
+            'can_reset' => (bool) config('openings.allow_reset'),
             'branches' => $branches->map(fn (Branch $branch) => (new BranchOpeningResource(
                 $branch,
                 $openings->get($branch->id),
@@ -71,6 +73,18 @@ class AdminOpeningController extends Controller
         }
 
         return response()->success(new BranchOpeningResource($branch, $opening));
+    }
+
+    /** Throw today's opening away so the morning can be run again. Beta only. */
+    public function reset(Request $request, Branch $branch): JsonResponse
+    {
+        try {
+            $this->openings->reset($branch, $request->user());
+        } catch (OpeningException $e) {
+            return response()->json(['code' => $e->reason, 'message' => $e->getMessage()], 403);
+        }
+
+        return response()->success(null, "{$branch->name}'s opening for today is cleared. It can be opened again.");
     }
 
     /** Switch a branch onto the opening checklist, or off it. */

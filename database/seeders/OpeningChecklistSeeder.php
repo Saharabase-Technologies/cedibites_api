@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The branch manager's daily opening checklist, as the client wrote it
@@ -40,6 +41,10 @@ class OpeningChecklistSeeder extends Seeder
         $now = now();
         $rows = [];
 
+        // The first migration seeds before the second one adds `show_if`; that
+        // one then applies the rules itself (applyRules).
+        $hasRules = Schema::hasColumn('opening_checklist_items', 'show_if');
+
         foreach (self::items() as $position => $item) {
             if (in_array($item['key'], $existing, true)) {
                 continue;
@@ -59,12 +64,57 @@ class OpeningChecklistSeeder extends Seeder
                 'is_active' => true,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ];
+            ] + ($hasRules ? ['show_if' => isset(self::rules()[$item['key']]) ? json_encode(self::rules()[$item['key']]) : null] : []);
         }
 
         if ($rows !== []) {
             DB::table('opening_checklist_items')->insert($rows);
         }
+    }
+
+    /**
+     * Which lines are asked only after another answer. See
+     * App\Services\Openings\Relevance for the two shapes a rule takes.
+     *
+     * Everyone reported: nothing to ask about cover or who is missing. Every
+     * ingredient there: no low-stock list to make. No problem in a section: no
+     * notes box for it.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public static function rules(): array
+    {
+        $staffMissing = ['when' => 'staff_reported', 'is' => 'problem'];
+        $stockShort = ['any_problem' => ['Core food stock', 'Drinks and packaging']];
+
+        return [
+            'staff_absent_late' => $staffMissing,
+            'absences_covered' => $staffMissing,
+            'staffing_notes' => ['any_problem' => [self::STAFF]],
+            'critical_sufficient' => ['any_problem' => ['Core food stock']],
+            'low_stock_identified' => $stockShort,
+            'out_of_stock_reported' => $stockShort,
+            'replenishment_requested' => $stockShort,
+            'low_stock_notes' => $stockShort,
+            'out_of_stock_notes' => $stockShort,
+            'replenishment_notes' => $stockShort,
+            'facility_notes' => ['any_problem' => [self::FACILITY]],
+            'facility_actions' => ['any_problem' => [self::FACILITY]],
+        ];
+    }
+
+    /**
+     * Put the rules on a checklist already loaded, and ask the attendance
+     * question before the numbers that depend on it. Safe to run again.
+     */
+    public static function applyRules(): void
+    {
+        foreach (self::rules() as $key => $rule) {
+            DB::table('opening_checklist_items')->where('key', $key)->update(['show_if' => json_encode($rule)]);
+        }
+
+        $first = DB::table('opening_checklist_items')->where('section', self::STAFF)->min('position');
+        DB::table('opening_checklist_items')->where('key', 'staff_reported')->update(['position' => max(0, (int) $first - 5)]);
     }
 
     /**
@@ -83,14 +133,14 @@ class OpeningChecklistSeeder extends Seeder
 
         return [
             // ── 1. Staffing and team readiness ─────────────────────────────
+            ['key' => 'staff_reported', 'section' => $staff, 'group' => 'Attendance',
+                'label' => 'All scheduled staff have reported for duty.', 'short' => 'staff attendance'],
             ['key' => 'staff_scheduled', 'section' => $staff, 'group' => 'Attendance', 'kind' => 'number',
                 'label' => 'Staff scheduled', 'short' => 'staff scheduled'],
             ['key' => 'staff_present', 'section' => $staff, 'group' => 'Attendance', 'kind' => 'number',
                 'label' => 'Staff present', 'short' => 'staff present'],
             ['key' => 'staff_absent_late', 'section' => $staff, 'group' => 'Attendance', 'kind' => 'number',
                 'label' => 'Absent or late', 'short' => 'absent or late'],
-            ['key' => 'staff_reported', 'section' => $staff, 'group' => 'Attendance',
-                'label' => 'All scheduled staff have reported for duty.', 'short' => 'staff attendance'],
             ['key' => 'attendance_recorded', 'section' => $staff, 'group' => 'Attendance',
                 'label' => 'Attendance and arrival times recorded.', 'short' => 'attendance record'],
             ['key' => 'absences_covered', 'section' => $staff, 'group' => 'Attendance', 'allows_na' => true,

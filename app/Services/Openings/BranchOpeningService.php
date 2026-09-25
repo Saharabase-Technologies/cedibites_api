@@ -338,7 +338,10 @@ class BranchOpeningService
             throw new OpeningException('Start the checklist first.', 'not_started');
         }
 
-        $unanswered = $opening->answers->reject->isAnswered()->values();
+        // Only the lines still asked: once everybody has reported, the cover
+        // question is not a line anybody has to answer.
+        $asked = $opening->relevantAnswers();
+        $unanswered = $asked->reject->isAnswered()->values();
         if ($unanswered->isNotEmpty()) {
             throw new OpeningException(
                 $unanswered->count() === 1
@@ -352,7 +355,7 @@ class BranchOpeningService
         // The client's rule: fix it or escalate it. Food safety cannot be
         // admitted and opened on; it has to be fixed, or head office has to
         // take the decision.
-        $unsafe = $opening->answers->filter(fn (BranchOpeningAnswer $a) => $a->mustPass() && $a->isProblem())->values();
+        $unsafe = $asked->filter(fn (BranchOpeningAnswer $a) => $a->mustPass() && $a->isProblem())->values();
         if ($unsafe->isNotEmpty() && ! $opening->isOpen()) {
             throw new OpeningException(
                 "{$opening->branch->name} cannot open with a food-safety problem: ".$unsafe->pluck('short')->implode(', ')
@@ -366,7 +369,15 @@ class BranchOpeningService
         $openedNow = ! $opening->isOpen();
         $problems = $opening->problems();
 
-        DB::transaction(function () use ($opening, $user, $via, $note, $openedNow, $problems) {
+        DB::transaction(function () use ($opening, $user, $via, $note, $openedNow, $problems, $asked) {
+            // A line answered and then made moot by a later answer ("cover
+            // arranged" before "all reported" turned to Yes) is cleared, so the
+            // record holds only what was asked.
+            BranchOpeningAnswer::query()
+                ->where('branch_opening_id', $opening->id)
+                ->whereNotIn('id', $asked->pluck('id'))
+                ->update(['answer' => null, 'value' => null, 'note' => null]);
+
             $opening->update(array_filter([
                 'completed_at' => now(),
                 'completed_by' => $user->id,
@@ -409,6 +420,53 @@ class BranchOpeningService
         return $opening->fresh(['answers.photos', 'branch']);
     }
 
+    /**
+     * "Yes to all" for one set of questions.
+     *
+     * Every line in the set becomes Yes, except a line already marked as a
+     * problem, which stays one: an admitted problem is never undone by a
+     * sweep. Lines that a Yes elsewhere in the set makes moot are left alone,
+     * so "cover arranged for absent staff" is not answered for a morning
+     * nobody was absent.
+     *
+     * @return \Illuminate\Support\Collection<int, BranchOpeningAnswer>
+     */
+    public function answerGroup(BranchOpening $opening, string $section, ?string $group, User $user): \Illuminate\Support\Collection
+    {
+        if ($opening->isCompleted()) {
+            throw new OpeningException('This checklist is finished. Mark a problem fixed instead.', 'checklist_completed');
+        }
+
+        $opening->load('answers');
+        $inSet = fn (BranchOpeningAnswer $a) => $a->section === $section && $a->group === $group && $a->isCheck();
+
+        // Work out what is asked once the sweep has happened, then save only that.
+        $after = $opening->answers->map(function (BranchOpeningAnswer $a) use ($inSet) {
+            $copy = clone $a;
+            if ($inSet($a) && $a->answer !== BranchOpeningAnswer::PROBLEM) {
+                $copy->answer = BranchOpeningAnswer::OK;
+            }
+
+            return $copy;
+        });
+        $asked = Relevance::of($after);
+
+        $ids = $opening->answers
+            ->filter(fn (BranchOpeningAnswer $a) => $inSet($a)
+                && $a->answer !== BranchOpeningAnswer::PROBLEM
+                && ($asked[$a->id] ?? true))
+            ->pluck('id');
+
+        BranchOpeningAnswer::query()->whereIn('id', $ids)->update([
+            'answer' => BranchOpeningAnswer::OK,
+            'note' => null,
+            'answered_by' => $user->id,
+            'answered_at' => now(),
+        ]);
+
+        return BranchOpeningAnswer::query()->whereIn('id', $ids)->with(['photos', 'answerer'])->get();
+    }
+
     public function resolve(BranchOpeningAnswer $answer, User $user, string $note): BranchOpeningAnswer
     {
         $opening = $answer->opening()->with(['answers', 'branch'])->first();
@@ -448,6 +506,36 @@ class BranchOpeningService
     }
 
     // ── Head office ────────────────────────────────────────────────────────
+
+    /**
+     * Throw today's opening away, so the morning can be run again.
+     *
+     * For testing on beta only. `openings.allow_reset` is off in production
+     * and the route refuses there; an opening is the record of who took
+     * responsibility for a day, and nobody should be able to erase that.
+     */
+    public function reset(Branch $branch, User $user): void
+    {
+        if (! config('openings.allow_reset')) {
+            throw new OpeningException('Resetting an opening is only for testing, and is switched off here.', 'reset_disabled');
+        }
+
+        $opening = $this->current($branch);
+
+        if ($opening) {
+            Storage::disk('public')->deleteDirectory("branch-openings/{$opening->id}");
+            $opening->delete();
+        }
+
+        activity('openings')
+            ->causedBy($user)
+            ->performedOn($branch)
+            ->event('opening_reset')
+            ->withProperties(['business_date' => $this->businessDate(), 'environment' => app()->environment()])
+            ->log("{$branch->name}: today's opening reset for testing");
+
+        $this->broadcast($branch);
+    }
 
     /**
      * Open a branch without its checklist. Unusual by design: it needs a
@@ -603,6 +691,8 @@ class BranchOpeningService
             'kind' => $item->kind,
             'weight' => $item->weight,
             'allows_na' => $item->allows_na,
+            // A raw insert skips the cast, so the rule goes in as JSON text.
+            'show_if' => $item->show_if !== null ? json_encode($item->show_if) : null,
             'position' => $item->position,
             'created_at' => $now,
             'updated_at' => $now,

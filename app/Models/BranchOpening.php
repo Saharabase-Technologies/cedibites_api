@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Openings\Relevance;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -81,13 +82,27 @@ class BranchOpening extends Model
     }
 
     /**
+     * The lines that are asked, given the answers so far. A line whose question
+     * no longer applies ("cover for absent staff" once everybody has reported)
+     * is left out of everything: not required, not a problem, not counted.
+     *
+     * @return Collection<int, BranchOpeningAnswer>
+     */
+    public function relevantAnswers(): Collection
+    {
+        $asked = Relevance::of($this->answers);
+
+        return $this->answers->filter(fn (BranchOpeningAnswer $a) => $asked[$a->id] ?? true)->values();
+    }
+
+    /**
      * Problems admitted and not yet fixed.
      *
      * @return Collection<int, BranchOpeningAnswer>
      */
     public function outstandingProblems(): Collection
     {
-        return $this->answers->filter(fn (BranchOpeningAnswer $a) => $a->isOutstanding())->values();
+        return $this->relevantAnswers()->filter(fn (BranchOpeningAnswer $a) => $a->isOutstanding())->values();
     }
 
     /**
@@ -95,6 +110,6 @@ class BranchOpening extends Model
      */
     public function problems(): Collection
     {
-        return $this->answers->filter(fn (BranchOpeningAnswer $a) => $a->isProblem())->values();
+        return $this->relevantAnswers()->filter(fn (BranchOpeningAnswer $a) => $a->isProblem())->values();
     }
 }

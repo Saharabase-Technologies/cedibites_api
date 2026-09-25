@@ -31,6 +31,7 @@ Route::prefix('manager')->middleware(['permission:branch.operate', 'branch.acces
     Route::get('branches/{branch}/opening', [BranchOpeningController::class, 'show']);
     Route::post('branches/{branch}/opening', [BranchOpeningController::class, 'start']);
     Route::patch('branches/{branch}/opening/answers/{answer}', [BranchOpeningController::class, 'answer']);
+    Route::post('branches/{branch}/opening/answer-group', [BranchOpeningController::class, 'answerGroup']);
     Route::post('branches/{branch}/opening/complete', [BranchOpeningController::class, 'complete']);
     Route::post('branches/{branch}/opening/answers/{answer}/resolve', [BranchOpeningController::class, 'resolve']);
     Route::post('branches/{branch}/opening/answers/{answer}/photos', [BranchOpeningController::class, 'storePhoto'])

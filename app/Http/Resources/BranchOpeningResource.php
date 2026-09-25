@@ -37,7 +37,10 @@ class BranchOpeningResource extends JsonResource
         $opening = $this->opening?->loadMissing(['answers', 'starter', 'completer', 'opener']);
 
         $answers = $opening?->answers ?? collect();
-        $problems = $answers->filter->isProblem();
+        // Only lines still asked count: "cover for absent staff" is not a
+        // line to answer once everybody has reported.
+        $asked = $opening?->relevantAnswers() ?? collect();
+        $problems = $asked->filter->isProblem();
         $isToday = $date === $service->businessDate();
 
         return [
@@ -73,8 +76,8 @@ class BranchOpeningResource extends JsonResource
             'grace_ends_at' => $opening?->grace_ends_at?->toIso8601String(),
             'problems_resolved_at' => $opening?->problems_resolved_at?->toIso8601String(),
             'progress' => [
-                'answered' => $answers->filter->isRequired()->filter->isAnswered()->count(),
-                'total' => $answers->filter->isRequired()->count(),
+                'answered' => $asked->filter->isRequired()->filter->isAnswered()->count(),
+                'total' => $asked->filter->isRequired()->count(),
             ],
             'problems' => [
                 'total' => $problems->count(),
@@ -87,11 +90,24 @@ class BranchOpeningResource extends JsonResource
                 ])->values(),
             ],
             'answers' => $this->withAnswers && $opening
-                ? BranchOpeningAnswerResource::collection(
+                ? BranchOpeningAnswerResource::collection($this->withRelevance(
                     $opening->answers()->with(['photos', 'answerer', 'resolver'])->get()
-                )
+                ))
                 : [],
         ];
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, \App\Models\BranchOpeningAnswer>  $answers
+     * @return \Illuminate\Support\Collection<int, \App\Models\BranchOpeningAnswer>
+     */
+    private function withRelevance(\Illuminate\Support\Collection $answers): \Illuminate\Support\Collection
+    {
+        $asked = \App\Services\Openings\Relevance::of($answers);
+
+        return $answers->each(function ($answer) use ($asked) {
+            $answer->asked = $asked[$answer->id] ?? true;
+        });
     }
 
     /** A past day is described by what happened, not by the clock. */

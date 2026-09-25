@@ -30,7 +30,7 @@ class OpeningChecklistItem extends Model
 
     protected $fillable = [
         'key', 'section', 'group', 'label', 'short', 'help',
-        'kind', 'weight', 'allows_na', 'position', 'is_active',
+        'kind', 'weight', 'allows_na', 'position', 'is_active', 'show_if',
     ];
 
     protected function casts(): array
@@ -39,6 +39,8 @@ class OpeningChecklistItem extends Model
             'allows_na' => 'boolean',
             'is_active' => 'boolean',
             'position' => 'integer',
+            // When the line is asked. See App\Services\Openings\Relevance.
+            'show_if' => 'array',
         ];
     }
 

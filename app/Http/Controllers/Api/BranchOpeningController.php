@@ -63,6 +63,24 @@ class BranchOpeningController extends Controller
         ));
     }
 
+    /** "Yes to all" for one set of questions. */
+    public function answerGroup(Request $request, Branch $branch): JsonResponse
+    {
+        $data = $request->validate([
+            'section' => ['required', 'string', 'max:60'],
+            'group' => ['nullable', 'string', 'max:60'],
+        ]);
+
+        $opening = $this->openings->current($branch);
+        if ($opening === null || ! $opening->isStarted()) {
+            return response()->json(['code' => 'not_started', 'message' => 'Start the checklist first.'], 422);
+        }
+
+        return $this->attempt(fn () => BranchOpeningAnswerResource::collection(
+            $this->openings->answerGroup($opening, $data['section'], $data['group'] ?? null, $request->user())
+        ));
+    }
+
     public function complete(Request $request, Branch $branch): JsonResponse
     {
         $data = $request->validate(['note' => ['nullable', 'string', 'max:2000']]);

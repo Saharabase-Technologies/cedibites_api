@@ -102,7 +102,7 @@ class OpeningAlerts
         if ($again) {
             $body = sprintf('%s is still not open at %s. It was due at %s.', $branch, $this->clock(now()), $this->clock($schedule->opensAt));
         } elseif ($opening->isStarted()) {
-            $needed = $opening->answers->filter->isRequired();
+            $needed = $opening->relevantAnswers()->filter->isRequired();
             $answered = $needed->filter->isAnswered()->count();
             $body = sprintf(
                 '%s has not opened. It was due at %s. %s started the checklist at %s and has answered %d of %d.',

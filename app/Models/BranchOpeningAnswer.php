@@ -17,9 +17,15 @@ class BranchOpeningAnswer extends Model
 
     public const NOT_APPLICABLE = 'na';
 
+    /**
+     * Whether the line is asked, given every other answer. Not a column: it is
+     * worked out for a response (see Relevance) and never saved.
+     */
+    public ?bool $asked = null;
+
     protected $fillable = [
         'branch_opening_id', 'checklist_item_id',
-        'key', 'section', 'group', 'label', 'short', 'help', 'kind', 'weight', 'allows_na', 'position',
+        'key', 'section', 'group', 'label', 'short', 'help', 'kind', 'weight', 'allows_na', 'position', 'show_if',
         'answer', 'value', 'note', 'answered_by', 'answered_at',
         'resolved_at', 'resolved_by', 'resolution_note',
     ];
@@ -29,6 +35,7 @@ class BranchOpeningAnswer extends Model
         return [
             'allows_na' => 'boolean',
             'position' => 'integer',
+            'show_if' => 'array',
             'answered_at' => 'datetime',
             'resolved_at' => 'datetime',
         ];

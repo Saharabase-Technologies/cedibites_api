@@ -44,4 +44,9 @@ return [
     // orders for it, rather than taking money for food nobody is cooking.
     'online_wait_minutes' => (int) env('OPENINGS_ONLINE_WAIT_MINUTES', 30),
 
+    // Throwing today's opening away so the morning can be run again. For
+    // testing on beta. Never in production: an opening is the record of who
+    // took responsibility for a day.
+    'allow_reset' => (bool) env('OPENINGS_ALLOW_RESET', env('APP_ENV') !== 'production'),
+
 ];

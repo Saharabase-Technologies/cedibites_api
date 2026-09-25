@@ -248,6 +248,7 @@ Route::prefix('admin')->group(function () {
         Route::get('openings', [AdminOpeningController::class, 'index']);
         Route::get('openings/{opening}', [AdminOpeningController::class, 'show']);
         Route::post('branches/{branch}/open-without-checklist', [AdminOpeningController::class, 'openWithoutChecklist']);
+        Route::post('branches/{branch}/opening/reset', [AdminOpeningController::class, 'reset']);
         Route::patch('branches/{branch}/opening-requirement', [AdminOpeningController::class, 'setRequirement']);
         Route::get('opening-checklist', [AdminOpeningController::class, 'checklist']);
         Route::post('opening-checklist', [AdminOpeningController::class, 'storeItem']);

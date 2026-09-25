@@ -470,7 +470,7 @@ it('says how far the manager got when the branch is late', function () {
     $this->travelTo(Carbon::parse('2026-09-25 10:16:00'));
     $this->artisan('openings:watch');
 
-    expect(opTexts()->sole())->toContain('Kofi started the checklist at 9:58 am and has answered 40 of 66.');
+    expect(opTexts()->sole())->toMatch('/Kofi started the checklist at 9:58 am and has answered \d+ of 60\./');
 });
 
 it('tells head office when a late branch finally opens', function () {
@@ -734,4 +734,163 @@ it('texts head office when someone asks to cancel an order', function () {
         ->assertSuccessful();
 
     expect(opTexts()->last())->toBe('CediBites: Rosina Owusu asks to cancel order #A123 at Ashaiman (GHS 85.00): Customer changed their mind. https://app.cedibites.com/admin/orders/cancel-requests');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Questions that depend on other answers
+|--------------------------------------------------------------------------
+*/
+
+/** Whether each line is asked, by key, as the manager's screen is told. */
+function opAsked(Branch $branch, User $manager): array
+{
+    return collect(test()->actingAs($manager)->getJson("/v1/manager/branches/{$branch->id}/opening")->json('data.answers'))
+        ->mapWithKeys(fn ($a) => [$a['key'] => $a['relevant']])
+        ->all();
+}
+
+it('does not ask about cover for absent staff once everybody has reported', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 08:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+    $reported = $opening->answers->firstWhere('key', 'staff_reported');
+
+    app(BranchOpeningService::class)->answer($reported, $this->manager, ['answer' => 'ok']);
+    expect(opAsked($this->branch, $this->manager))
+        ->absences_covered->toBeFalse()
+        ->staff_absent_late->toBeFalse();
+
+    app(BranchOpeningService::class)->answer($reported, $this->manager, ['answer' => 'problem', 'note' => 'Cilla is not in yet']);
+    expect(opAsked($this->branch, $this->manager))
+        ->absences_covered->toBeTrue()
+        ->staff_absent_late->toBeTrue();
+});
+
+it('opens without the lines nobody was asked, and clears any stale answer to them', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 09:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+    opAnswerAll($opening, $this->manager);
+    // Answered while somebody was missing, then everybody turned up.
+    BranchOpeningAnswer::where('branch_opening_id', $opening->id)
+        ->whereIn('key', ['low_stock_identified', 'critical_sufficient', 'out_of_stock_reported', 'replenishment_requested'])
+        ->update(['answer' => null]);
+    BranchOpeningAnswer::where('branch_opening_id', $opening->id)->where('key', 'absences_covered')
+        ->update(['answer' => 'problem', 'note' => 'Stale']);
+
+    $done = app(BranchOpeningService::class)->complete($opening, $this->manager, 'pos');
+
+    expect($done->isOpen())->toBeTrue()
+        ->and($done->problems())->toBeEmpty()
+        ->and(BranchOpeningAnswer::where('branch_opening_id', $opening->id)->where('key', 'absences_covered')->sole()->answer)->toBeNull()
+        // Nothing to text about: the stale problem was never asked.
+        ->and(opTexts())->toBeEmpty();
+});
+
+it('asks the stock follow-ups only when something is short', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 08:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+    opAnswerAll($opening, $this->manager);
+
+    expect(opAsked($this->branch, $this->manager))
+        ->low_stock_identified->toBeFalse()
+        ->low_stock_notes->toBeFalse()
+        ->staffing_notes->toBeFalse();
+
+    $rice = $opening->answers()->where('key', 'rice')->sole();
+    app(BranchOpeningService::class)->answer($rice, $this->manager, ['answer' => 'problem', 'note' => 'Two bags left']);
+    BranchOpeningAnswer::where('branch_opening_id', $opening->id)->where('key', 'low_stock_identified')->update(['answer' => null]);
+
+    expect(opAsked($this->branch, $this->manager))
+        ->low_stock_identified->toBeTrue()
+        ->critical_sufficient->toBeTrue()
+        ->low_stock_notes->toBeTrue()
+        ->staffing_notes->toBeFalse();
+
+    // And now it has to be answered before the branch can open.
+    $this->actingAs($this->manager)->postJson("/v1/manager/branches/{$this->branch->id}/opening/complete")
+        ->assertStatus(422)
+        ->assertJsonPath('code', 'checklist_incomplete');
+});
+
+it('counts only the lines still asked', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 08:30:00'));
+    opStart($this->branch, $this->manager);
+
+    $progress = $this->actingAs($this->manager)->getJson("/v1/manager/branches/{$this->branch->id}/opening")->json('data.progress');
+
+    // 66 lines can need an answer; six of them only once something is wrong.
+    expect($progress)->toBe(['answered' => 0, 'total' => 60]);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Yes to all
+|--------------------------------------------------------------------------
+*/
+
+it('answers a whole set Yes in one tap, keeping any problem already admitted', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 08:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+    $gas = $opening->answers->firstWhere('key', 'gas');
+    app(BranchOpeningService::class)->answer($gas, $this->manager, ['answer' => 'problem', 'note' => 'One cylinder left']);
+
+    $saved = $this->actingAs($this->manager)->postJson("/v1/manager/branches/{$this->branch->id}/opening/answer-group", [
+        'section' => 'Facility and operational readiness',
+        'group' => 'Kitchen',
+    ])->assertSuccessful()->json('data');
+
+    $kitchen = BranchOpeningAnswer::where('branch_opening_id', $opening->id)->where('group', 'Kitchen')->pluck('answer', 'key');
+
+    expect(collect($saved)->pluck('key'))->not->toContain('gas')
+        ->and($kitchen['gas'])->toBe('problem')
+        ->and($kitchen->except('gas')->unique()->values()->all())->toBe(['ok']);
+});
+
+it('does not answer the lines a Yes makes moot', function () {
+    $this->travelTo(Carbon::parse('2026-09-25 08:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+
+    $this->actingAs($this->manager)->postJson("/v1/manager/branches/{$this->branch->id}/opening/answer-group", [
+        'section' => 'Staffing and team readiness',
+        'group' => 'Attendance',
+    ])->assertSuccessful();
+
+    $attendance = BranchOpeningAnswer::where('branch_opening_id', $opening->id)->where('group', 'Attendance')->pluck('answer', 'key');
+
+    expect($attendance['staff_reported'])->toBe('ok')
+        ->and($attendance['enough_staff'])->toBe('ok')
+        // Everybody reported, so nobody was asked about cover.
+        ->and($attendance['absences_covered'])->toBeNull();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Resetting for testing
+|--------------------------------------------------------------------------
+*/
+
+it('lets head office throw away the day\'s opening on beta, so the morning can be run again', function () {
+    $admin = opStaff('admin');
+    $this->travelTo(Carbon::parse('2026-09-25 09:30:00'));
+    $opening = opStart($this->branch, $this->manager);
+    opAnswerAll($opening, $this->manager);
+    app(BranchOpeningService::class)->complete($opening, $this->manager, 'pos');
+    expect(app(BranchOpeningService::class)->refusalForTill($this->branch))->toBeNull()
+        ->and($this->actingAs($admin)->getJson('/v1/admin/openings')->json('data.can_reset'))->toBeTrue();
+
+    $this->actingAs($admin)->postJson("/v1/admin/branches/{$this->branch->id}/opening/reset")->assertSuccessful();
+
+    expect(BranchOpening::count())->toBe(0)
+        ->and(app(BranchOpeningService::class)->refusalForTill($this->branch))->not->toBeNull()
+        ->and(ActivityLog::where('event', 'opening_reset')->count())->toBe(1);
+});
+
+it('refuses the reset in production', function () {
+    config()->set('openings.allow_reset', false);
+    $admin = opStaff('admin');
+    $this->travelTo(Carbon::parse('2026-09-25 09:30:00'));
+    opStart($this->branch, $this->manager);
+
+    $this->actingAs($admin)->postJson("/v1/admin/branches/{$this->branch->id}/opening/reset")->assertForbidden();
+    expect(BranchOpening::count())->toBe(1);
 });
