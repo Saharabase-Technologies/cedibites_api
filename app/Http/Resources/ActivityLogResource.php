@@ -34,7 +34,9 @@ class ActivityLogResource extends JsonResource
         Shift::class => 'system',
     ];
 
-    private const WARNING_EVENTS = ['refunded', 'deleted', 'customer_deleted'];
+    // Opening a branch without its checklist is the unusual action head office
+    // asked to see flagged; lateness and unfixed problems sit beside it.
+    private const WARNING_EVENTS = ['refunded', 'deleted', 'customer_deleted', 'branch_opened_without_checklist', 'branch_not_open', 'branch_still_not_open', 'opening_grace_expired'];
 
     private const DESTRUCTIVE_EVENTS = ['role_changed', 'customer_suspended'];
 

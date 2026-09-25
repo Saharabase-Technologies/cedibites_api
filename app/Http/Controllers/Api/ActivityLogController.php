@@ -70,7 +70,7 @@ class ActivityLogController extends Controller
         }
 
         if ($request->filled('severity')) {
-            $warningEvents = ['refunded', 'deleted', 'customer_deleted'];
+            $warningEvents = ['refunded', 'deleted', 'customer_deleted', 'branch_opened_without_checklist', 'branch_not_open', 'branch_still_not_open', 'opening_grace_expired'];
             $destructiveEvents = ['role_changed', 'customer_suspended'];
             match ($request->severity) {
                 'warning' => $query->whereIn('event', $warningEvents),
