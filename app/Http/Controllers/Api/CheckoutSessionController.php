@@ -12,6 +12,7 @@ use App\Models\CheckoutSession;
 use App\Models\MenuItem;
 use App\Models\MenuItemOption;
 use App\Services\HubtelPaymentService;
+use App\Services\Openings\BranchOpeningService;
 use App\Services\OrderCreationService;
 use App\Services\PromoResolutionService;
 use App\Services\SystemSettingService;
@@ -66,6 +67,13 @@ class CheckoutSessionController extends Controller
 
         if (! $branch->isCurrentlyOpen()) {
             return response()->json(['message' => 'This branch is currently closed. Please check back during operating hours.'], 422);
+        }
+
+        // Open by the timetable is not enough at a branch that uses the
+        // opening checklist. Just after opening time the order is taken and
+        // waits for the till; after that the branch is late and online stops.
+        if ($refusal = app(BranchOpeningService::class)->refusalForOnline($branch)) {
+            return response()->json(['code' => $refusal->reason, 'message' => $refusal->getMessage()], 422);
         }
 
         // Validate the selected order type is enabled for this branch
@@ -451,6 +459,9 @@ class CheckoutSessionController extends Controller
             'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo'],
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
+            // Why the sale was written on paper: the power, the network, the
+            // till. It is what makes a manual entry readable afterwards.
+            'manual_entry_reason' => ['required_if:is_manual_entry,true', 'nullable', 'string', 'max:500'],
             'momo_reference' => ['nullable', 'string', 'max:100'],
             // `pickup` was missing, though it is one of the two types a branch can
             // actually enable (branch_order_types) and one of the four the orders
@@ -490,9 +501,18 @@ class CheckoutSessionController extends Controller
         $this->verifyStaffAuthorization($employee, $branchId);
 
         $branch = Branch::findOrFail($branchId);
+        $openings = app(BranchOpeningService::class);
 
-        // Block POS orders when branch is closed unless extended order access is enabled
-        if (! $branch->isCurrentlyOpen() && ! $branch->isExtendedOrderAllowed()) {
+        // Nothing is sold until the manager has opened the branch for the day.
+        // A manual entry is the exception: it records a sale already made on
+        // paper, often on the very morning the system could not be opened.
+        if (! ($validated['is_manual_entry'] ?? false) && ($refusal = $openings->refusalForTill($branch))) {
+            return response()->json(['code' => $refusal->reason, 'message' => $refusal->getMessage()], 422);
+        }
+
+        // Block POS orders when branch is closed unless extended order access is
+        // enabled, or the manager opened it early today.
+        if (! $branch->isCurrentlyOpen() && ! $branch->isExtendedOrderAllowed() && ! $openings->openedAndBeforeClosing($branch)) {
             return response()->json([
                 'code' => 'branch_closed',
                 'message' => 'This branch is currently closed. To place orders after hours, ask an administrator to enable extended order access from the admin settings.',
@@ -625,6 +645,7 @@ class CheckoutSessionController extends Controller
             'staff_id' => $employee->id,
             'is_manual_entry' => $isManualEntry,
             'recorded_at' => $isManualEntry ? $validated['recorded_at'] : null,
+            'manual_entry_reason' => $isManualEntry ? trim((string) $validated['manual_entry_reason']) : null,
             'momo_reference' => $validated['momo_reference'] ?? null,
             'expires_at' => now()->addMinutes(5),
         ]);

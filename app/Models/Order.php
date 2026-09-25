@@ -84,6 +84,7 @@ class Order extends Model
         'cancel_request_reason',
         'cancel_requested_at',
         'recorded_at',
+        'manual_entry_reason',
         'receipt_printed_at',
         'receipt_print_count',
         'receipt_verification_code',

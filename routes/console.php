@@ -37,3 +37,7 @@ Schedule::command('sms:health-check')->everyFifteenMinutes()->withoutOverlapping
 // happening. Stateful about repeats and capped per day, so running often does
 // not mean texting often. See TechErrorTexter.
 Schedule::command('alerts:text-tech-errors')->everyFiveMinutes()->withoutOverlapping();
+
+// Every 5 min so "Ashaiman has not opened" arrives at 10:15, not 10:45. Each
+// text is stamped on the day's opening, so running often never repeats one.
+Schedule::command('openings:watch')->everyFiveMinutes()->withoutOverlapping();

@@ -77,6 +77,24 @@ class PosOrderController extends Controller
         $branchId = $request->validated('branch_id');
         $this->verifyStaffAuthorization($employee, $branchId);
 
+        // The same two rules as the till's own door (CheckoutSessionController::
+        // posStore). This one is deprecated, but it still answers, and a door
+        // that skips the rules is a door around them.
+        $branch = \App\Models\Branch::findOrFail($branchId);
+        $openings = app(\App\Services\Openings\BranchOpeningService::class);
+        $isManualEntry = (bool) ($request->validated('is_manual_entry') ?? false);
+
+        if (! $isManualEntry && ($refusal = $openings->refusalForTill($branch))) {
+            return response()->json(['code' => $refusal->reason, 'message' => $refusal->getMessage()], 422);
+        }
+
+        if (! $isManualEntry && ! $branch->isCurrentlyOpen() && ! $branch->isExtendedOrderAllowed() && ! $openings->openedAndBeforeClosing($branch)) {
+            return response()->json([
+                'code' => 'branch_closed',
+                'message' => 'This branch is currently closed. To place orders after hours, ask an administrator to enable extended order access from the admin settings.',
+            ], 422);
+        }
+
         // Validate menu items
         $items = $request->validated('items');
         $menuItems = $this->validateMenuItems($items, $branchId);

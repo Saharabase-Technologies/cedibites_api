@@ -24,6 +24,10 @@ class BranchResource extends JsonResource
         $data['extended_order_access'] = $this->extended_order_access;
         $data['staff_access_allowed'] = $this->isStaffAccessAllowed();
 
+        // Whether today has been opened, and whether an order placed now will
+        // wait for it. Safe for customers to see: no names, no problems.
+        $data['opening'] = app(\App\Services\Openings\BranchOpeningService::class)->summary($this->resource);
+
         // Include full menu items if loaded.
         //
         // Union of both sources while the migration is in flight: dishes the

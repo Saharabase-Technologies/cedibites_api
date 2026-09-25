@@ -4,6 +4,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Head office alert numbers
+    |--------------------------------------------------------------------------
+    |
+    | Texted when a branch opens late or with problems, when head office opens
+    | a branch without the checklist, and when someone asks to cancel an
+    | order. Kept in the platform settings panel; this is only the starting
+    | value, and it is deliberately empty rather than baked into the code.
+    |
+    */
+
+    'admin_phones' => env('ADMIN_ALERT_PHONES', ''),
+
+    /*
+    |--------------------------------------------------------------------------
     | Error texts to the tech admin
     |--------------------------------------------------------------------------
     |

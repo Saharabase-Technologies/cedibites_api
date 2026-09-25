@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AdminAnalyticsController;
 use App\Http\Controllers\Api\AdminDashboardController;
 use App\Http\Controllers\Api\AdminReportController;
 use App\Http\Controllers\Api\AutomationRuleController;
+use App\Http\Controllers\Api\AdminOpeningController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
@@ -241,6 +242,16 @@ Route::prefix('admin')->group(function () {
         Route::delete('branches/{branch}/manual-override', [BranchController::class, 'clearManualOverride']);
         Route::patch('branches/{branch}/toggle-extended-staff-access', [BranchController::class, 'toggleExtendedStaffAccess']);
         Route::patch('branches/{branch}/toggle-extended-order-access', [BranchController::class, 'toggleExtendedOrderAccess']);
+
+        // How every branch opened, opening one without its checklist, which
+        // branches use the checklist, and what it asks.
+        Route::get('openings', [AdminOpeningController::class, 'index']);
+        Route::get('openings/{opening}', [AdminOpeningController::class, 'show']);
+        Route::post('branches/{branch}/open-without-checklist', [AdminOpeningController::class, 'openWithoutChecklist']);
+        Route::patch('branches/{branch}/opening-requirement', [AdminOpeningController::class, 'setRequirement']);
+        Route::get('opening-checklist', [AdminOpeningController::class, 'checklist']);
+        Route::post('opening-checklist', [AdminOpeningController::class, 'storeItem']);
+        Route::patch('opening-checklist/{item}', [AdminOpeningController::class, 'updateItem']);
     });
 
     Route::middleware('permission:manage_menu')->group(function () {

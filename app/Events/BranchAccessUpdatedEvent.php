@@ -42,6 +42,9 @@ class BranchAccessUpdatedEvent implements ShouldBroadcast
             'extended_staff_access' => $this->branch->extended_staff_access,
             'extended_order_access' => $this->branch->extended_order_access,
             'staff_access_allowed' => $this->branch->isStaffAccessAllowed(),
+            // Also fired when the branch is opened for the day, so every till
+            // at it unlocks without anybody refreshing.
+            'opening' => app(\App\Services\Openings\BranchOpeningService::class)->summary($this->branch),
         ];
     }
 }

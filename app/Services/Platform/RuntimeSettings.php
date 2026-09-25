@@ -2,6 +2,7 @@
 
 namespace App\Services\Platform;
 
+use App\Services\Alerts\AdminAlerter;
 use App\Services\SystemSettingService;
 use Illuminate\Support\Facades\Log;
 
@@ -136,6 +137,17 @@ class RuntimeSettings
 
             // ── Alerts ───────────────────────────────────────────────────────
             [
+                'key' => 'alerts.admin_phones',
+                'config' => 'alerts.admin_phones',
+                'env' => 'ADMIN_ALERT_PHONES',
+                'group' => 'Alerts',
+                'label' => 'Head office alert numbers',
+                'help' => 'Texted when a branch opens late or with problems, when head office opens a '
+                    .'branch without the checklist, and when someone asks to cancel an order. '
+                    .'Separate the numbers with commas.',
+                'type' => 'phone_list',
+            ],
+            [
                 'key' => 'alerts.tech_error_texts',
                 'config' => 'alerts.tech_errors.enabled',
                 'env' => 'TECH_ERROR_TEXTS_ENABLED',
@@ -181,6 +193,20 @@ class RuntimeSettings
                 'type' => 'integer',
                 'min' => 1,
                 'max' => 100,
+            ],
+
+            // ── Opening the branch ───────────────────────────────────────────
+            [
+                'key' => 'openings.enforced',
+                'config' => 'openings.enforced',
+                'env' => 'OPENINGS_ENFORCED',
+                'group' => 'Opening the branch',
+                'label' => 'Branches must be opened before they sell',
+                'help' => 'Applies only to branches switched on for the opening checklist. Turning '
+                    .'this off lets every branch sell without being opened, at once. Use it only if '
+                    .'the checklist itself is broken.',
+                'type' => 'boolean',
+                'danger' => true,
             ],
 
             // ── Orders ───────────────────────────────────────────────────────
@@ -271,6 +297,16 @@ class RuntimeSettings
             throw new \InvalidArgumentException("{$key} is not an editable setting.");
         }
 
+        if ($definition['type'] === 'phone_list') {
+            // Refused rather than quietly dropped: a mistyped number that
+            // vanished on save would look saved and never receive anything.
+            foreach (AdminAlerter::entries((string) $value) as $entry) {
+                if (AdminAlerter::normalise($entry) === null) {
+                    throw new \InvalidArgumentException("{$entry} is not a Ghana mobile number.");
+                }
+            }
+        }
+
         $cast = $this->cast($value, $definition['type']);
 
         if ($definition['type'] === 'integer') {
@@ -283,7 +319,7 @@ class RuntimeSettings
 
         $previous = $this->get($key);
 
-        $this->settings->set(self::PREFIX.$key, $cast, $definition['type']);
+        $this->settings->set(self::PREFIX.$key, $cast, $definition['type'] === 'phone_list' ? 'string' : $definition['type']);
 
         // Changing how the platform behaves is worth a permanent record, and the
         // question after an incident is always "who turned that on, and when".
@@ -327,6 +363,7 @@ class RuntimeSettings
         return match ($type) {
             'boolean' => filter_var($value, FILTER_VALIDATE_BOOLEAN),
             'integer' => (int) $value,
+            'phone_list' => implode(', ', AdminAlerter::parsePhones((string) $value)),
             default => $value,
         };
     }

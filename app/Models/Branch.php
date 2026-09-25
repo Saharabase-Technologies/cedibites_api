@@ -18,7 +18,7 @@ class Branch extends Model
     {
         return LogOptions::defaults()
             ->useLogName('admin')
-            ->logOnly(['name', 'address', 'is_active', 'extended_staff_access', 'extended_order_access'])
+            ->logOnly(['name', 'address', 'is_active', 'extended_staff_access', 'extended_order_access', 'requires_opening_checklist'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
@@ -34,6 +34,7 @@ class Branch extends Model
         'is_active',
         'extended_staff_access',
         'extended_order_access',
+        'requires_opening_checklist',
     ];
 
     protected function casts(): array
@@ -44,6 +45,7 @@ class Branch extends Model
             'is_active' => 'boolean',
             'extended_staff_access' => 'boolean',
             'extended_order_access' => 'boolean',
+            'requires_opening_checklist' => 'boolean',
         ];
     }
 
@@ -198,7 +200,19 @@ class Branch extends Model
      */
     public function isStaffAccessAllowed(): bool
     {
-        return $this->isCurrentlyOpen() || $this->extended_staff_access;
+        return $this->isCurrentlyOpen()
+            || $this->extended_staff_access
+            // Two hours before opening at a branch that uses the checklist, so
+            // the manager can do it and the kitchen can get ready.
+            || app(\App\Services\Openings\BranchOpeningService::class)->allowsStaffEarly($this);
+    }
+
+    /**
+     * One row per business day: who opened the branch, when, and how.
+     */
+    public function openings(): HasMany
+    {
+        return $this->hasMany(BranchOpening::class);
     }
 
     /**

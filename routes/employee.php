@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\BranchOpeningController;
 use App\Http\Controllers\Api\CheckoutSessionController;
 use App\Http\Controllers\Api\EmployeeAuthController;
 use App\Http\Controllers\Api\EmployeeOrderController;
@@ -10,6 +11,11 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('employee')->group(function () {
     Route::get('me', [EmployeeAuthController::class, 'me']);
+
+    // Whether today's opening is done, for the till, kitchen display and Order
+    // Manager at a branch nobody has opened yet. No answers, only the status.
+    Route::get('branches/{branch}/opening', [BranchOpeningController::class, 'status'])
+        ->middleware('branch.access');
     Route::post('logout', [EmployeeAuthController::class, 'logout']);
     Route::post('change-password', [EmployeeAuthController::class, 'changePassword']);
 });

@@ -46,6 +46,7 @@ class CheckoutSession extends Model
         'payment_gateway_response',
         'is_manual_entry',
         'recorded_at',
+        'manual_entry_reason',
         'momo_reference',
         'amount_paid',
         'expires_at',

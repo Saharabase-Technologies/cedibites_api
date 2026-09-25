@@ -118,6 +118,7 @@ class OrderCreationService
                 'total_amount' => $session->total_amount,
                 'status' => $initialStatus,
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,
+                'manual_entry_reason' => $isManualEntry ? $session->manual_entry_reason : null,
                 'momo_number' => $session->momo_number,
             ]);
 

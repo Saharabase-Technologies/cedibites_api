@@ -55,7 +55,12 @@ class PlatformSettingsController extends Controller
             ], 422);
         }
 
-        $value = $this->runtime->set($validated['key'], $validated['value'], $request->user()->id);
+        try {
+            $value = $this->runtime->set($validated['key'], $validated['value'], $request->user()->id);
+        } catch (\InvalidArgumentException $e) {
+            // A value the setting cannot hold, such as a mistyped phone number.
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         return response()->success(
             ['key' => $validated['key'], 'value' => $value],

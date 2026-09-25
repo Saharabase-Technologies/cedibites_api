@@ -177,6 +177,18 @@ class OrderController extends Controller
             return response()->error('Cart branch does not match selected branch.', 422);
         }
         $branch = $cart->branch;
+
+        // Deprecated, but it still answers a guest with a cart, and it never
+        // asked whether the branch was open at all. The same rules as
+        // CheckoutSessionController::store now.
+        if (! $branch->is_active || ! $branch->isCurrentlyOpen()) {
+            return response()->error('This branch is currently closed. Please check back during operating hours.', 422);
+        }
+
+        if ($refusal = app(\App\Services\Openings\BranchOpeningService::class)->refusalForOnline($branch)) {
+            return response()->json(['code' => $refusal->reason, 'message' => $refusal->getMessage()], 422);
+        }
+
         $subtotal = $cart->items->sum('subtotal');
         $deliveryFee = 0; // Delivery fees temporarily disabled
         $taxAmount = round($subtotal * ($this->taxRate() / (1 + $this->taxRate())), 2);

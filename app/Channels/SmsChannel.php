@@ -3,6 +3,7 @@
 namespace App\Channels;
 
 use App\Services\HubtelSmsService;
+use Illuminate\Notifications\AnonymousNotifiable;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Facades\Log;
 
@@ -21,11 +22,15 @@ class SmsChannel
             return;
         }
 
-        $phone = $notifiable->phone ?? $notifiable->customer?->phone;
+        // A bare number, sent with Notification::route(), carries no account:
+        // head office's alert list is numbers, not people.
+        $phone = $notifiable instanceof AnonymousNotifiable
+            ? $notifiable->routeNotificationFor(self::class)
+            : ($notifiable->phone ?? $notifiable->customer?->phone);
 
         if (! $phone) {
             Log::warning('Cannot send SMS notification: no phone number', [
-                'notifiable_id' => $notifiable->id,
+                'notifiable_id' => $notifiable->id ?? null,
                 'notification' => get_class($notification),
             ]);
 
@@ -49,14 +54,14 @@ class SmsChannel
             $result = $this->smsService->sendSingle($hubtelPhone, $message, class_basename($notification));
 
             Log::info('SMS notification sent', [
-                'notifiable_id' => $notifiable->id,
+                'notifiable_id' => $notifiable->id ?? null,
                 'phone' => $phone,
                 'notification' => get_class($notification),
                 'message_id' => $result['messageId'] ?? null,
             ]);
         } catch (\Exception $e) {
             Log::error('SMS notification failed', [
-                'notifiable_id' => $notifiable->id,
+                'notifiable_id' => $notifiable->id ?? null,
                 'phone' => $phone,
                 'notification' => get_class($notification),
                 'error' => $e->getMessage(),

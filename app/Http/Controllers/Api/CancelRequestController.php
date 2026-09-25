@@ -72,6 +72,23 @@ class CancelRequestController extends Controller
             Log::warning('CancelRequestController: push notification dispatch failed', ['error' => $e->getMessage()]);
         }
 
+        // And by text. Head office has no staff app yet, and a push that opens
+        // the customer site is not how anybody finds a waiting cancellation.
+        try {
+            $order->loadMissing('branch');
+            app(\App\Services\Alerts\AdminAlerter::class)->send('cancel_requested', sprintf(
+                'CediBites: %s asks to cancel order #%s at %s (GHS %s): %s. %s',
+                $request->user()->name ?? 'Staff',
+                $order->order_number,
+                $order->branch?->name ?? 'a branch',
+                number_format((float) $order->total_amount, 2),
+                \Illuminate\Support\Str::limit(rtrim(trim($validated['reason']), '.'), 70),
+                rtrim((string) config('app.frontend_url'), '/').'/admin/orders/cancel-requests',
+            ), ['order_id' => $order->id, 'order_number' => $order->order_number]);
+        } catch (\Throwable $e) {
+            Log::warning('CancelRequestController: SMS alert failed', ['error' => $e->getMessage()]);
+        }
+
         try {
             $order->load([
                 'customer.user',
