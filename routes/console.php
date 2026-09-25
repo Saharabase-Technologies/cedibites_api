@@ -32,3 +32,8 @@ Schedule::command('campaigns:poll-deliveries')->everyFifteenMinutes()->withoutOv
 // The command is stateful about alerting — running it often does not mean
 // mailing often. See CheckSmsHealth.
 Schedule::command('sms:health-check')->everyFifteenMinutes()->withoutOverlapping();
+
+// Every 5 min so a fault reaches the tech admin's phone while it is still
+// happening. Stateful about repeats and capped per day, so running often does
+// not mean texting often. See TechErrorTexter.
+Schedule::command('alerts:text-tech-errors')->everyFiveMinutes()->withoutOverlapping();

@@ -134,6 +134,55 @@ class RuntimeSettings
                 'danger' => true,
             ],
 
+            // ── Alerts ───────────────────────────────────────────────────────
+            [
+                'key' => 'alerts.tech_error_texts',
+                'config' => 'alerts.tech_errors.enabled',
+                'env' => 'TECH_ERROR_TEXTS_ENABLED',
+                'group' => 'Alerts',
+                'label' => 'Text the tech admin about errors',
+                'help' => 'Every fault on the error page is sent by SMS to whoever can read system '
+                    .'health. SMS failures still go by email, since a text cannot report its own '
+                    .'broken line.',
+                'type' => 'boolean',
+            ],
+            [
+                'key' => 'alerts.tech_error_repeat_hours',
+                'config' => 'alerts.tech_errors.repeat_hours',
+                'env' => 'TECH_ERROR_TEXTS_REPEAT_HOURS',
+                'group' => 'Alerts',
+                'label' => 'Remind me about the same error after (hours)',
+                'help' => 'Only if it has happened again since the last text. A new fault is always '
+                    .'texted straight away.',
+                'type' => 'integer',
+                'min' => 1,
+                'max' => 48,
+            ],
+            [
+                'key' => 'alerts.sign_in_roundup_hours',
+                'config' => 'alerts.tech_errors.sign_in_roundup_hours',
+                'env' => 'TECH_ERROR_TEXTS_SIGN_IN_ROUNDUP_HOURS',
+                'group' => 'Alerts',
+                'label' => 'Failed sign-ins round-up, at most every (hours)',
+                'help' => 'Who failed to sign in, how many times and why, in one text. Three failures '
+                    .'in five minutes is texted at once.',
+                'type' => 'integer',
+                'min' => 1,
+                'max' => 24,
+            ],
+            [
+                'key' => 'alerts.tech_error_daily_cap',
+                'config' => 'alerts.tech_errors.daily_cap',
+                'env' => 'TECH_ERROR_TEXTS_DAILY_CAP',
+                'group' => 'Alerts',
+                'label' => 'Most error texts per day',
+                'help' => 'The last one allowed says how many more are waiting on the error page. '
+                    .'Each text is billed.',
+                'type' => 'integer',
+                'min' => 1,
+                'max' => 100,
+            ],
+
             // ── Orders ───────────────────────────────────────────────────────
             [
                 'key' => 'orders.prep_default_minutes',
