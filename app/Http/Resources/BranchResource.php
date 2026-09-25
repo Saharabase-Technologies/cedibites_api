@@ -61,7 +61,10 @@ class BranchResource extends JsonResource
                     'is_open' => $hour->is_open,
                     'open_time' => $hour->open_time ? substr($hour->open_time, 0, 5) : null, // HH:MM format
                     'close_time' => $hour->close_time ? substr($hour->close_time, 0, 5) : null,
-                    'manual_override_open' => $hour->manual_override_open,
+                    // Only an override that still applies. The customer app
+                    // reads a false here as "shut by hand, no idea when it
+                    // reopens", so a stale one said that about a whole weekday.
+                    'manual_override_open' => $hour->overrideInForce() ? $hour->manual_override_open : null,
                     'manual_override_at' => $hour->manual_override_at?->toISOString(),
                 ]];
             });
