@@ -493,7 +493,7 @@ class BranchController extends Controller
     /**
      * Toggle the daily open/closed status for a branch.
      */
-    public function toggleDailyStatus(Branch $branch): JsonResponse
+    public function toggleDailyStatus(Request $request, Branch $branch): JsonResponse
     {
         try {
             $today = strtolower(now()->format('l')); // monday, tuesday, etc.
@@ -516,6 +516,15 @@ class BranchController extends Controller
 
             $status = $operatingHour->manual_override_open ? 'opened' : 'closed';
 
+            // Opening or shutting a branch by hand decides whether customers can
+            // order from it, so it is on the record with who did it.
+            activity('admin')
+                ->causedBy($request->user())
+                ->performedOn($branch)
+                ->event($operatingHour->manual_override_open ? 'branch_opened_by_hand' : 'branch_closed_by_hand')
+                ->withProperties(['day' => $today, 'lasts' => 'until the end of this business day'])
+                ->log("{$branch->name} {$status} by hand for today");
+
             return response()->success([
                 'message' => "Branch manually {$status} successfully",
                 'is_open' => $operatingHour->manual_override_open,
@@ -533,7 +542,7 @@ class BranchController extends Controller
     /**
      * Clear manual override and return to scheduled hours.
      */
-    public function clearManualOverride(Branch $branch): JsonResponse
+    public function clearManualOverride(Request $request, Branch $branch): JsonResponse
     {
         try {
             $today = strtolower(now()->format('l'));
@@ -552,6 +561,13 @@ class BranchController extends Controller
             ]);
 
             $followsSchedule = $operatingHour->fresh()->isCurrentlyOpen();
+
+            activity('admin')
+                ->causedBy($request->user())
+                ->performedOn($branch)
+                ->event('branch_override_cleared')
+                ->withProperties(['day' => $today])
+                ->log("{$branch->name} back on its opening hours");
 
             return response()->success([
                 'message' => 'Manual override cleared - now following scheduled hours',
