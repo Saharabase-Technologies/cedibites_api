@@ -44,10 +44,16 @@ class CampaignDeliveryPoller
         $campaigns = Campaign::whereNotNull('batch_ids')
             ->whereIn('status', [
                 CampaignStatus::Sending->value,
+                CampaignStatus::Paused->value,
                 CampaignStatus::Sent->value,
+                CampaignStatus::PartlySent->value,
                 CampaignStatus::Failed->value,
             ])
-            ->where('started_at', '>=', now()->subHours($withinHours))
+            // Either end of the send. A campaign resumed days after it began
+            // has new batches to ask about, and its start is long past.
+            ->where(fn ($q) => $q
+                ->where('started_at', '>=', now()->subHours($withinHours))
+                ->orWhere('completed_at', '>=', now()->subHours($withinHours)))
             ->get();
 
         $updated = 0;
@@ -126,7 +132,7 @@ class CampaignDeliveryPoller
             return false;
         }
 
-        $this->writeDeliveries($rows);
+        $this->writeDeliveries($campaign, $rows);
 
         $campaign->update([
             'actual_cost' => round($cost, 4),
@@ -146,15 +152,48 @@ class CampaignDeliveryPoller
      * fifteen minutes for two days would end up with a hundred and ninety-two
      * copies of itself.
      *
+     * `delivered_at` is stamped the first time a row is seen as delivered and
+     * left alone on every poll after that. It is what the delivery curve reads.
+     * `updated_at` cannot do that job: it moves on every poll, so by the end of
+     * the window every message looks as though it arrived a few minutes ago.
+     *
      * @param  array<string, array>  $rows
      */
-    private function writeDeliveries(array $rows): void
+    private function writeDeliveries(Campaign $campaign, array $rows): void
     {
         if ($rows === []) {
             return;
         }
 
-        foreach (array_chunk(array_values($rows), 500) as $chunk) {
+        $alreadyDelivered = CampaignDelivery::where('campaign_id', $campaign->id)
+            ->whereNotNull('delivered_at')
+            ->pluck('phone')
+            ->flip();
+
+        $delivered = DeliveryOutcome::Delivered->value;
+
+        // Arriving now for the first time, as far as we have seen.
+        $new = [];
+        // Everything else, whose first-delivery moment must not be touched.
+        $rest = [];
+
+        foreach ($rows as $phone => $row) {
+            if ($row['outcome'] === $delivered && ! $alreadyDelivered->has($phone)) {
+                $new[] = [...$row, 'delivered_at' => now()];
+            } else {
+                $rest[] = $row;
+            }
+        }
+
+        foreach (array_chunk($new, 500) as $chunk) {
+            CampaignDelivery::upsert(
+                $chunk,
+                ['campaign_id', 'phone'],
+                ['outcome', 'provider_status', 'rate', 'updated_at', 'delivered_at'],
+            );
+        }
+
+        foreach (array_chunk($rest, 500) as $chunk) {
             CampaignDelivery::upsert(
                 $chunk,
                 ['campaign_id', 'phone'],

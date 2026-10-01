@@ -20,6 +20,7 @@ use App\Models\MenuItemOption;
 use App\Services\Campaigns\AudienceResolver;
 use App\Services\Campaigns\AudienceRules;
 use App\Services\Campaigns\CampaignDeliveryReport;
+use App\Services\Campaigns\CampaignLedger;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\MessageMeter;
 use App\Services\Contacts\PhoneNormaliser;
@@ -49,6 +50,9 @@ class CampaignController extends Controller
     public function index(Request $request): JsonResponse
     {
         $campaigns = Campaign::with(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])
+            // How many people a resume would reach, counted in the same query
+            // as the list so a hundred campaigns do not cost a hundred counts.
+            ->withCount(['recipients as resumable_count' => fn ($q) => $q->resumable()])
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->latest()
             ->paginate($request->integer('per_page', 25));
@@ -60,9 +64,21 @@ class CampaignController extends Controller
 
     public function show(Campaign $campaign): JsonResponse
     {
-        return response()->success(
-            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
-        );
+        return response()->success($this->present($campaign));
+    }
+
+    /**
+     * One campaign as the detail page reads it, with the count of who is left.
+     *
+     * @return array<string, mixed>
+     */
+    private function present(Campaign $campaign): array
+    {
+        return (new CampaignResource(
+            $campaign
+                ->load(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])
+                ->loadCount(['recipients as resumable_count' => fn ($q) => $q->resumable()]),
+        ))->resolve();
     }
 
     public function store(SaveCampaignRequest $request): JsonResponse
@@ -324,11 +340,60 @@ class CampaignController extends Controller
         }
 
         return response()->success(
-            (new CampaignResource($campaign->load(['createdBy', 'approvedBy', 'shortLink', 'lastTestedBy'])))->resolve(),
+            $this->present($campaign),
             $this->sender->seedMode()
                 ? 'Sent to the test list. Seed mode is on, so no customers were messaged.'
                 : 'Campaign sending.',
         );
+    }
+
+    /**
+     * Send to the people who were missed.
+     *
+     * For a campaign that paused part way, or finished with some of its list
+     * refused. Nobody Hubtel already accepted is sent to again.
+     *
+     * `include_unsure` adds the people we got no answer about. Off unless it is
+     * asked for, because some of them will have the message already.
+     */
+    public function resume(Request $request, Campaign $campaign): JsonResponse
+    {
+        $validated = $request->validate([
+            'include_unsure' => ['sometimes', 'boolean'],
+        ]);
+
+        try {
+            $campaign = $this->sender->resume(
+                $campaign,
+                $request->user(),
+                (bool) ($validated['include_unsure'] ?? false),
+            );
+        } catch (RuntimeException $e) {
+            return response()->unprocessable($e->getMessage());
+        }
+
+        return response()->success($this->present($campaign), 'Sending to the people who were missed.');
+    }
+
+    /**
+     * Where the whole list stands, for the charts on the campaign page.
+     *
+     * Apart from `deliveries` because it answers a different question. That
+     * one is what happened to the messages Hubtel accepted. This one starts a
+     * step earlier, at the list, and includes the people Hubtel never took.
+     */
+    public function report(Campaign $campaign, CampaignLedger $ledger, CampaignDeliveryReport $report): JsonResponse
+    {
+        return response()->success([
+            'reach' => [
+                ...$ledger->reach($campaign),
+                'resumable' => $ledger->resumableCount($campaign->id),
+                'resumable_with_unsure' => $ledger->resumableCount($campaign->id, includeUnsure: true),
+            ],
+            'reasons' => $ledger->reasons($campaign),
+            'networks' => $ledger->networks($campaign),
+            'curve' => $report->curve($campaign),
+        ]);
     }
 
     /**
@@ -359,13 +424,28 @@ class CampaignController extends Controller
      */
     public function segments(): JsonResponse
     {
+        // Resolved once and used twice: for the headcount, and to split the
+        // list by network without a second scan of the order history.
+        $everyone = $this->audience->phones(CampaignSegment::All);
+
         return response()->success([
             'segments' => array_map(fn (CampaignSegment $segment) => [
                 'value' => $segment->value,
                 'label' => $segment->label(),
                 'description' => $segment->description(),
-                'count' => $this->audience->count($segment),
+                'count' => $segment === CampaignSegment::All
+                    ? count($everyone)
+                    : $this->audience->count($segment),
             ], CampaignSegment::cases()),
+
+            /*
+             * The whole list by network, read off the prefix.
+             *
+             * `other` is every number on a prefix no network uses. Those are
+             * left off every send, so this is also the answer to "why is the
+             * send smaller than the audience".
+             */
+            'networks' => $this->networkSplit($everyone),
 
             // Surfaced so the composer can say plainly that nothing is reaching
             // customers yet, rather than letting somebody discover it after a
@@ -383,6 +463,34 @@ class CampaignController extends Controller
              */
             'rate_per_segment' => (float) config('campaigns.estimated_rate_per_segment', 0.0243),
         ]);
+    }
+
+    /**
+     * @param  array<int, string>  $phones
+     * @return array<int, array{value: string, label: string, count: int}>
+     */
+    private function networkSplit(array $phones): array
+    {
+        $counts = [];
+
+        foreach ($phones as $phone) {
+            $value = GhanaNetwork::forPhone($phone)?->value ?? 'other';
+            $counts[$value] = ($counts[$value] ?? 0) + 1;
+        }
+
+        $rows = array_map(fn (GhanaNetwork $n) => [
+            'value' => $n->value,
+            'label' => $n->label(),
+            'count' => $counts[$n->value] ?? 0,
+        ], GhanaNetwork::cases());
+
+        $rows[] = [
+            'value' => 'other',
+            'label' => 'Not a mobile number',
+            'count' => $counts['other'] ?? 0,
+        ];
+
+        return $rows;
     }
 
     /**

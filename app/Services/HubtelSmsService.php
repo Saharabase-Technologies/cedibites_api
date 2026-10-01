@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\SmsFailureReason;
+use App\Exceptions\SmsBatchRefused;
 use App\Models\SmsDeliveryAttempt;
 
 class HubtelSmsService
@@ -361,7 +362,24 @@ class HubtelSmsService
                 ]);
 
                 $body = $response->json() ?? [];
-                $this->recordBatch($recipients, false, $body['statusDescription'] ?? $response->body(), $notification, $isCampaign, $campaignId);
+
+                // A refused batch carries a number and no words:
+                // {"batchId":null,"status":12,"data":null}. Read the number, or
+                // "no credit" is recorded as an error nobody recognises.
+                $description = $body['statusDescription']
+                    ?? SmsFailureReason::describeHubtelStatus($body['status'] ?? null)
+                    ?? $response->body();
+
+                $this->recordBatch($recipients, false, $description, $notification, $isCampaign, $campaignId);
+
+                // A 4xx is Hubtel reading the request and saying no, so nothing
+                // was sent. A 5xx says only that something broke on their side.
+                if ($response->clientError()) {
+                    throw new SmsBatchRefused(
+                        'Failed to send batch SMS: '.$description,
+                        $this->reasonFor($response->status(), $description),
+                    );
+                }
 
                 throw new \Exception('Failed to send batch SMS: '.$response->body());
             }
@@ -382,7 +400,9 @@ class HubtelSmsService
 
             if ($status >= 100 || $messageIds === []) {
                 $body = $response->json() ?? [];
-                $errorMessage = $body['statusDescription'] ?? "Batch rejected by provider (status {$status})";
+                $errorMessage = $body['statusDescription']
+                    ?? SmsFailureReason::describeHubtelStatus($status)
+                    ?? "Batch rejected by provider (status {$status})";
 
                 \Illuminate\Support\Facades\Log::error('Hubtel batch SMS rejected in response body', [
                     'endpoint' => "{$this->baseUrl}/batch/simple/send",
@@ -392,6 +412,15 @@ class HubtelSmsService
                 ]);
 
                 $this->recordBatch($recipients, false, $errorMessage, $notification, $isCampaign, $campaignId);
+
+                // No batch id means no batch was made, which is a refusal. With
+                // one, Hubtel holds something and we cannot say what.
+                if (empty($result['batchId'])) {
+                    throw new SmsBatchRefused(
+                        'Failed to send batch SMS: '.$errorMessage,
+                        $this->reasonFor($response->status(), $errorMessage),
+                    );
+                }
 
                 throw new \Exception('Failed to send batch SMS: '.$errorMessage);
             }
@@ -415,6 +444,13 @@ class HubtelSmsService
             ]);
 
             $this->recordBatch($recipients, false, 'Failed to connect to Hubtel SMS API', $notification, $isCampaign, $campaignId);
+
+            // A name that would not resolve or a connection that was never
+            // opened means the request did not leave, which is as good as a
+            // refusal. A timeout is different: the request may have arrived.
+            if (preg_match('/cURL error (6|7)\b|could not resolve host|connection refused/i', $e->getMessage())) {
+                throw new SmsBatchRefused('Failed to connect to Hubtel SMS API', SmsFailureReason::Connection);
+            }
 
             throw new \Exception('Failed to connect to Hubtel SMS API');
         } catch (\Throwable $e) {
@@ -441,10 +477,43 @@ class HubtelSmsService
                 ]);
 
                 $this->recordBatch($recipients, false, $e->getMessage(), $notification, $isCampaign, $campaignId);
+
+                // parseResponse found an error-shaped body with a description
+                // and no ids. That is Hubtel saying no in words.
+                if (str_starts_with($e->getMessage(), 'SMS API Error: ')) {
+                    $description = substr($e->getMessage(), strlen('SMS API Error: '));
+
+                    throw new SmsBatchRefused(
+                        'Failed to send batch SMS: '.$description,
+                        $this->reasonFor(isset($response) ? $response->status() : 0, $description),
+                    );
+                }
             }
 
             throw $e;
         }
+    }
+
+    /**
+     * Why Hubtel refused, from its words first and the HTTP status second.
+     *
+     * The status only decides when the words say nothing, because a 400 is what
+     * Hubtel answers for an empty account and for a bad number alike.
+     */
+    private function reasonFor(int $httpStatus, string $description): SmsFailureReason
+    {
+        $reason = SmsFailureReason::classify($description);
+
+        if ($reason !== SmsFailureReason::Unknown) {
+            return $reason;
+        }
+
+        return match ($httpStatus) {
+            401, 403 => SmsFailureReason::AuthFailed,
+            402 => SmsFailureReason::NoCredit,
+            429 => SmsFailureReason::RateLimited,
+            default => SmsFailureReason::Unknown,
+        };
     }
 
     /**

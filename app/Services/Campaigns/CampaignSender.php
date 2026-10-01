@@ -3,10 +3,15 @@
 namespace App\Services\Campaigns;
 
 use App\Enums\CampaignStatus;
+use App\Enums\GhanaNetwork;
+use App\Enums\SmsFailureReason;
 use App\Jobs\SendCampaignChunk;
 use App\Models\Campaign;
 use App\Models\User;
+use App\Notifications\CampaignPausedNotification;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
 use RuntimeException;
 
 /**
@@ -21,6 +26,7 @@ class CampaignSender
     public function __construct(
         private readonly AudienceResolver $audience,
         private readonly MessageMeter $meter,
+        private readonly CampaignLedger $ledger,
     ) {}
 
     /**
@@ -63,6 +69,13 @@ class CampaignSender
             'non_gsm_characters' => $measurement['non_gsm_characters'],
 
             'estimated_cost' => $this->meter->estimateCost($campaign->message, $effective),
+
+            // Numbers in the audience that no network would carry, mostly
+            // placeholders typed at the till. They are left off the send, and
+            // said here so the gap between the audience and the send is not a
+            // mystery. Nothing to report in seed mode, where the send is the
+            // staff list whatever the audience holds.
+            'left_out_count' => $this->seedMode() ? 0 : max(0, $audienceSize - $effective),
 
             // 0 means there is no cap. The frontend already reads it that way,
             // so an open console reports the same shape as a capped one rather
@@ -123,9 +136,191 @@ class CampaignSender
             throw new RuntimeException('This campaign has already been sent.');
         }
 
-        $this->dispatchChunks($campaign->fresh(), $recipients);
+        $campaign = $campaign->fresh();
+
+        // The list, written down before the first request leaves. A send that
+        // stops half way can only be picked up again from a record of who was
+        // on it.
+        $this->ledger->open($campaign, $recipients);
+
+        // The claim above is a query, so the model never fires and nothing
+        // logs it. Sending is the one act here that spends money. It gets its
+        // own line, with a name on it.
+        activity('admin')
+            ->causedBy($approver)
+            ->performedOn($campaign)
+            ->event('campaign_sent')
+            ->withProperties([
+                'recipients' => count($recipients),
+                'estimated_cost' => (float) $campaign->estimated_cost,
+                'tested' => $campaign->last_tested_at !== null,
+            ])
+            ->log('Campaign "'.$campaign->name.'" sent to '.number_format(count($recipients)).' people');
+
+        $this->dispatchChunks($campaign, $recipients);
 
         return $campaign->fresh();
+    }
+
+    /**
+     * Send to the people who were missed, and nobody else.
+     *
+     * Works on a campaign that was paused, and on one that finished with part
+     * of its list refused. The recipients come off the ledger, so the audience
+     * is not resolved again and nobody Hubtel already accepted is texted twice.
+     *
+     * People we got no answer about are left out unless `$includeUnsure` is
+     * set. They may have the message already, and only a person can decide
+     * that the risk of a second copy is worth it.
+     *
+     * @throws RuntimeException when there is nothing to send or it is already going
+     */
+    public function resume(Campaign $campaign, User $by, bool $includeUnsure = false): Campaign
+    {
+        $this->assertWithinSendWindow();
+
+        if (! $campaign->status->isResumable()) {
+            throw new RuntimeException('This campaign has nothing waiting to be sent.');
+        }
+
+        $recipients = $this->ledger->resumable($campaign->id, $includeUnsure);
+
+        if ($recipients === []) {
+            throw new RuntimeException('Everybody on this campaign who can be sent to has been sent to.');
+        }
+
+        // The same kind of claim as a first send, for the same reason. Two
+        // people pressing the button together must not both get through.
+        $claimed = Campaign::whereKey($campaign->id)
+            ->whereIn('status', [
+                CampaignStatus::Paused->value,
+                CampaignStatus::PartlySent->value,
+                CampaignStatus::Failed->value,
+            ])
+            ->update([
+                'status' => CampaignStatus::Sending->value,
+                'paused_at' => null,
+                'pause_reason' => null,
+                'completed_at' => null,
+            ]);
+
+        if (! $claimed) {
+            throw new RuntimeException('This campaign is already sending.');
+        }
+
+        // Anyone refused or unanswered was counted as failed when it happened.
+        // They are about to be tried again, so they come back off that total.
+        $wereFailed = $this->ledger->requeue($campaign->id, $recipients);
+
+        if ($wereFailed > 0) {
+            Campaign::whereKey($campaign->id)->update([
+                'failed_count' => DB::raw('CASE WHEN failed_count > '.$wereFailed.' THEN failed_count - '.$wereFailed.' ELSE 0 END'),
+            ]);
+        }
+
+        $campaign = $campaign->fresh();
+
+        activity('admin')
+            ->causedBy($by)
+            ->performedOn($campaign)
+            ->event('campaign_resumed')
+            ->withProperties(['recipients' => count($recipients), 'included_unsure' => $includeUnsure])
+            ->log('Campaign "'.$campaign->name.'" sent to the '.number_format(count($recipients)).' people who were missed');
+
+        $this->dispatchChunks($campaign, $recipients);
+
+        return $campaign->fresh();
+    }
+
+    /**
+     * Stop a campaign where it is, and keep the rest of the list unsent.
+     *
+     * Called when Hubtel refuses a chunk for a reason the next chunk would meet
+     * too. Until this existed, a campaign short of credit sent all seven of its
+     * chunks into the same refusal and recorded 3,500 people as failed.
+     *
+     * A conditional UPDATE, so of several chunks failing together only the
+     * first pauses and only one alert goes out.
+     */
+    public function pause(int $campaignId, SmsFailureReason $reason): bool
+    {
+        $paused = Campaign::whereKey($campaignId)
+            ->where('status', CampaignStatus::Sending->value)
+            ->update([
+                'status' => CampaignStatus::Paused->value,
+                'paused_at' => now(),
+                'pause_reason' => $reason->value,
+            ]);
+
+        if (! $paused) {
+            return false;
+        }
+
+        $campaign = Campaign::find($campaignId);
+
+        // Warning, not error. An error lands on the fault feed and is texted to
+        // the tech admin, and a text about SMS being out of credit is the one
+        // alert that cannot be trusted to arrive. This goes by email.
+        Log::warning('Campaign paused', [
+            'campaign_id' => $campaignId,
+            'reason' => $reason->value,
+            'sent' => $campaign?->sent_count,
+            'recipients' => $campaign?->recipient_count,
+        ]);
+
+        if ($campaign) {
+            $this->announcePause($campaign, $reason);
+        }
+
+        return true;
+    }
+
+    /** Whether chunks for this campaign should still be going out. */
+    public function isSending(int $campaignId): bool
+    {
+        return Campaign::whereKey($campaignId)
+            ->where('status', CampaignStatus::Sending->value)
+            ->exists();
+    }
+
+    /**
+     * Tell the people who can do something about it.
+     *
+     * Whoever pressed send, plus whoever can read system health. Never allowed
+     * to fail the job that called it: a campaign that paused and told nobody is
+     * bad, a campaign whose pause threw is worse.
+     */
+    private function announcePause(Campaign $campaign, SmsFailureReason $reason): void
+    {
+        try {
+            try {
+                $recipients = User::permission('view_system_health')->get();
+            } catch (\Throwable) {
+                // The permission is not seeded here. The sender still hears.
+                $recipients = collect();
+            }
+
+            if ($campaign->approvedBy) {
+                $recipients = $recipients->push($campaign->approvedBy)->unique('id');
+            }
+
+            $notification = new CampaignPausedNotification($campaign, $reason);
+
+            if ($recipients->isNotEmpty()) {
+                Notification::send($recipients, $notification);
+            }
+
+            foreach (array_filter(array_map('trim', explode(',', (string) config('services.sms.alert_emails', '')))) as $email) {
+                if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    Notification::route('mail', $email)->notify($notification);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Campaign pause alert could not be sent', [
+                'campaign_id' => $campaign->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -169,12 +364,17 @@ class CampaignSender
 
             if ($campaign->isFinished()) {
                 $campaign->completed_at = now();
-                // Failed only when nothing at all got through. A campaign that
-                // reached most of the list is a campaign that happened, and
-                // calling it "failed" would hide that from the report.
-                $campaign->status = $campaign->sent_count > 0
-                    ? CampaignStatus::Sent
-                    : CampaignStatus::Failed;
+                // Three endings, not two. Failed only when nothing at all got
+                // through. Sent only when everything did. A campaign that
+                // reached part of its list is neither, and calling it Sent is
+                // how 39 of 3,539 showed as a green tick.
+                $campaign->status = match (true) {
+                    $campaign->sent_count >= $campaign->recipient_count => CampaignStatus::Sent,
+                    $campaign->sent_count > 0 => CampaignStatus::PartlySent,
+                    default => CampaignStatus::Failed,
+                };
+                $campaign->paused_at = null;
+                $campaign->pause_reason = null;
             }
 
             $campaign->save();
@@ -355,6 +555,11 @@ class CampaignSender
      * Returns an empty string for anything that does not convert, and the caller
      * filters those out rather than sending a malformed number and recording a
      * failure for it.
+     *
+     * A number has to sit on a prefix a Ghana network uses. One in ten of the
+     * numbers on the first production campaign did not (098…, 087…, typed at
+     * the till when a customer gave none). They were counted in the audience
+     * and priced into the quote, and no network would ever carry them.
      */
     private function toHubtelFormat(string $phone): string
     {
@@ -364,6 +569,10 @@ class CampaignSender
             $digits = '233'.substr($digits, 1);
         }
 
-        return strlen($digits) === 12 && str_starts_with($digits, '233') ? $digits : '';
+        if (strlen($digits) !== 12 || ! str_starts_with($digits, '233')) {
+            return '';
+        }
+
+        return GhanaNetwork::forPhone($digits) !== null ? $digits : '';
     }
 }

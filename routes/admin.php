@@ -4,9 +4,9 @@ use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\Admin\SmartCategorySettingController;
 use App\Http\Controllers\Api\AdminAnalyticsController;
 use App\Http\Controllers\Api\AdminDashboardController;
+use App\Http\Controllers\Api\AdminOpeningController;
 use App\Http\Controllers\Api\AdminReportController;
 use App\Http\Controllers\Api\AutomationRuleController;
-use App\Http\Controllers\Api\AdminOpeningController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
@@ -132,8 +132,17 @@ Route::prefix('admin')->group(function () {
         // number from a handset that was switched off.
         Route::get('campaigns/{campaign}/deliveries', [CampaignController::class, 'deliveries']);
 
+        // Where the whole list stands, including the people Hubtel never
+        // took. What the charts on the campaign page read.
+        Route::get('campaigns/{campaign}/report', [CampaignController::class, 'report']);
+
         Route::get('campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
         Route::post('campaigns/{campaign}/send', [CampaignController::class, 'send']);
+
+        // Send to the people a paused or part-sent campaign missed. Spends
+        // money like `send`, and is throttled against a double press.
+        Route::post('campaigns/{campaign}/resume', [CampaignController::class, 'resume'])
+            ->middleware('throttle:5,1');
 
         /*
          * One copy of the campaign to one number, before the real send.

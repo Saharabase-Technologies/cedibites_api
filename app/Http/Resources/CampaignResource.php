@@ -36,6 +36,33 @@ class CampaignResource extends JsonResource
             'status_label' => $this->status->label(),
             'is_editable' => $this->status->isEditable(),
 
+            /*
+             * Why it stopped, in words and with the thing to do about it.
+             *
+             * Served rather than left to the frontend to phrase, so the screen
+             * and the alert email say the same sentence. Null on a campaign
+             * that is not paused.
+             */
+            'paused_at' => $this->paused_at?->toIso8601String(),
+            'pause_reason' => $this->pause_reason?->value,
+            'pause_reason_label' => $this->pause_reason?->label(),
+            'pause_remedy' => $this->pause_reason?->remedy(),
+
+            /*
+             * Who is left.
+             *
+             * `waiting_count` is everybody the chunks have not accounted for,
+             * which is what a paused campaign is holding. `resumable_count` is
+             * who a resume would actually send to: the waiting, plus anyone
+             * Hubtel clearly refused. Zero when the count was not loaded, and
+             * a campaign with nobody to resume to offers no button.
+             */
+            'waiting_count' => $this->status->hasStarted()
+                ? max(0, (int) $this->recipient_count - $this->accountedFor())
+                : 0,
+            'resumable_count' => $this->status->isResumable() ? (int) ($this->resumable_count ?? 0) : 0,
+            'can_resume' => $this->status->isResumable() && (int) ($this->resumable_count ?? 0) > 0,
+
             'scheduled_for' => $this->scheduled_for?->toIso8601String(),
 
             'short_link' => $this->whenLoaded('shortLink', fn () => $this->shortLink ? [

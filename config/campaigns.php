@@ -93,6 +93,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Trying a chunk again
+    |--------------------------------------------------------------------------
+    |
+    | Only one refusal is ever retried without a person: being told we are
+    | sending too fast. Hubtel took nothing, so the same chunk can go again
+    | without texting anybody twice, and waiting is the whole cure.
+    |
+    | Every other refusal pauses the campaign and holds the rest of the list,
+    | because the next chunk would meet the same answer. See SendCampaignChunk.
+    |
+    */
+    'rate_limit_retries' => (int) env('CAMPAIGN_RATE_LIMIT_RETRIES', 2),
+    'rate_limit_retry_seconds' => (int) env('CAMPAIGN_RATE_LIMIT_RETRY_SECONDS', 60),
+
+    /*
+    |--------------------------------------------------------------------------
     | Send window
     |--------------------------------------------------------------------------
     |
