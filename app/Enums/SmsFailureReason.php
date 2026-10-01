@@ -51,7 +51,8 @@ enum SmsFailureReason: string
 
             str_contains($text, 'invalid phone number'),
             str_contains($text, 'invalid recipient'),
-            str_contains($text, 'invalid destination') => self::InvalidRecipient,
+            str_contains($text, 'invalid destination'),
+            str_contains($text, 'not routable') => self::InvalidRecipient,
 
             str_contains($text, 'rate limit'),
             str_contains($text, 'too many requests'),
@@ -63,6 +64,33 @@ enum SmsFailureReason: string
             str_contains($text, 'could not resolve') => self::Connection,
 
             default => self::Unknown,
+        };
+    }
+
+    /**
+     * What Hubtel's numeric `status` means, in the words classify() reads.
+     *
+     * The batch endpoint refuses with a bare number and no statusDescription:
+     * `{"batchId":null,"status":12,"data":null}`. The single-send endpoint says
+     * the same thing in words. Without this table the number fell through to
+     * Unknown, which is how 3,500 texts refused for want of credit on
+     * 2026-10-01 were filed as "Unrecognised SMS error" and no alert fired.
+     *
+     * Only the codes in Hubtel's response code table are here. Anything else
+     * returns null and the caller keeps the raw body.
+     */
+    public static function describeHubtelStatus(mixed $status): ?string
+    {
+        if (! is_numeric($status)) {
+            return null;
+        }
+
+        return match ((int) $status) {
+            1 => 'Invalid destination address',
+            4 => 'Message is not routable on the Hubtel gateway',
+            12 => 'Payment required on account',
+            100 => 'Invalid request',
+            default => null,
         };
     }
 

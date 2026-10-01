@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CampaignSegment;
 use App\Enums\CampaignStatus;
+use App\Enums\SmsFailureReason;
 use App\Services\Campaigns\AudienceRules;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -69,6 +70,8 @@ class Campaign extends Model
         'approved_by_user_id',
         'started_at',
         'completed_at',
+        'paused_at',
+        'pause_reason',
         'last_tested_at',
         'last_tested_phone',
         'last_tested_by_user_id',
@@ -83,6 +86,8 @@ class Campaign extends Model
             'scheduled_for' => 'datetime',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
+            'paused_at' => 'datetime',
+            'pause_reason' => SmsFailureReason::class,
             'delivery_checked_at' => 'datetime',
             'last_tested_at' => 'datetime',
             'batch_ids' => 'array',
@@ -130,6 +135,12 @@ class Campaign extends Model
     public function lastTestedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'last_tested_by_user_id');
+    }
+
+    /** The list this campaign was sent to, and how far each person got. Never pruned. */
+    public function recipients(): HasMany
+    {
+        return $this->hasMany(CampaignRecipient::class);
     }
 
     /** Per-recipient detail. Prunable — see the migration. */

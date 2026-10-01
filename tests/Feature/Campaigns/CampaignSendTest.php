@@ -494,21 +494,30 @@ describe('the permanent record', function () {
      * A campaign that reached most of the list is a campaign that happened.
      * Calling it "failed" because one chunk of a thousand was rejected would
      * hide from the report that 27,000 people got the message.
+     *
+     * And calling it "sent" hides the other half. The first campaign on
+     * production reached 39 of 3,539 and wore a green Sent badge, because this
+     * test used to assert exactly that. Part of a list is its own ending.
      */
-    it('is only failed when nothing at all got through', function () {
+    it('is only failed when nothing at all got through, and only sent when everything did', function () {
         $partial = Campaign::factory()->sending()->create([
             'created_by_user_id' => campaignAdmin()->id, 'recipient_count' => 2,
         ]);
         $total = Campaign::factory()->sending()->create([
             'created_by_user_id' => campaignAdmin()->id, 'recipient_count' => 2,
         ]);
+        $whole = Campaign::factory()->sending()->create([
+            'created_by_user_id' => campaignAdmin()->id, 'recipient_count' => 2,
+        ]);
 
         $sender = app(CampaignSender::class);
         $sender->recordChunkResult($partial->id, sent: 1, failed: 1);
         $sender->recordChunkResult($total->id, sent: 0, failed: 2);
+        $sender->recordChunkResult($whole->id, sent: 2, failed: 0);
 
-        expect($partial->fresh()->status)->toBe(CampaignStatus::Sent)
-            ->and($total->fresh()->status)->toBe(CampaignStatus::Failed);
+        expect($partial->fresh()->status)->toBe(CampaignStatus::PartlySent)
+            ->and($total->fresh()->status)->toBe(CampaignStatus::Failed)
+            ->and($whole->fresh()->status)->toBe(CampaignStatus::Sent);
     });
 
     /*

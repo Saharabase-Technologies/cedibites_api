@@ -91,8 +91,18 @@ class CampaignDeliveryReport
     {
         $windowHours ??= (int) config('campaigns.delivery_poll_hours', 48);
 
-        return $campaign->started_at !== null
-            && $campaign->started_at->lt(now()->subHours($windowHours));
+        if ($campaign->started_at === null) {
+            return false;
+        }
+
+        // Measured from whichever end of the send is later, the same way the
+        // poller picks what to ask about. A resumed campaign finishes long
+        // after it started.
+        $from = $campaign->completed_at?->gt($campaign->started_at)
+            ? $campaign->completed_at
+            : $campaign->started_at;
+
+        return $from->lt(now()->subHours($windowHours));
     }
 
     /**
@@ -103,11 +113,17 @@ class CampaignDeliveryReport
      * exactly the signal that says whether a poor delivery rate is a number
      * problem or an availability problem.
      *
-     * Read from updated_at, which is when the poller first saw the row settle —
-     * an approximation of the delivery moment, and the closest one available.
-     * Hubtel's batch endpoint returns no delivery timestamp.
+     * Read from delivered_at, which is when the poller first saw the message as
+     * delivered. The poll runs every fifteen minutes, so that is as close to
+     * the delivery moment as we can get. Hubtel's batch endpoint returns no
+     * delivery timestamp. It was read from updated_at once, which every poll
+     * rewrites, and the early marks drifted to zero as the window went on.
      *
-     * @return array<int, array{hour: int, delivered: int}>
+     * `reached` says whether that mark has passed yet, decided here on the
+     * server's clock. A mark still ahead of us has no figure to show, and the
+     * count beside it would only be the running total so far.
+     *
+     * @return array<int, array{hour: int, delivered: int, reached: bool}>
      */
     public function curve(Campaign $campaign, array $marks = [1, 6, 24, 48]): array
     {
@@ -118,12 +134,15 @@ class CampaignDeliveryReport
         $out = [];
 
         foreach ($marks as $hour) {
+            $at = $campaign->started_at->copy()->addHours($hour);
+
             $out[] = [
                 'hour' => $hour,
                 'delivered' => CampaignDelivery::where('campaign_id', $campaign->id)
                     ->where('outcome', DeliveryOutcome::Delivered->value)
-                    ->where('updated_at', '<=', $campaign->started_at->copy()->addHours($hour))
+                    ->where('delivered_at', '<=', $at)
                     ->count(),
+                'reached' => now()->gte($at),
             ];
         }
 
