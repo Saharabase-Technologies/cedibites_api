@@ -41,6 +41,14 @@ Route::post('payments/hubtel/callback', [App\Http\Controllers\Api\PaymentControl
 Route::post('payments/hubtel/rmp/callback', [App\Http\Controllers\Api\PaymentController::class, 'hubtelRmpCallback'])
     ->name('payments.hubtel.rmp.callback');
 
+// Hubtel payment notifications: every payment into one branch's Collection
+// Account, the branch code ones included. Recorded only, nothing acts on them.
+// The named limiter keeps its counter apart from every other public route.
+Route::match(['get', 'post'], 'payments/hubtel/notifications/{account}', App\Http\Controllers\Api\HubtelPaymentNotificationController::class)
+    ->where('account', '[0-9]{4,32}')
+    ->middleware('throttle:240,1,hubtel-notifications')
+    ->name('payments.hubtel.notifications');
+
 Route::middleware('optional.auth')->group(function () {
     Route::post('orders/{order}/payments/hubtel/initiate', [App\Http\Controllers\Api\PaymentController::class, 'initiateHubtelPayment'])
         ->name('payments.hubtel.initiate');
