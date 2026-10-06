@@ -12,6 +12,7 @@ use App\Services\HubtelPaymentService;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 /**
  * Payments a customer makes to a branch by dialling its code, and the till
@@ -112,11 +113,20 @@ class BranchCodePayments
             return true;
         }
 
-        return CheckoutSession::where('session_token', $reference)
-            // Early sessions sent the token cut to 32 characters.
-            ->when(strlen($reference) < 36, fn ($q) => $q->orWhere('session_token', 'like', $reference.'%'))
-            ->exists()
-            || Order::where('order_number', $reference)->exists();
+        // session_token is a uuid column on Postgres, and comparing it with
+        // Hubtel's own reference is an error there, not a false. SQLite, which
+        // the tests run on, lets it through, so the guard has to be explicit.
+        if (Str::isUuid($reference)) {
+            return CheckoutSession::where('session_token', $reference)->exists();
+        }
+
+        // Early sessions sent the token cut to 32 characters.
+        if (preg_match('/^[0-9a-f-]{32,35}$/i', $reference)
+            && CheckoutSession::whereRaw('CAST(session_token AS TEXT) LIKE ?', [strtolower($reference).'%'])->exists()) {
+            return true;
+        }
+
+        return Order::where('order_number', $reference)->exists();
     }
 
     /**

@@ -196,6 +196,30 @@ describe('checking what Hubtel posts', function () {
         Http::assertNothingSent();
     });
 
+    it('knows our references from Hubtel\'s, including the cut-short ones early sessions sent', function () {
+        $lakeside = bcLakeside();
+        CheckoutSession::create([
+            'session_token' => '2670393e-3eea-4a5f-a357-e75ac8f9b8ad',
+            'branch_id' => $lakeside->id,
+            'session_type' => 'pos',
+            'status' => 'confirmed',
+            'customer_name' => 'Walk-in',
+            'customer_phone' => '0000000000',
+            'fulfillment_type' => 'takeaway',
+            'payment_method' => 'mobile_money',
+            'items' => [],
+            'subtotal' => 1,
+            'total_amount' => 1,
+            'expires_at' => now()->addMinutes(5),
+        ]);
+        $payments = app(BranchCodePayments::class);
+
+        expect($payments->isOurs('2670393e-3eea-4a5f-a357-e75ac8f9b8ad'))->toBeTrue()
+            ->and($payments->isOurs('2670393e-3eea-4a5f-a357-e75ac8f9'))->toBeTrue()
+            ->and($payments->isOurs(BC_REFERENCE))->toBeFalse()
+            ->and($payments->isOurs('cb-key-check-a1b2c3'))->toBeTrue();
+    });
+
     it('does not trust a post Hubtel cannot find', function () {
         bcLakeside();
         Http::fake(['api-txnstatus.hubtel.com/*' => Http::response(['responseCode' => '404', 'message' => 'payment record not found'], 404)]);
