@@ -85,6 +85,47 @@ class HubtelPaymentService
     }
 
     /**
+     * The same service, only if it can ask Hubtel about this account.
+     *
+     * forAccount() falls back to the company account when nobody holds a key
+     * for the one asked about. That is right for charging, but a status check
+     * with the company key cannot see another account's payments, and would
+     * answer "not found" about a payment that is real. Null means we cannot ask.
+     */
+    public function forAccountIfKnown(string $accountNumber): ?static
+    {
+        if ($accountNumber === $this->merchantAccountNumber) {
+            return $this;
+        }
+
+        $account = Branch::where('hubtel_account_number', $accountNumber)->first()?->hubtelAccount();
+
+        return $account ? $this->usingAccount($account) : null;
+    }
+
+    /**
+     * Hubtel's status check for one payment on this account, as Hubtel answers it.
+     *
+     * Asks by `clientReference` or `networkTransactionId`. Hubtel's own
+     * transaction ID from a payment notification is not one it can look up.
+     *
+     * @param  array<string, string>  $query
+     * @return array{http: int, data: ?array}
+     */
+    public function transactionStatus(array $query): array
+    {
+        $this->validateConfiguration();
+
+        $response = Http::withHeaders(['Authorization' => $this->getAuthHeader()])
+            ->timeout(20)
+            ->get("{$this->statusCheckUrl}/transactions/{$this->merchantAccountNumber}/status", $query);
+
+        $data = $response->json('data');
+
+        return ['http' => $response->status(), 'data' => is_array($data) ? $data : null];
+    }
+
+    /**
      * The Collection Account this instance charges into. Written onto the
      * session or payment beside every request, so it can be asked about later.
      */

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\VerifyHubtelPaymentNotification;
 use App\Models\Branch;
 use App\Models\HubtelPaymentNotification;
 use Illuminate\Http\JsonResponse;
@@ -17,9 +18,10 @@ use Illuminate\Support\Str;
  * Notifications Configuration, one URL per branch:
  * /v1/payments/hubtel/notifications/{collection account number}.
  *
- * It only records. No order, payment or till reads these rows, so a forged
- * post cannot mark anything paid. Before anything does, each one has to be
- * checked back with Hubtel's status check using the branch's own key.
+ * The post is kept whole and then checked. It has no signature, so nothing
+ * trusts it: VerifyHubtelPaymentNotification asks Hubtel's status check about
+ * the payment, with the key for that account, and only one Hubtel calls Paid
+ * reaches the till. A forged post comes back "not found" and stops there.
  */
 class HubtelPaymentNotificationController extends Controller
 {
@@ -49,6 +51,10 @@ class HubtelPaymentNotificationController extends Controller
             'account_number' => $account,
             'ip' => $notification->ip,
         ]);
+
+        if ($notification->payload !== null) {
+            VerifyHubtelPaymentNotification::dispatch($notification->id);
+        }
 
         return response()->success(null, 'Notification received');
     }

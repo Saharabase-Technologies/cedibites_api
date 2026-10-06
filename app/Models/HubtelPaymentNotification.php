@@ -8,8 +8,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * One post from Hubtel's payment notifications, as it arrived.
  *
- * Nothing reads these yet. They are kept so the shape of Hubtel's post can be
- * learned from real payments before anything on the till is built on it.
+ * Kept whole, because Hubtel does not document it. VerifyHubtelPaymentNotification
+ * asks Hubtel about each one and writes the answer to `outcome`; only a payment
+ * Hubtel calls Paid becomes a HubtelIncomingPayment the till can see.
  */
 class HubtelPaymentNotification extends Model
 {
@@ -21,6 +22,8 @@ class HubtelPaymentNotification extends Model
         'payload',
         'raw_body',
         'headers',
+        'outcome',
+        'checked_at',
     ];
 
     protected function casts(): array
@@ -28,6 +31,7 @@ class HubtelPaymentNotification extends Model
         return [
             'payload' => 'array',
             'headers' => 'array',
+            'checked_at' => 'datetime',
         ];
     }
 

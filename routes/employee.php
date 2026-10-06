@@ -42,6 +42,8 @@ Route::middleware('password.reset')->group(function () {
         Route::post('checkout-sessions', [CheckoutSessionController::class, 'posStore'])
             ->middleware('throttle:30,1');
         Route::get('checkout-sessions', [CheckoutSessionController::class, 'posIndex']);
+        // What customers paid by the branch code today, checked with Hubtel.
+        Route::get('branch-code-payments', [CheckoutSessionController::class, 'posBranchCodePayments']);
         Route::get('checkout-sessions/{token}', [CheckoutSessionController::class, 'show']);
         Route::post('checkout-sessions/{token}/confirm-cash', [CheckoutSessionController::class, 'confirmCash']);
         Route::post('checkout-sessions/{token}/confirm-card', [CheckoutSessionController::class, 'confirmCard']);

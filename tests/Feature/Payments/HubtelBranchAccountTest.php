@@ -283,12 +283,18 @@ describe('hubtel:branch-account', function () {
             ->assertFailed();
     });
 
-    it('refuses the company account as a branch account', function () {
-        hbBranch();
+    it('records the company account on its branch without a key', function () {
+        $branch = hbBranch();
+        Http::fake();
 
-        $this->artisan('hubtel:branch-account', ['branch' => 'Lakeside', '--account' => HB_COMPANY, '--api-id' => 'x'])
+        $this->artisan('hubtel:branch-account', ['branch' => 'Lakeside', '--account' => HB_COMPANY])
             ->expectsOutputToContain('is the company account')
-            ->assertFailed();
+            ->assertSuccessful();
+
+        // Charging is unchanged: no key, so the company account and key.
+        expect($branch->fresh()->hubtel_account_number)->toBe(HB_COMPANY)
+            ->and($branch->fresh()->hubtelAccount())->toBeNull();
+        Http::assertNothingSent();
     });
 
     it('clears a branch back to the company account', function () {

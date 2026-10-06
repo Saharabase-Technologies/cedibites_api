@@ -25,6 +25,8 @@ use Illuminate\Console\Command;
  *   php artisan hubtel:branch-account Lakeside             set it (asks for the key)
  *   php artisan hubtel:branch-account Lakeside --check     ask Hubtel about the stored key
  *   php artisan hubtel:branch-account Lakeside --clear     back to the company account
+ *   php artisan hubtel:branch-account Ashaiman --account=2038092
+ *                                                          the company account is Ashaiman's; no key asked
  */
 class HubtelBranchAccount extends Command
 {
@@ -93,18 +95,16 @@ class HubtelBranchAccount extends Command
             return self::FAILURE;
         }
 
-        if ($account === $hubtel->accountNumber()) {
-            $this->error("{$account} is the company account. A branch that uses it needs no entry; use --clear.");
-
-            return self::FAILURE;
-        }
-
         $taken = Branch::where('hubtel_account_number', $account)->where('id', '!=', $branch->id)->first();
 
         if ($taken) {
             $this->error("{$account} already belongs to {$taken->name}.");
 
             return self::FAILURE;
+        }
+
+        if ($account === $hubtel->accountNumber()) {
+            return $this->setCompanyAccount($branch, $account);
         }
 
         $apiId = trim((string) ($this->option('api-id')
@@ -153,6 +153,28 @@ class HubtelBranchAccount extends Command
 
         $this->info("{$branch->name} now collects into {$account}.");
         $this->line('Payments already started keep going to the account they were sent to.');
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * The branch whose own account is the company account: Ashaiman, 2038092.
+     *
+     * It needs no key, because the company key already reaches that account.
+     * It does need the number on file. A payment Hubtel posts for that account
+     * has to show on this branch's till, and without the number it would show
+     * on nobody's.
+     */
+    private function setCompanyAccount(Branch $branch, string $account): int
+    {
+        $branch->forceFill([
+            'hubtel_account_number' => $account,
+            'hubtel_api_id' => null,
+            'hubtel_api_key' => null,
+        ])->save();
+
+        $this->info("{$account} is the company account, and it is {$branch->name}'s.");
+        $this->line("Branch code payments made to it now show on {$branch->name}'s till. It keeps using the company key.");
 
         return self::SUCCESS;
     }
