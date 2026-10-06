@@ -43,6 +43,8 @@ class CheckoutSession extends Model
         'customer_id',
         'hubtel_transaction_id',
         'hubtel_checkout_url',
+        // The Hubtel Collection Account the last prompt or checkout was sent to.
+        'hubtel_account_number',
         'payment_gateway_response',
         'is_manual_entry',
         'recorded_at',

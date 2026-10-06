@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Branch;
 use App\Models\Payment;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -36,6 +37,116 @@ class HubtelPaymentService
         $this->rmpClientId = config('services.hubtel.rmp_client_id');
         $this->rmpClientSecret = config('services.hubtel.rmp_client_secret');
         $this->rmpBaseUrl = config('services.hubtel.rmp_base_url', 'https://rmp.hubtel.com');
+    }
+
+    /**
+     * The same service, collecting into this branch's own Hubtel account.
+     *
+     * A branch that has not been given its account and key keeps the company
+     * account from the environment, which is how every branch worked before.
+     * So a branch moves over when `hubtel:branch-account` gives it its keys,
+     * and moves back when they are cleared. Nothing else has to change.
+     */
+    public function forBranch(Branch|int|string|null $branch): static
+    {
+        if (! $branch instanceof Branch) {
+            $branch = $branch ? Branch::find($branch) : null;
+        }
+
+        $account = $branch?->hubtelAccount();
+
+        return $account ? $this->usingAccount($account) : $this;
+    }
+
+    /**
+     * The same service, pointed at the account a payment was actually sent to.
+     *
+     * A status check only looks inside one account. Asking the wrong one about
+     * a real payment gets "no such transaction". Null means a payment from
+     * before branches had accounts, which went to the company account.
+     */
+    public function forAccount(?string $accountNumber): static
+    {
+        if (blank($accountNumber) || $accountNumber === $this->merchantAccountNumber) {
+            return $this;
+        }
+
+        $account = Branch::where('hubtel_account_number', $accountNumber)->first()?->hubtelAccount();
+
+        if (! $account) {
+            Log::warning('No key on file for this Hubtel account; asking the company account instead', [
+                'account_number' => $accountNumber,
+            ]);
+
+            return $this;
+        }
+
+        return $this->usingAccount($account);
+    }
+
+    /**
+     * The Collection Account this instance charges into. Written onto the
+     * session or payment beside every request, so it can be asked about later.
+     */
+    public function accountNumber(): ?string
+    {
+        return $this->merchantAccountNumber;
+    }
+
+    /**
+     * Ask Hubtel whether it accepts this account's key from this server.
+     *
+     * A status check for a reference that cannot exist. It moves no money and
+     * touches no customer. A refusal comes back as 401 (wrong API ID or key)
+     * or 403 (this server's IP is not whitelisted for the key); any other
+     * answer means Hubtel let the request through. It cannot prove the key
+     * may send MoMo prompts: only a real prompt shows that.
+     *
+     * @return array{verdict: 'accepted'|'key_refused'|'ip_refused'|'unreachable', status: int|null, detail: string|null}
+     */
+    public function probe(): array
+    {
+        $url = "{$this->statusCheckUrl}/transactions/{$this->merchantAccountNumber}/status";
+
+        try {
+            $response = Http::withHeaders(['Authorization' => $this->getAuthHeader()])
+                ->timeout(15)
+                ->get($url, ['clientReference' => 'cb-key-check-'.bin2hex(random_bytes(6))]);
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            return ['verdict' => 'unreachable', 'status' => null, 'detail' => $e->getMessage()];
+        }
+
+        $detail = $response->json('message') ?? $response->json('Message') ?? mb_substr($response->body(), 0, 200);
+
+        return [
+            'verdict' => match (true) {
+                $response->status() === 401 => 'key_refused',
+                $response->status() === 403 => 'ip_refused',
+                $response->serverError() => 'unreachable',
+                default => 'accepted',
+            },
+            'status' => $response->status(),
+            'detail' => $detail ?: null,
+        ];
+    }
+
+    /**
+     * One key per branch does both jobs: the hosted checkout and the prompt.
+     * Hubtel issues a branch one key with the scopes for both, so the company
+     * set-up's separate RMP credentials have no branch equivalent.
+     *
+     * @param  array{account_number: string, api_id: string, api_key: string}  $account
+     */
+    protected function usingAccount(array $account): static
+    {
+        $copy = clone $this;
+        $copy->merchantAccountNumber = $account['account_number'];
+        $copy->clientId = $account['api_id'];
+        $copy->clientSecret = $account['api_key'];
+        $copy->rmpClientId = $account['api_id'];
+        $copy->rmpClientSecret = $account['api_key'];
+
+        return $copy;
     }
 
     /**
@@ -263,7 +374,9 @@ class HubtelPaymentService
             'amount' => $this->chargeable($order),
             'client_reference' => $payload['clientReference'],
             'payload' => $this->sanitizeForLogging($payload),
-            'Authorization' => $this->getAuthHeader(),
+            // The account, never the Authorization header: that header is the
+            // API key in base64, and this line is written on every checkout.
+            'account_number' => $this->merchantAccountNumber,
         ]);
 
         // Send POST request to Hubtel initiate endpoint
@@ -302,6 +415,7 @@ class HubtelPaymentService
                 'payment_status' => 'pending',
                 'amount' => $this->chargeable($order),
                 'transaction_id' => $responseData['checkoutId'] ?? null,
+                'hubtel_account_number' => $this->merchantAccountNumber,
                 'payment_gateway_response' => $responseData,
             ]);
         }
@@ -939,11 +1053,24 @@ class HubtelPaymentService
                 'timestamp' => now()->toIso8601String(),
             ]);
 
+            $payment = Payment::whereHas('order', function ($query) use ($clientReference) {
+                $query->where('order_number', $clientReference);
+            })->first();
+
+            if (! $payment) {
+                Log::error('Payment not found for verification', ['clientReference' => $clientReference]);
+                throw new \Exception('Payment not found');
+            }
+
+            // Ask the account the money was sent to, which is not always the
+            // one this branch uses today.
+            $gateway = $this->forAccount($payment->hubtel_account_number);
+
             // Send GET request to Status Check API
-            $url = "{$this->statusCheckUrl}/transactions/{$this->merchantAccountNumber}/status";
+            $url = "{$gateway->statusCheckUrl}/transactions/{$gateway->merchantAccountNumber}/status";
 
             $response = Http::withHeaders([
-                'Authorization' => $this->getAuthHeader(),
+                'Authorization' => $gateway->getAuthHeader(),
             ])->get($url, [
                 'clientReference' => $clientReference,
             ]);
@@ -969,16 +1096,6 @@ class HubtelPaymentService
 
             if (empty($hubtelStatus)) {
                 throw new \Exception('Invalid status check response');
-            }
-
-            // Find Payment record by clientReference
-            $payment = Payment::whereHas('order', function ($query) use ($clientReference) {
-                $query->where('order_number', $clientReference);
-            })->first();
-
-            if (! $payment) {
-                Log::error('Payment not found for verification', ['clientReference' => $clientReference]);
-                throw new \Exception('Payment not found');
             }
 
             // Map Hubtel status to payment_status

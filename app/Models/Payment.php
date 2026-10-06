@@ -29,6 +29,10 @@ class Payment extends Model
         'payment_status',
         'amount',
         'transaction_id',
+        // The Hubtel Collection Account the request went to. Null where Hubtel
+        // was never asked, and on every payment from before branches had
+        // accounts of their own, which all went to the company account.
+        'hubtel_account_number',
         'payment_gateway_response',
         'paid_at',
         'refunded_at',

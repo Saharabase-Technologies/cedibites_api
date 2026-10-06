@@ -37,6 +37,16 @@ class Branch extends Model
         'requires_opening_checklist',
     ];
 
+    /**
+     * The Hubtel payment key never leaves the server. It is not fillable
+     * either: only `hubtel:branch-account` writes these, so no branch form or
+     * API request can set or overwrite them.
+     */
+    protected $hidden = [
+        'hubtel_api_id',
+        'hubtel_api_key',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -46,6 +56,46 @@ class Branch extends Model
             'extended_staff_access' => 'boolean',
             'extended_order_access' => 'boolean',
             'requires_opening_checklist' => 'boolean',
+            'hubtel_api_key' => 'encrypted',
+        ];
+    }
+
+    /**
+     * This branch's own Hubtel account, or null when it uses the company one.
+     *
+     * All three values or nothing. A branch with an account number but no key
+     * cannot be charged into, and half a set is treated as no set rather than
+     * sending a payment somewhere it cannot be checked.
+     *
+     * @return array{account_number: string, api_id: string, api_key: string}|null
+     */
+    public function hubtelAccount(): ?array
+    {
+        if (blank($this->hubtel_account_number) || blank($this->hubtel_api_id)) {
+            return null;
+        }
+
+        try {
+            $key = $this->hubtel_api_key;
+        } catch (\Illuminate\Contracts\Encryption\DecryptException) {
+            // The key was stored under a different APP_KEY. The till still
+            // takes the payment, into the company account, and the log says why.
+            \Illuminate\Support\Facades\Log::warning('Branch Hubtel key cannot be decrypted; using the company account', [
+                'branch_id' => $this->id,
+                'branch' => $this->name,
+            ]);
+
+            return null;
+        }
+
+        if (blank($key)) {
+            return null;
+        }
+
+        return [
+            'account_number' => $this->hubtel_account_number,
+            'api_id' => $this->hubtel_api_id,
+            'api_key' => $key,
         ];
     }
 

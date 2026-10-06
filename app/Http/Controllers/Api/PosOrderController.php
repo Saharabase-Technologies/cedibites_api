@@ -214,7 +214,7 @@ class PosOrderController extends Controller
                     // For mobile money, use Hubtel Direct Receive Money (RMP)
                     // This sends a USSD prompt directly to the customer's phone
                     try {
-                        $hubtelService = app(HubtelPaymentService::class);
+                        $hubtelService = app(HubtelPaymentService::class)->forBranch($branch);
 
                         $momoPhone = $request->validated('momo_number');
 

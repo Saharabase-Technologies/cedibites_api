@@ -258,8 +258,8 @@ class CheckoutSessionController extends Controller
 
         // Mobile money → the prompt goes to the phone, not the browser to Hubtel
         try {
-            $hubtel = app(HubtelPaymentService::class);
             $branch = Branch::find($validated['branch_id']);
+            $hubtel = app(HubtelPaymentService::class)->forBranch($branch);
             $momoNumber = $session->momo_number;
 
             /**
@@ -291,6 +291,7 @@ class CheckoutSessionController extends Controller
                 $session->update([
                     'status' => 'payment_initiated',
                     'hubtel_transaction_id' => $result['transactionId'] ?? null,
+                    'hubtel_account_number' => $hubtel->accountNumber(),
                     'payment_gateway_response' => $result,
                     'last_momo_sent_at' => now(),
                 ]);
@@ -325,6 +326,7 @@ class CheckoutSessionController extends Controller
             $session->update([
                 'status' => 'payment_initiated',
                 'hubtel_transaction_id' => $hubtelResult['checkoutId'] ?? null,
+                'hubtel_account_number' => $hubtel->accountNumber(),
                 'hubtel_checkout_url' => $hubtelResult['checkoutUrl'] ?? null,
                 'payment_gateway_response' => $hubtelResult,
             ]);
@@ -827,7 +829,7 @@ class CheckoutSessionController extends Controller
         }
 
         try {
-            $hubtel = app(HubtelPaymentService::class);
+            $hubtel = app(HubtelPaymentService::class)->forBranch($session->branch_id);
 
             if ($session->session_type === 'pos') {
                 // POS → RMP
@@ -851,6 +853,7 @@ class CheckoutSessionController extends Controller
                     'status' => 'payment_initiated',
                     'momo_number' => $momoNumber,
                     'hubtel_transaction_id' => $result['transactionId'] ?? null,
+                    'hubtel_account_number' => $hubtel->accountNumber(),
                     'payment_gateway_response' => $result,
                     'expires_at' => now()->addMinutes(5),
                     'last_momo_sent_at' => now(),
@@ -877,6 +880,7 @@ class CheckoutSessionController extends Controller
                     'status' => 'payment_initiated',
                     'momo_number' => $momoNumber,
                     'hubtel_transaction_id' => $result['checkoutId'] ?? null,
+                    'hubtel_account_number' => $hubtel->accountNumber(),
                     'hubtel_checkout_url' => $result['checkoutUrl'] ?? null,
                     'payment_gateway_response' => $result,
                     'expires_at' => now()->addMinutes(5),
@@ -962,8 +966,8 @@ class CheckoutSessionController extends Controller
             }
 
             try {
-                $hubtel = app(HubtelPaymentService::class);
                 $branch = Branch::find($session->branch_id);
+                $hubtel = app(HubtelPaymentService::class)->forBranch($branch);
 
                 if ($session->session_type === 'pos') {
                     $result = $hubtel->initializeReceiveMoney([
@@ -985,6 +989,7 @@ class CheckoutSessionController extends Controller
                         'status' => 'payment_initiated',
                         'momo_number' => $momoNumber,
                         'hubtel_transaction_id' => $result['transactionId'] ?? null,
+                        'hubtel_account_number' => $hubtel->accountNumber(),
                         'payment_gateway_response' => $result,
                         'expires_at' => now()->addMinutes(5),
                         'last_momo_sent_at' => now(),
@@ -1009,6 +1014,7 @@ class CheckoutSessionController extends Controller
                         'status' => 'payment_initiated',
                         'momo_number' => $momoNumber,
                         'hubtel_transaction_id' => $result['checkoutId'] ?? null,
+                        'hubtel_account_number' => $hubtel->accountNumber(),
                         'hubtel_checkout_url' => $result['checkoutUrl'] ?? null,
                         'payment_gateway_response' => $result,
                         'expires_at' => now()->addMinutes(5),
@@ -1094,8 +1100,8 @@ class CheckoutSessionController extends Controller
     private function posMomoFlow(CheckoutSession $session, array $validated, $employee, int $branchId): JsonResponse
     {
         try {
-            $hubtel = app(HubtelPaymentService::class);
             $branch = Branch::find($branchId);
+            $hubtel = app(HubtelPaymentService::class)->forBranch($branch);
 
             $result = $hubtel->initializeReceiveMoney([
                 'order' => (object) [
@@ -1115,6 +1121,7 @@ class CheckoutSessionController extends Controller
             $session->update([
                 'status' => 'payment_initiated',
                 'hubtel_transaction_id' => $result['transactionId'] ?? null,
+                'hubtel_account_number' => $hubtel->accountNumber(),
                 'payment_gateway_response' => $result,
                 'last_momo_sent_at' => now(),
             ]);

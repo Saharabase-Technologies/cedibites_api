@@ -151,6 +151,9 @@ class OrderCreationService
                 'payment_status' => $paymentStatus,
                 'amount' => $order->goods_amount,
                 'transaction_id' => $session->hubtel_transaction_id,
+                // Travels with the transaction id: together they say where to
+                // ask Hubtel about this payment.
+                'hubtel_account_number' => $session->hubtel_account_number,
                 'payment_gateway_response' => $session->payment_gateway_response,
                 'paid_at' => $paymentStatus === 'completed' ? ($isManualEntry ? $session->recorded_at : now()) : null,
             ]);

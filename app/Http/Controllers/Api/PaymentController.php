@@ -196,7 +196,7 @@ class PaymentController extends Controller
             $customerPhone = $validated['customer_phone'] ?? $order->contact_phone;
             $customerEmail = $validated['customer_email'] ?? null;
 
-            $result = $this->hubtelService->initializeTransaction([
+            $result = $this->hubtelService->forBranch($order->branch_id)->initializeTransaction([
                 'order' => $order,
                 'description' => $validated['description'],
                 'customer_name' => $customerName,
