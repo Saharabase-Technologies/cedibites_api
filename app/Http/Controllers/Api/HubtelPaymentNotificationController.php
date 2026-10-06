@@ -20,8 +20,8 @@ use Illuminate\Support\Str;
  *
  * The post is kept whole and then checked. It has no signature, so nothing
  * trusts it: VerifyHubtelPaymentNotification asks Hubtel's status check about
- * the payment, with the key for that account, and only one Hubtel calls Paid
- * reaches the till. A forged post comes back "not found" and stops there.
+ * the payment, and only one Hubtel calls Paid reaches the till's list. A
+ * forged post comes back "not found" and stops there.
  */
 class HubtelPaymentNotificationController extends Controller
 {

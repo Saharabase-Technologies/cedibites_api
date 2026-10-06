@@ -7,12 +7,19 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     /**
-     * Payments a customer made to a branch without the till asking for them.
+     * Payments customers make by dialling a branch code, and the till's checks.
      *
-     * Mostly the branch code, *713*1552# and the like. Each row is a payment
-     * Hubtel's status check has called Paid, never just a post somebody sent
-     * us. The cashier picks one to settle a sale, and from then on it belongs
-     * to that order and cannot settle another.
+     * The cashier rings the sale, often as cash, and the customer then pays by
+     * *713*1552# or the like. Until now nobody at the counter could see whether
+     * the money arrived. Two tables let them:
+     *
+     * hubtel_incoming_payments holds each payment Hubtel posted and its status
+     * check called Paid, never just a post somebody sent us. The till lists
+     * the day's ones for its branch.
+     *
+     * hubtel_payment_checks holds every time a cashier typed in the transaction
+     * ID from a customer's MoMo message, so the same message shown twice is
+     * caught the second time.
      *
      * The post itself keeps a note of what became of it, so one that never
      * reached the till can be explained.
@@ -30,23 +37,32 @@ return new class extends Migration
             $table->string('network_transaction_id', 64)->nullable()->index();
             $table->string('hubtel_transaction_id', 64)->nullable();
             $table->string('payer_number', 20)->nullable();
-            // What the branch received, which is what the sale is worth. The
-            // customer paid Hubtel's fee on top of it.
+            // What the branch received. The customer paid Hubtel's fee on top.
             $table->decimal('amount', 10, 2);
             $table->decimal('amount_charged', 10, 2)->nullable();
             $table->timestamp('paid_at');
             $table->timestamp('verified_at');
             $table->foreignId('notification_id')->nullable()->constrained('hubtel_payment_notifications')->nullOnDelete();
-            $table->foreignId('order_id')->nullable()->unique()->constrained()->nullOnDelete();
-            $table->foreignId('claimed_by')->nullable()->constrained('employees')->nullOnDelete();
-            $table->timestamp('claimed_at')->nullable();
             $table->timestamps();
 
             $table->index(['branch_id', 'paid_at']);
         });
 
+        Schema::create('hubtel_payment_checks', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('branch_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('employee_id')->nullable()->constrained()->nullOnDelete();
+            // As the cashier typed it, from the customer's MoMo message.
+            $table->string('transaction_id', 64)->index();
+            // paid, ours, not_paid, not_found
+            $table->string('outcome', 20);
+            $table->decimal('amount', 10, 2)->nullable();
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamps();
+        });
+
         Schema::table('hubtel_payment_notifications', function (Blueprint $table) {
-            // paid, ours, duplicate, failed, not_paid, not_found, no_key, unreadable
+            // paid, ours, duplicate, failed, not_paid, not_found, unreadable
             $table->string('outcome', 20)->nullable();
             $table->timestamp('checked_at')->nullable();
         });
@@ -58,6 +74,7 @@ return new class extends Migration
             $table->dropColumn(['outcome', 'checked_at']);
         });
 
+        Schema::dropIfExists('hubtel_payment_checks');
         Schema::dropIfExists('hubtel_incoming_payments');
     }
 };

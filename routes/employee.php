@@ -42,8 +42,12 @@ Route::middleware('password.reset')->group(function () {
         Route::post('checkout-sessions', [CheckoutSessionController::class, 'posStore'])
             ->middleware('throttle:30,1');
         Route::get('checkout-sessions', [CheckoutSessionController::class, 'posIndex']);
-        // What customers paid by the branch code today, checked with Hubtel.
+        // What customers paid by the branch code today, checked with Hubtel,
+        // and a check of one transaction ID from a customer's MoMo message.
+        // Each check asks Hubtel, so it has a limiter of its own.
         Route::get('branch-code-payments', [CheckoutSessionController::class, 'posBranchCodePayments']);
+        Route::post('branch-code-payments/check', [CheckoutSessionController::class, 'posCheckBranchCodePayment'])
+            ->middleware('throttle:30,1,payment-check');
         Route::get('checkout-sessions/{token}', [CheckoutSessionController::class, 'show']);
         Route::post('checkout-sessions/{token}/confirm-cash', [CheckoutSessionController::class, 'confirmCash']);
         Route::post('checkout-sessions/{token}/confirm-card', [CheckoutSessionController::class, 'confirmCard']);

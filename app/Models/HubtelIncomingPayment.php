@@ -6,11 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * A payment a customer made to a branch without the till asking for it,
- * which Hubtel's status check has called Paid.
- *
- * Written only by BranchCodePayments::verify. A cashier settles a sale with
- * one, which sets order_id, and from then on it cannot settle another.
+ * A payment a customer made to a branch by dialling its code, which Hubtel's
+ * status check has called Paid. Written only by BranchCodePayments::verify.
  */
 class HubtelIncomingPayment extends Model
 {
@@ -35,18 +32,12 @@ class HubtelIncomingPayment extends Model
             'amount_charged' => 'decimal:2',
             'paid_at' => 'datetime',
             'verified_at' => 'datetime',
-            'claimed_at' => 'datetime',
         ];
     }
 
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);
-    }
-
-    public function order(): BelongsTo
-    {
-        return $this->belongsTo(Order::class);
     }
 
     /** The last four digits, which is all the till needs to match a customer. */

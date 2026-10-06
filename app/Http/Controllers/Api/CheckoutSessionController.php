@@ -460,11 +460,7 @@ class CheckoutSessionController extends Controller
             'items.*.menu_item_option_id' => ['nullable', 'integer', 'exists:menu_item_options,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
-            // branch_code: the customer already paid by dialling the branch's
-            // code, and the cashier picks that payment from the till's list.
-            // It is stored as mobile_money, which is what it is.
-            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo,branch_code'],
-            'hubtel_incoming_payment_id' => ['required_if:payment_method,branch_code', 'nullable', 'integer'],
+            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo'],
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
             // Why the sale was written on paper: the power, the network, the
@@ -626,20 +622,6 @@ class CheckoutSessionController extends Controller
             }
         }
 
-        // Refused before anything is written. It is asked again under a lock
-        // when the sale goes in, in case another till took it in between.
-        if ($paymentMethod === 'branch_code') {
-            $refusal = app(BranchCodePayments::class)->refusal(
-                HubtelIncomingPayment::find($validated['hubtel_incoming_payment_id']),
-                $branchId,
-                (float) $totalAmount,
-            );
-
-            if ($refusal) {
-                return response()->json(['code' => 'branch_code_payment_refused', 'message' => $refusal], 422);
-            }
-        }
-
         $sessionToken = Str::uuid()->toString();
 
         $session = CheckoutSession::create([
@@ -653,7 +635,7 @@ class CheckoutSessionController extends Controller
             'customer_phone' => PhoneHelper::normalize($validated['contact_phone']),
             'special_instructions' => $validated['customer_notes'] ?? null,
             'fulfillment_type' => $validated['fulfillment_type'],
-            'payment_method' => $paymentMethod === 'branch_code' ? 'mobile_money' : $paymentMethod,
+            'payment_method' => $paymentMethod,
             'momo_number' => isset($validated['momo_number']) ? PhoneHelper::normalize($validated['momo_number']) : null,
             'items' => $itemSnapshots,
             'subtotal' => $subtotal,
@@ -679,14 +661,13 @@ class CheckoutSessionController extends Controller
             'manual_momo' => $this->posInstantFlow($session),
             'no_charge' => $this->posInstantFlow($session),
             'wallet', 'ghqr' => $this->posInstantFlow($session),
-            'branch_code' => $this->posBranchCodeFlow($session, (int) $validated['hubtel_incoming_payment_id'], $employee, $branchId),
             default => response()->json(['message' => 'Unsupported payment method.'], 422),
         };
     }
 
     /**
-     * GET /pos/branch-code-payments?branch_id= — what customers paid by the
-     * branch code today that no sale has used yet.
+     * GET /pos/branch-code-payments?branch_id= — what customers paid by
+     * dialling this branch's code today, newest first.
      *
      * Only payments Hubtel's status check has called Paid are in here. The
      * payer's number is cut to its last four digits: enough to match the
@@ -706,7 +687,7 @@ class CheckoutSessionController extends Controller
 
         $this->verifyStaffAuthorization($employee, (int) $validated['branch_id']);
 
-        $payments = app(BranchCodePayments::class)->unusedToday((int) $validated['branch_id']);
+        $payments = app(BranchCodePayments::class)->today((int) $validated['branch_id']);
 
         return response()->json([
             'data' => $payments->map(fn (HubtelIncomingPayment $p) => [
@@ -720,54 +701,41 @@ class CheckoutSessionController extends Controller
     }
 
     /**
-     * The customer paid by the branch code and the cashier picked the payment.
+     * POST /pos/branch-code-payments/check — the cashier typed the transaction
+     * ID from the customer's MoMo message. Did that payment happen?
      *
-     * The payment is locked and checked again before the order is written, so
-     * two tills picking the same one at once cannot both use it. The order and
-     * the claim go in together or not at all.
+     * Asked of Hubtel unless the payment is already on the branch's list.
+     * Every check is written down, and a second check of the same ID says when
+     * and by whom the first was made, because one message shown for two sales
+     * is the trick this is here to catch.
      */
-    private function posBranchCodeFlow(CheckoutSession $session, int $paymentId, \App\Models\Employee $employee, int $branchId): JsonResponse
+    public function posCheckBranchCodePayment(Request $request): JsonResponse
     {
-        $payments = app(BranchCodePayments::class);
-        $refusal = null;
+        $validated = $request->validate([
+            'branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'transaction_id' => ['required', 'string', 'max:64'],
+        ]);
 
-        $order = DB::transaction(function () use ($session, $paymentId, $employee, $branchId, $payments, &$refusal) {
-            $payment = HubtelIncomingPayment::whereKey($paymentId)->lockForUpdate()->first();
+        $employee = $request->user()->employee;
 
-            if ($refusal = $payments->refusal($payment, $branchId, (float) $session->total_amount)) {
-                return null;
-            }
+        if (! $employee) {
+            return response()->json(['message' => 'Employee record not found.'], 403);
+        }
 
-            $session->forceFill([
-                'momo_number' => $payment->payer_number,
-                // The ID in the customer's MoMo message, the one a dispute starts from.
-                'hubtel_transaction_id' => $payment->network_transaction_id,
-                'hubtel_account_number' => $payment->account_number,
-                'payment_gateway_response' => ['branch_code' => [
-                    'hubtel_incoming_payment_id' => $payment->id,
-                    'client_reference' => $payment->client_reference,
-                    'network_transaction_id' => $payment->network_transaction_id,
-                    'paid_at' => $payment->paid_at->toIso8601String(),
-                ]],
-            ])->save();
+        $branch = Branch::findOrFail($validated['branch_id']);
+        $this->verifyStaffAuthorization($employee, $branch->id);
 
-            $order = $this->orderCreationService->createFromCheckoutSession($session);
-            $payments->claim($payment, $order, $employee);
+        // Copied off a phone screen, so spaces and stray punctuation are dropped.
+        $transactionId = preg_replace('/[^A-Za-z0-9]/', '', $validated['transaction_id']);
 
-            return $order;
-        });
-
-        if (! $order) {
-            $session->update(['status' => 'abandoned']);
-
-            return response()->json(['code' => 'branch_code_payment_refused', 'message' => $refusal], 422);
+        if (strlen($transactionId) < 6) {
+            return response()->json(['message' => 'That is too short to be a transaction ID. It is the long number in the MoMo message.'], 422);
         }
 
         return response()->json([
-            'session_token' => $session->session_token,
-            'status' => 'confirmed',
-            'order' => new OrderResource($order),
-        ], 201);
+            'data' => ['transaction_id' => $transactionId]
+                + app(BranchCodePayments::class)->check($transactionId, $branch, $employee),
+        ]);
     }
 
     /**

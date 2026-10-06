@@ -45,7 +45,7 @@ class VerifyHubtelPaymentNotification implements ShouldQueue
 
         $notification->forceFill(['outcome' => $outcome, 'checked_at' => now()])->save();
 
-        if (in_array($outcome, ['no_key', 'not_found', 'not_paid'], true)) {
+        if (in_array($outcome, ['not_found', 'not_paid'], true)) {
             Log::warning('Hubtel payment notification did not reach the till', [
                 'id' => $notification->id,
                 'account_number' => $notification->account_number,

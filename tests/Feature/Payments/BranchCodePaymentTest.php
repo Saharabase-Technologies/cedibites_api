@@ -6,11 +6,9 @@ use App\Models\Branch;
 use App\Models\CheckoutSession;
 use App\Models\Employee;
 use App\Models\HubtelIncomingPayment;
+use App\Models\HubtelPaymentCheck;
 use App\Models\HubtelPaymentNotification;
-use App\Models\MenuItem;
-use App\Models\MenuItemOption;
 use App\Models\Order;
-use App\Models\Payment;
 use App\Models\User;
 use App\Services\Payments\BranchCodePayments;
 use Database\Seeders\PermissionSeeder;
@@ -20,13 +18,14 @@ use Illuminate\Support\Facades\Http;
 
 /*
 |--------------------------------------------------------------------------
-| A customer pays by the branch code, and the till settles the sale with it
+| The till can check that a branch code payment really arrived
 |--------------------------------------------------------------------------
 |
-| Hubtel posts every payment into a branch's account to us. The post has no
+| The cashier rings the sale, often as cash, and the customer then pays by
+| dialling the branch code. Hubtel posts each payment to us; the post has no
 | signature, so each one is asked about with Hubtel's status check before the
-| till sees it. The cashier picks the payment to settle a sale, and from then
-| on it belongs to that order and cannot settle another.
+| till lists it. A cashier can also type the transaction ID from the
+| customer's MoMo message, and the same message checked twice is caught.
 |
 */
 
@@ -42,19 +41,7 @@ beforeEach(function () {
 
 function bcBranch(string $name, array $hubtel = []): Branch
 {
-    $branch = Branch::factory()->create([
-        'name' => $name,
-        'is_active' => true,
-        'extended_staff_access' => true,
-        'extended_order_access' => true,
-    ]);
-
-    foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) {
-        $branch->operatingHours()->updateOrCreate(
-            ['day_of_week' => $day],
-            ['is_open' => true, 'open_time' => '00:00', 'close_time' => '23:59'],
-        );
-    }
+    $branch = Branch::factory()->create(['name' => $name, 'is_active' => true]);
 
     if ($hubtel) {
         $branch->forceFill($hubtel)->save();
@@ -69,6 +56,25 @@ function bcLakeside(): Branch
         'hubtel_account_number' => BC_LAKESIDE,
         'hubtel_api_id' => 'lakeside-id',
         'hubtel_api_key' => 'lakeside-secret',
+    ]);
+}
+
+function bcSession(Branch $branch, string $token, ?int $orderId = null): CheckoutSession
+{
+    return CheckoutSession::create([
+        'session_token' => $token,
+        'branch_id' => $branch->id,
+        'session_type' => 'pos',
+        'status' => 'confirmed',
+        'customer_name' => 'Walk-in',
+        'customer_phone' => '0000000000',
+        'fulfillment_type' => 'takeaway',
+        'payment_method' => 'mobile_money',
+        'items' => [],
+        'subtotal' => 90,
+        'total_amount' => 90,
+        'order_id' => $orderId,
+        'expires_at' => now()->addMinutes(5),
     ]);
 }
 
@@ -94,7 +100,7 @@ function bcPost(string $account = BC_LAKESIDE, array $data = [], string $code = 
 }
 
 /** Hubtel's status check answering Paid, as it did for that payment. */
-function bcHubtelSaysPaid(): void
+function bcHubtelSaysPaid(string $reference = BC_REFERENCE): void
 {
     Http::fake(['api-txnstatus.hubtel.com/*' => Http::response([
         'message' => 'Successful',
@@ -105,7 +111,7 @@ function bcHubtelSaysPaid(): void
             'transactionId' => 'ca1e739b69d0404d9e5cfc65e0670e89',
             'externalTransactionId' => '90967196991',
             'paymentMethod' => 'mobilemoney',
-            'clientReference' => BC_REFERENCE,
+            'clientReference' => $reference,
             'amount' => 25.5,
             'charges' => 0.5,
             'amountAfterCharges' => 25,
@@ -113,22 +119,12 @@ function bcHubtelSaysPaid(): void
     ])]);
 }
 
-/** A till sale of the dish, settled with a branch code payment. */
-function bcSale(int $paymentId, int $quantity = 1)
+/** The cashier types a transaction ID from the customer's MoMo message. */
+function bcCheck(string $transactionId)
 {
-    return test()->actingAs(test()->cashier)->postJson('/v1/pos/checkout-sessions', [
+    return test()->actingAs(test()->cashier)->postJson('/v1/pos/branch-code-payments/check', [
         'branch_id' => test()->branch->id,
-        'items' => [[
-            'menu_item_id' => test()->dish->id,
-            'menu_item_option_id' => test()->option->id,
-            'quantity' => $quantity,
-            'unit_price' => 25,
-        ]],
-        'payment_method' => 'branch_code',
-        'hubtel_incoming_payment_id' => $paymentId,
-        'fulfillment_type' => 'takeaway',
-        'contact_name' => 'Walk-in',
-        'contact_phone' => '0000000000',
+        'transaction_id' => $transactionId,
     ]);
 }
 
@@ -151,7 +147,7 @@ function bcIncoming(Branch $branch, array $attrs = []): HubtelIncomingPayment
 }
 
 describe('checking what Hubtel posts', function () {
-    it('keeps a payment Hubtel calls Paid, against the branch that owns the account', function () {
+    it('keeps a payment Hubtel calls Paid, against the branch the post was for', function () {
         $lakeside = bcLakeside();
         bcHubtelSaysPaid();
 
@@ -165,29 +161,14 @@ describe('checking what Hubtel posts', function () {
             ->and($payment->network_transaction_id)->toBe('90967196991')
             ->and(HubtelPaymentNotification::sole()->outcome)->toBe('paid');
 
-        // Asked of Lakeside's own account, with Lakeside's own key.
-        Http::assertSent(fn (Request $r) => str_contains($r->url(), '/transactions/'.BC_LAKESIDE.'/status')
-            && str_contains($r->url(), 'clientReference=')
-            && $r->header('Authorization')[0] === 'Basic '.base64_encode('lakeside-id:lakeside-secret'));
+        // The company key reaches every branch's payments.
+        Http::assertSent(fn (Request $r) => str_contains($r->url(), 'clientReference=')
+            && $r->header('Authorization')[0] === 'Basic '.base64_encode('company-id:company-secret'));
     });
 
     it('leaves a payment the till started alone', function () {
-        $lakeside = bcLakeside();
+        bcSession(bcLakeside(), '2670393e-3eea-4a5f-a357-e75ac8f9b8ad');
         Http::fake();
-        CheckoutSession::create([
-            'session_token' => '2670393e-3eea-4a5f-a357-e75ac8f9b8ad',
-            'branch_id' => $lakeside->id,
-            'session_type' => 'pos',
-            'status' => 'confirmed',
-            'customer_name' => 'Walk-in',
-            'customer_phone' => '0000000000',
-            'fulfillment_type' => 'takeaway',
-            'payment_method' => 'mobile_money',
-            'items' => [],
-            'subtotal' => 0.01,
-            'total_amount' => 0.01,
-            'expires_at' => now()->addMinutes(5),
-        ]);
 
         bcPost(data: ['ClientReference' => '2670393e-3eea-4a5f-a357-e75ac8f9b8ad']);
 
@@ -197,21 +178,7 @@ describe('checking what Hubtel posts', function () {
     });
 
     it('knows our references from Hubtel\'s, including the cut-short ones early sessions sent', function () {
-        $lakeside = bcLakeside();
-        CheckoutSession::create([
-            'session_token' => '2670393e-3eea-4a5f-a357-e75ac8f9b8ad',
-            'branch_id' => $lakeside->id,
-            'session_type' => 'pos',
-            'status' => 'confirmed',
-            'customer_name' => 'Walk-in',
-            'customer_phone' => '0000000000',
-            'fulfillment_type' => 'takeaway',
-            'payment_method' => 'mobile_money',
-            'items' => [],
-            'subtotal' => 1,
-            'total_amount' => 1,
-            'expires_at' => now()->addMinutes(5),
-        ]);
+        bcSession(bcLakeside(), '2670393e-3eea-4a5f-a357-e75ac8f9b8ad');
         $payments = app(BranchCodePayments::class);
 
         expect($payments->isOurs('2670393e-3eea-4a5f-a357-e75ac8f9b8ad'))->toBeTrue()
@@ -233,16 +200,6 @@ describe('checking what Hubtel posts', function () {
         expect($payments->verify($notification))->toBe(BranchCodePayments::RETRY)
             ->and($payments->verify($notification, lastAttempt: true))->toBe('not_found')
             ->and(HubtelIncomingPayment::count())->toBe(0);
-    });
-
-    it('does not guess when it holds no key for the account', function () {
-        Http::fake();
-
-        bcPost(account: '2040749');
-
-        expect(HubtelIncomingPayment::count())->toBe(0)
-            ->and(HubtelPaymentNotification::sole()->outcome)->toBe('no_key');
-        Http::assertNothingSent();
     });
 
     it('keeps one payment however many times Hubtel posts it', function () {
@@ -267,15 +224,13 @@ describe('checking what Hubtel posts', function () {
         Http::assertNothingSent();
     });
 
-    it('checks the company account with the company key, for the branch that owns it', function () {
+    it('puts a payment to the company account on the branch that owns it', function () {
         $ashaiman = bcBranch('Ashaiman', ['hubtel_account_number' => BC_COMPANY]);
         bcHubtelSaysPaid();
 
         bcPost(account: BC_COMPANY);
 
         expect(HubtelIncomingPayment::sole()->branch_id)->toBe($ashaiman->id);
-        Http::assertSent(fn (Request $r) => str_contains($r->url(), '/transactions/'.BC_COMPANY.'/status')
-            && $r->header('Authorization')[0] === 'Basic '.base64_encode('company-id:company-secret'));
     });
 });
 
@@ -286,23 +241,17 @@ describe('the till', function () {
         app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
 
         $this->branch = bcLakeside();
-        $this->dish = MenuItem::factory()->create(['branch_id' => $this->branch->id, 'name' => 'Jollof', 'is_available' => true]);
-        $this->dish->branches()->syncWithoutDetaching([$this->branch->id => ['is_available' => true]]);
-        $this->dish->options()->delete();
-        $this->option = MenuItemOption::factory()->create(['menu_item_id' => $this->dish->id, 'price' => 25, 'is_available' => true]);
 
-        $user = User::factory()->create();
+        $user = User::factory()->create(['name' => 'Rosina']);
         $this->employee = Employee::factory()->create(['user_id' => $user->id, 'status' => EmployeeStatus::Active]);
         $this->employee->branches()->attach($this->branch);
         $user->syncRoles([RoleEnum::SalesStaff->value]);
         $this->cashier = $user->fresh();
     });
 
-    it('lists today\'s unused payments at the branch, with the last four digits only', function () {
+    it('lists today\'s payments at the branch, with the last four digits only', function () {
         $today = bcIncoming($this->branch);
         bcIncoming($this->branch, ['paid_at' => now()->subDay()]);
-        // order_id is not mass assignable; only a claim sets it.
-        bcIncoming($this->branch)->forceFill(['order_id' => Order::factory()->create()->id])->save();
         bcIncoming(bcBranch('East Legon'));
 
         $response = $this->actingAs($this->cashier)
@@ -323,41 +272,78 @@ describe('the till', function () {
             ->assertForbidden();
     });
 
-    it('settles a sale with the payment, and only once', function () {
-        $payment = bcIncoming($this->branch);
+    it('answers a check from the list without asking Hubtel', function () {
+        bcIncoming($this->branch, ['network_transaction_id' => '90967196991']);
+        Http::fake();
 
-        bcSale($payment->id)->assertCreated()->assertJsonPath('status', 'confirmed');
+        bcCheck('9096 7196 991')
+            ->assertOk()
+            ->assertJsonPath('data.outcome', 'paid')
+            ->assertJsonPath('data.amount', 25)
+            ->assertJsonPath('data.payer_last_four', '9103')
+            ->assertJsonPath('data.branch', 'Lakeside')
+            ->assertJsonPath('data.first_checked', null);
 
-        $order = Order::sole();
-        $recorded = Payment::where('order_id', $order->id)->sole();
-        expect($recorded->payment_method)->toBe('mobile_money')
-            ->and($recorded->payment_status)->toBe('completed')
-            ->and($recorded->transaction_id)->toBe($payment->network_transaction_id)
-            ->and($payment->fresh()->order_id)->toBe($order->id)
-            ->and($payment->fresh()->claimed_by)->toBe($this->employee->id);
-
-        bcSale($payment->id)
-            ->assertStatus(422)
-            ->assertJsonPath('message', "That payment is already on order {$order->order_number}.");
-        expect(Order::count())->toBe(1);
+        Http::assertNothingSent();
+        expect(HubtelPaymentCheck::sole()->employee_id)->toBe($this->employee->id);
     });
 
-    it('refuses a payment that is not the sale\'s amount, before writing anything', function () {
-        $payment = bcIncoming($this->branch);
+    it('asks Hubtel about an ID that is not on the list', function () {
+        bcHubtelSaysPaid();
 
-        bcSale($payment->id, quantity: 2)
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'That payment is GHS 25.00. This sale is GHS 50.00.');
+        bcCheck('90967196991')
+            ->assertOk()
+            ->assertJsonPath('data.outcome', 'paid')
+            ->assertJsonPath('data.amount', 25)
+            ->assertJsonPath('data.payer_last_four', '9103');
 
-        expect(CheckoutSession::count())->toBe(0)
-            ->and($payment->fresh()->order_id)->toBeNull();
+        Http::assertSent(fn (Request $r) => str_contains($r->url(), 'networkTransactionId=90967196991'));
     });
 
-    it('refuses another branch\'s payment', function () {
-        $payment = bcIncoming(bcBranch('East Legon'));
+    it('says when the payment was a MoMo prompt the till sent, and for which order', function () {
+        $order = Order::factory()->create(['order_number' => 'AJ664']);
+        bcSession($this->branch, 'c72ed47d-566e-48c3-991a-bd2382a4b627', $order->id);
+        bcHubtelSaysPaid('c72ed47d-566e-48c3-991a-bd2382a4b627');
 
-        bcSale($payment->id)
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'That payment was made to East Legon, not this branch.');
+        bcCheck('90969345699')
+            ->assertOk()
+            ->assertJsonPath('data.outcome', 'ours')
+            ->assertJsonPath('data.order_number', 'AJ664');
+    });
+
+    it('says plainly when Hubtel has no such payment', function () {
+        Http::fake(['api-txnstatus.hubtel.com/*' => Http::response(['responseCode' => '404', 'message' => 'payment record not found'], 404)]);
+
+        bcCheck('12345678901')
+            ->assertOk()
+            ->assertJsonPath('data.outcome', 'not_found');
+    });
+
+    it('catches the same message checked a second time', function () {
+        bcIncoming($this->branch, ['network_transaction_id' => '90967196991']);
+
+        bcCheck('90967196991')->assertJsonPath('data.first_checked', null);
+
+        bcCheck('90967196991')
+            ->assertOk()
+            ->assertJsonPath('data.outcome', 'paid')
+            ->assertJsonPath('data.first_checked.branch', 'Lakeside')
+            ->assertJsonPath('data.first_checked.by', 'Rosina');
+    });
+
+    it('refuses something too short to be a transaction ID', function () {
+        Http::fake();
+
+        bcCheck('123')->assertStatus(422);
+
+        Http::assertNothingSent();
+    });
+
+    it('does not let another branch\'s cashier check on its behalf', function () {
+        $other = bcBranch('East Legon');
+
+        $this->actingAs($this->cashier)
+            ->postJson('/v1/pos/branch-code-payments/check', ['branch_id' => $other->id, 'transaction_id' => '90967196991'])
+            ->assertForbidden();
     });
 });

@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\CheckoutSession;
 use App\Models\Employee;
 use App\Models\HubtelIncomingPayment;
+use App\Models\HubtelPaymentCheck;
 use App\Models\HubtelPaymentNotification;
 use App\Models\Order;
 use App\Services\HubtelPaymentService;
@@ -16,12 +17,17 @@ use Illuminate\Support\Str;
 
 /**
  * Payments a customer makes to a branch by dialling its code, and the till
- * using one to settle a sale.
+ * checking that one really arrived.
  *
- * Hubtel posts every payment into a branch's account to us, but the post has
- * no signature, so nothing here trusts it. Each one is asked about with
- * Hubtel's status check, using the key for that account, and only a payment
- * Hubtel calls Paid reaches the till. A forged post comes back "not found".
+ * The cashier rings the sale, often as cash, and the customer then pays by
+ * *713*1552# or the like. Hubtel posts each payment to us, but the post has
+ * no signature, so nothing here trusts it: every one is asked about with
+ * Hubtel's status check, and only a payment Hubtel calls Paid reaches the
+ * till. A forged post comes back "not found".
+ *
+ * The status check answers for any of the business's accounts, whichever
+ * account's URL it is asked through (proven 2026-10-06 with a Lakeside
+ * payment and an Ashaiman one), so the company key checks every branch.
  */
 class BranchCodePayments
 {
@@ -59,13 +65,12 @@ class BranchCodePayments
             return 'duplicate';
         }
 
-        $gateway = $this->hubtel->forAccountIfKnown($notification->account_number);
-
-        if (! $gateway) {
-            return 'no_key';
+        try {
+            $answer = $this->hubtel->transactionStatus(['clientReference' => $reference]);
+        } catch (\Throwable) {
+            return $lastAttempt ? 'not_found' : self::RETRY;
         }
 
-        $answer = $gateway->transactionStatus(['clientReference' => $reference]);
         $status = $answer['data']['status'] ?? null;
 
         if ($answer['http'] !== 200 || $status === null) {
@@ -103,9 +108,113 @@ class BranchCodePayments
         return 'paid';
     }
 
+    /** Today's branch code payments at this branch, newest first. */
+    public function today(int $branchId): Collection
+    {
+        return HubtelIncomingPayment::where('branch_id', $branchId)
+            ->where('paid_at', '>=', now()->startOfDay())
+            ->orderByDesc('paid_at')
+            ->limit(100)
+            ->get();
+    }
+
+    /**
+     * The cashier typed the transaction ID from the customer's MoMo message.
+     * Did that payment happen?
+     *
+     * A payment already on our list answers from there. Anything else is
+     * asked of Hubtel. Every answer is written down, so the same message
+     * shown for a second sale says when, where and by whom it was checked
+     * first.
+     *
+     * @return array{outcome: string, amount: ?float, paid_at: ?string, payer_last_four: ?string, branch: ?string, order_number: ?string, first_checked: ?array}
+     */
+    public function check(string $transactionId, Branch $branch, Employee $employee): array
+    {
+        $first = HubtelPaymentCheck::with(['branch', 'employee.user'])
+            ->where('transaction_id', $transactionId)
+            ->whereIn('outcome', ['paid', 'ours'])
+            ->oldest('id')
+            ->first();
+
+        $answer = $this->ask($transactionId);
+
+        if ($answer['outcome'] === 'unavailable') {
+            return $answer + ['first_checked' => null];
+        }
+
+        HubtelPaymentCheck::create([
+            'branch_id' => $branch->id,
+            'employee_id' => $employee->id,
+            'transaction_id' => $transactionId,
+            'outcome' => $answer['outcome'],
+            'amount' => $answer['amount'],
+            'paid_at' => $answer['paid_at'],
+        ]);
+
+        return $answer + [
+            'first_checked' => $first ? [
+                'at' => $first->created_at->toIso8601String(),
+                'branch' => $first->branch?->name,
+                'by' => $first->employee?->user?->name,
+            ] : null,
+        ];
+    }
+
+    /** What we or Hubtel know about one transaction ID. */
+    private function ask(string $transactionId): array
+    {
+        $blank = ['amount' => null, 'paid_at' => null, 'payer_last_four' => null, 'branch' => null, 'order_number' => null];
+
+        $known = HubtelIncomingPayment::with('branch')->where('network_transaction_id', $transactionId)->first();
+
+        if ($known) {
+            return [
+                'outcome' => 'paid',
+                'amount' => (float) $known->amount,
+                'paid_at' => $known->paid_at->toIso8601String(),
+                'payer_last_four' => $known->payerLastFour(),
+                'branch' => $known->branch?->name,
+                'order_number' => null,
+            ];
+        }
+
+        try {
+            $answer = $this->hubtel->transactionStatus(['networkTransactionId' => $transactionId]);
+        } catch (\Throwable) {
+            return ['outcome' => 'unavailable'] + $blank;
+        }
+
+        if ($answer['http'] === 404) {
+            return ['outcome' => 'not_found'] + $blank;
+        }
+
+        if ($answer['http'] !== 200 || $answer['data'] === null) {
+            return ['outcome' => 'unavailable'] + $blank;
+        }
+
+        $data = $answer['data'];
+
+        if (($data['status'] ?? null) !== 'Paid') {
+            return ['outcome' => 'not_paid'] + $blank;
+        }
+
+        $reference = (string) ($data['clientReference'] ?? '');
+        $ours = $reference !== '' && $this->isOurs($reference);
+
+        return [
+            'outcome' => $ours ? 'ours' : 'paid',
+            'amount' => (float) ($data['amountAfterCharges'] ?? $data['amount'] ?? 0),
+            'paid_at' => Carbon::parse($data['date'] ?? 'now')->toIso8601String(),
+            'payer_last_four' => ($number = $this->payerNumber($reference)) ? substr($number, -4) : null,
+            'branch' => null,
+            'order_number' => $ours ? $this->orderFor($reference) : null,
+        ];
+    }
+
     /**
      * A payment we started ourselves: a till prompt or an online checkout.
-     * Those already belong to an order and must never be offered again.
+     * Those already belong to an order and are never listed as branch code.
      */
     public function isOurs(string $reference): bool
     {
@@ -138,55 +247,15 @@ class BranchCodePayments
         return preg_match('/_(233\d{9})_/', $reference, $m) ? $m[1] : null;
     }
 
-    /** Today's payments at this branch that no sale has used yet, newest first. */
-    public function unusedToday(int $branchId): Collection
+    /** The order a payment we started belongs to, by its session or its number. */
+    private function orderFor(string $reference): ?string
     {
-        return HubtelIncomingPayment::where('branch_id', $branchId)
-            ->whereNull('order_id')
-            ->where('paid_at', '>=', now()->startOfDay())
-            ->orderByDesc('paid_at')
-            ->limit(50)
-            ->get();
-    }
+        if (Str::isUuid($reference)) {
+            $orderId = CheckoutSession::where('session_token', $reference)->value('order_id');
 
-    /**
-     * Why this payment cannot settle this sale, or null if it can.
-     *
-     * The amount has to match to the pesewa. A customer who paid a different
-     * figure is a conversation for the cashier, not something to round away.
-     */
-    public function refusal(?HubtelIncomingPayment $payment, int $branchId, float $total): ?string
-    {
-        if (! $payment) {
-            return 'That payment is not on the list any more. Refresh it and pick again.';
+            return $orderId ? Order::whereKey($orderId)->value('order_number') : null;
         }
 
-        if ($payment->order_id) {
-            $number = Order::whereKey($payment->order_id)->value('order_number');
-
-            return "That payment is already on order {$number}.";
-        }
-
-        if ((int) $payment->branch_id !== $branchId) {
-            $name = Branch::whereKey($payment->branch_id)->value('name') ?? 'another branch';
-
-            return "That payment was made to {$name}, not this branch.";
-        }
-
-        if ((int) round((float) $payment->amount * 100) !== (int) round($total * 100)) {
-            return sprintf('That payment is GHS %.2f. This sale is GHS %.2f.', (float) $payment->amount, $total);
-        }
-
-        return null;
-    }
-
-    /** The payment now belongs to this order. Called inside the sale's transaction. */
-    public function claim(HubtelIncomingPayment $payment, Order $order, Employee $employee): void
-    {
-        $payment->forceFill([
-            'order_id' => $order->id,
-            'claimed_by' => $employee->id,
-            'claimed_at' => now(),
-        ])->save();
+        return Order::where('order_number', $reference)->value('order_number');
     }
 }
