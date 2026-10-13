@@ -109,6 +109,15 @@ return [
         // Leave empty (unset) to allow all IPs (useful for local development).
         'allowed_ips' => env('HUBTEL_ALLOWED_IPS'),
 
+        // Programmable Services: our own screens on the branch codes (*713*1552*50#).
+        'ussd' => [
+            // The least and the most one dial may pay, in cedis.
+            'min_amount' => (float) env('HUBTEL_USSD_MIN_AMOUNT', 1),
+            'max_amount' => (float) env('HUBTEL_USSD_MAX_AMOUNT', 5000),
+            // Where we tell Hubtel a paid dial reached the till. Whitelisted IPs only.
+            'callback_url' => env('HUBTEL_USSD_CALLBACK_URL', 'https://gs-callback.hubtel.com:9055/callback'),
+        ],
+
         /*
          * IMPORTANT: Both the Status Check API and the RMP API require IP whitelisting.
          * Submit your server's public IP to your Retail Systems Engineer to be whitelisted.

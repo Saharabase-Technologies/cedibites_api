@@ -7,7 +7,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * A payment a customer made to a branch by dialling its code, which Hubtel's
- * status check has called Paid. Written only by BranchCodePayments::verify.
+ * status check has called Paid. Written only by BranchCodePayments::verify
+ * and UssdPayments::credit.
  */
 class HubtelIncomingPayment extends Model
 {
@@ -18,6 +19,8 @@ class HubtelIncomingPayment extends Model
         'network_transaction_id',
         'hubtel_transaction_id',
         'payer_number',
+        'payer_name',
+        'ussd_session_id',
         'amount',
         'amount_charged',
         'paid_at',
@@ -38,6 +41,12 @@ class HubtelIncomingPayment extends Model
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);
+    }
+
+    /** The dial it came from, when it came through our own USSD service. */
+    public function ussdSession(): BelongsTo
+    {
+        return $this->belongsTo(HubtelUssdSession::class, 'ussd_session_id');
     }
 
     /** The last four digits, which is all the till needs to match a customer. */

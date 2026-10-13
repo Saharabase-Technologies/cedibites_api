@@ -695,6 +695,7 @@ class CheckoutSessionController extends Controller
                 'amount' => (float) $p->amount,
                 'paid_at' => $p->paid_at->toIso8601String(),
                 'payer_last_four' => $p->payerLastFour(),
+                'payer_name' => $p->payer_name,
                 'network_transaction_id' => $p->network_transaction_id,
             ])->values(),
         ]);

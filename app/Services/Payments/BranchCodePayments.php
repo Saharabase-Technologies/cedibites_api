@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\HubtelIncomingPayment;
 use App\Models\HubtelPaymentCheck;
 use App\Models\HubtelPaymentNotification;
+use App\Models\HubtelUssdSession;
 use App\Models\Order;
 use App\Services\HubtelPaymentService;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -34,7 +35,7 @@ class BranchCodePayments
     /** Hubtel has not answered yet, or answered "not found" too soon. Ask again later. */
     public const RETRY = 'retry';
 
-    public function __construct(private HubtelPaymentService $hubtel) {}
+    public function __construct(private HubtelPaymentService $hubtel, private UssdPayments $ussd) {}
 
     /**
      * Ask Hubtel about one post and keep the payment if it is real.
@@ -82,6 +83,24 @@ class BranchCodePayments
         }
 
         $checked = $answer['data'];
+
+        // Dialled through our own USSD service. The session knows the branch,
+        // which this post does not, so the payment is listed the same way
+        // whether this post or the fulfilment gets here first.
+        $dial = HubtelUssdSession::where('session_id', $reference)->first();
+
+        if ($dial) {
+            return $this->ussd->credit($dial, $checked, ['notification_id' => $notification->id]);
+        }
+
+        // The same payment, already listed from its fulfilment under the
+        // session ID while this post names Hubtel's own reference.
+        $networkId = $checked['externalTransactionId'] ?? $data['ExternalTransactionId'] ?? null;
+
+        if ($networkId && HubtelIncomingPayment::where('network_transaction_id', $networkId)->exists()) {
+            return 'duplicate';
+        }
+
         $branchId = $notification->branch_id
             ?? Branch::where('hubtel_account_number', $notification->account_number)->value('id');
 
@@ -90,7 +109,7 @@ class BranchCodePayments
                 'branch_id' => $branchId,
                 'account_number' => $notification->account_number,
                 'client_reference' => $reference,
-                'network_transaction_id' => $checked['externalTransactionId'] ?? $data['ExternalTransactionId'] ?? null,
+                'network_transaction_id' => $networkId,
                 'hubtel_transaction_id' => $checked['transactionId'] ?? null,
                 'payer_number' => $this->payerNumber($reference),
                 // Hubtel's figures, not the post's.

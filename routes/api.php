@@ -49,6 +49,17 @@ Route::match(['get', 'post'], 'payments/hubtel/notifications/{account}', App\Htt
     ->middleware('throttle:240,1,hubtel-notifications')
     ->name('payments.hubtel.notifications');
 
+// Hubtel Programmable Services: our own screens on the branch codes. Hubtel
+// posts every dial to the first and every paid dial to the second. All of it
+// arrives from Hubtel's few addresses, so the limits are for the whole
+// service, not for one customer.
+Route::post('payments/hubtel/ussd', [App\Http\Controllers\Api\HubtelUssdController::class, 'interaction'])
+    ->middleware('throttle:600,1,hubtel-ussd')
+    ->name('payments.hubtel.ussd');
+Route::post('payments/hubtel/ussd/fulfilment', [App\Http\Controllers\Api\HubtelUssdController::class, 'fulfilment'])
+    ->middleware('throttle:240,1,hubtel-ussd-fulfilment')
+    ->name('payments.hubtel.ussd.fulfilment');
+
 Route::middleware('optional.auth')->group(function () {
     Route::post('orders/{order}/payments/hubtel/initiate', [App\Http\Controllers\Api\PaymentController::class, 'initiateHubtelPayment'])
         ->name('payments.hubtel.initiate');
