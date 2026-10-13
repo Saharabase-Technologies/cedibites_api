@@ -17,11 +17,11 @@ use Illuminate\Support\Str;
 /**
  * Our own screens on the branch codes, through Hubtel's Programmable Services.
  *
- * A customer at Lakeside dials *713*1552*50#. Hubtel posts the dial to us and
- * we answer with one screen: "Pay GHS 50.00 to CediBites Lakeside", 1 to pay,
- * 2 to cancel. On 1 we hand Hubtel the amount, and the next thing on the
- * phone is the prompt for the PIN. A dial with no amount is asked for it
- * first, and a dial with no branch is asked that before anything.
+ * A customer at Lakeside dials *713*1552*50#. Hubtel posts the dial to us, we
+ * answer at once with the amount to charge, and the next thing on the phone
+ * is the prompt for the PIN, under the line "Pay GHS 50.00 to CediBites
+ * Lakeside". Nothing is asked when the dial already says everything. A dial
+ * with no amount gets one question, and a dial with no branch gets one more.
  *
  * Hubtel sets a service up for one branch, so each branch's service has its
  * own address, ending in the branch's code. That, and the code in the dial
@@ -308,7 +308,6 @@ class UssdPayments
         return match ($session->state) {
             HubtelUssdSession::ASKED_BRANCH => $this->chooseBranch($session, $typed),
             HubtelUssdSession::ASKED_AMOUNT => $this->take($session, $typed, 'typed'),
-            HubtelUssdSession::ASKED_CONFIRM => $this->confirm($session, $typed),
             HubtelUssdSession::SENT_TO_PAY => $this->handOver($session),
             default => $this->end($session->session_id, 'This session has ended. Please dial again.'),
         };
@@ -355,7 +354,7 @@ class UssdPayments
     }
 
     /**
-     * An amount came in, by the dial or typed. Read it back, or ask again.
+     * An amount came in, by the dial or typed. Send it to pay, or ask again.
      *
      * @return array<string, mixed>
      */
@@ -373,9 +372,9 @@ class UssdPayments
         };
 
         if ($problem === null) {
-            $session->fill(['amount' => $amount, 'amount_from' => $from, 'bad_tries' => 0]);
+            $session->fill(['amount' => $amount, 'amount_from' => $from, 'state' => HubtelUssdSession::SENT_TO_PAY]);
 
-            return $this->askConfirm($session);
+            return $this->handOver($session);
         }
 
         // A bad amount in the dial has used no try: nothing had been asked yet.
@@ -390,37 +389,6 @@ class UssdPayments
         }
 
         return $this->askAmount($session, $problem);
-    }
-
-    /**
-     * The customer answered "Pay GHS 50.00 to CediBites Lakeside". Only a 1
-     * sends it to pay.
-     *
-     * @return array<string, mixed>
-     */
-    private function confirm(HubtelUssdSession $session, string $typed): array
-    {
-        if ($typed === '1') {
-            $session->state = HubtelUssdSession::SENT_TO_PAY;
-
-            return $this->handOver($session);
-        }
-
-        if ($typed === '2') {
-            $session->state = HubtelUssdSession::CANCELLED;
-
-            return $this->end($session->session_id, 'Payment cancelled.');
-        }
-
-        $session->bad_tries++;
-
-        if ($session->bad_tries >= self::MAX_BAD_TRIES) {
-            $session->state = HubtelUssdSession::REFUSED;
-
-            return $this->end($session->session_id, 'Nothing was paid. Please dial again.');
-        }
-
-        return $this->askConfirm($session, 'Press 1 or 2.');
     }
 
     /**
@@ -468,26 +436,6 @@ class UssdPayments
             'DataType' => 'display',
             'FieldType' => 'text',
         ];
-    }
-
-    /**
-     * The one screen every payment passes: the amount and who is paid, read
-     * back before any money moves.
-     *
-     * @return array<string, mixed>
-     */
-    private function askConfirm(HubtelUssdSession $session, ?string $problem = null): array
-    {
-        $session->state = HubtelUssdSession::ASKED_CONFIRM;
-
-        $line = $this->payLine($session);
-
-        return $this->question(
-            $session,
-            ($problem ? $problem."\n" : '').$line."\n1. Pay\n2. Cancel",
-            $line,
-            'number',
-        );
     }
 
     /**
@@ -607,7 +555,7 @@ class UssdPayments
         return false;
     }
 
-    /** "Pay GHS 50.00 to CediBites Lakeside", as the confirm screen and the hand-over both say it. */
+    /** "Pay GHS 50.00 to CediBites Lakeside": what is paid, and to whom. */
     private function payLine(HubtelUssdSession $session): string
     {
         return 'Pay GHS '.number_format((float) $session->amount, 2).' to '.$this->payee($session);

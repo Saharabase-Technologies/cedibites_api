@@ -21,11 +21,11 @@ use Illuminate\Support\Facades\Http;
 | The branch code is our own USSD service
 |--------------------------------------------------------------------------
 |
-| A customer at Lakeside dials *713*1552*50#. Hubtel posts the dial to us and
-| we answer with one screen: "Pay GHS 50.00 to CediBites Lakeside", 1 to pay.
-| On 1 we hand Hubtel the amount and the phone goes to the PIN. Because we
-| answer the dial we know the branch, so the payment shows on Lakeside's till
-| and nobody else's. Hubtel's word that a dial was paid is checked with its
+| A customer at Lakeside dials *713*1552*50#. Hubtel posts the dial to us, we
+| answer at once with the amount to charge, and the phone goes to the PIN
+| under "Pay GHS 50.00 to CediBites Lakeside". Because we answer the dial we
+| know the branch, so the payment shows on Lakeside's till and nobody
+| else's. Hubtel's word that a dial was paid is checked with its
 | status check before the till lists it, and we then tell Hubtel we have it.
 |
 | The posts below are the ones in Hubtel's Programmable Services docs.
@@ -35,7 +35,7 @@ use Illuminate\Support\Facades\Http;
 const USSD_SESSION = '3c796dac28174f739de4262d08409c51';
 const USSD_ORDER = 'ac3307bcca7445618071e6b0e41b50b5';
 const USSD_HUBTEL_REFERENCE = 'NHbbe724b267c14ff2a20bcc76775e6b6b_233247879103_15642';
-const USSD_CONFIRM_50 = "Pay GHS 50.00 to CediBites Lakeside\n1. Pay\n2. Cancel";
+const USSD_PAY_50 = "Pay GHS 50.00 to CediBites Lakeside.\nApprove the MoMo prompt with your PIN.";
 
 beforeEach(function () {
     config()->set('services.hubtel.payment_client_id', 'company-id');
@@ -83,11 +83,10 @@ function ussdTyped(string $typed)
     return ussdPost(['Type' => 'Response', 'Message' => $typed, 'Sequence' => 2]);
 }
 
-/** The whole of a GHS 50 dial at Lakeside, up to the PIN. */
-function ussdDialledAndConfirmed(): void
+/** A GHS 50 dial at Lakeside, which goes straight to the PIN. */
+function ussdDialled(): void
 {
-    ussdPost();
-    ussdTyped('1')->assertJsonPath('Type', 'AddToCart');
+    ussdPost()->assertJsonPath('Type', 'AddToCart');
 }
 
 /** Hubtel's fulfilment for the GHS 50 dial, with its GHS 0.50 fee on top. */
@@ -172,14 +171,19 @@ function ussdCallbacksSent(): int
 }
 
 describe('the dial', function () {
-    it('reads a dial that carries the amount back once, then goes to the PIN', function () {
-        ussdPost()
-            ->assertJsonPath('SessionId', USSD_SESSION)
-            ->assertJsonPath('Type', 'response')
-            ->assertJsonPath('Message', USSD_CONFIRM_50)
-            ->assertJsonPath('DataType', 'input')
-            ->assertJsonPath('FieldType', 'number')
-            ->assertJsonMissingPath('Item');
+    it('sends a dial that carries the amount straight to the PIN, saying what is paid and to whom', function () {
+        $response = ussdPost();
+
+        $response->assertJsonPath('SessionId', USSD_SESSION)
+            ->assertJsonPath('Type', 'AddToCart')
+            ->assertJsonPath('Item.ItemName', 'CediBites Lakeside')
+            ->assertJsonPath('Item.Qty', 1)
+            ->assertJsonPath('Item.Price', 50)
+            ->assertJsonPath('Message', USSD_PAY_50)
+            ->assertJsonPath('DataType', 'display');
+
+        // The bytes Hubtel reads: the item as its docs show it, the price a number.
+        expect($response->getContent())->toContain('"Item":{"ItemName":"CediBites Lakeside","Qty":1,"Price":50}');
 
         $session = HubtelUssdSession::sole();
         expect($session->branch_id)->toBe($this->lakeside->id)
@@ -187,34 +191,18 @@ describe('the dial', function () {
             ->and($session->operator)->toBe('mtn')
             ->and((float) $session->amount)->toBe(50.0)
             ->and($session->amount_from)->toBe('dial')
-            ->and($session->state)->toBe(HubtelUssdSession::ASKED_CONFIRM)
-            ->and($session->dialled)->toBe('*713*1552*50#');
-
-        $response = ussdTyped('1');
-
-        $response->assertJsonPath('SessionId', USSD_SESSION)
-            ->assertJsonPath('Type', 'AddToCart')
-            ->assertJsonPath('Item.ItemName', 'CediBites Lakeside')
-            ->assertJsonPath('Item.Qty', 1)
-            ->assertJsonPath('Item.Price', 50)
-            ->assertJsonPath('Message', "Pay GHS 50.00 to CediBites Lakeside.\nApprove the MoMo prompt with your PIN.")
-            ->assertJsonPath('DataType', 'display');
-
-        // The bytes Hubtel reads: the item as its docs show it, the price a number.
-        expect($response->getContent())->toContain('"Item":{"ItemName":"CediBites Lakeside","Qty":1,"Price":50}');
-
-        $session->refresh();
-        expect($session->state)->toBe(HubtelUssdSession::SENT_TO_PAY)
-            ->and($session->trail)->toHaveCount(2)
+            ->and($session->state)->toBe(HubtelUssdSession::SENT_TO_PAY)
+            ->and($session->dialled)->toBe('*713*1552*50#')
+            ->and($session->trail)->toHaveCount(1)
             ->and($session->trail[0]['in']['Message'])->toBe('*713*1552*50#')
-            ->and($session->trail[0]['out']['Type'])->toBe('response')
-            ->and($session->trail[1]['in']['Message'])->toBe('1')
-            ->and($session->trail[1]['out']['Type'])->toBe('AddToCart');
+            ->and($session->trail[0]['out']['Type'])->toBe('AddToCart');
     });
 
     it('reads the dial wherever Hubtel puts it', function (string $serviceCode, string $message) {
         ussdPost(['ServiceCode' => $serviceCode, 'Message' => $message])
-            ->assertJsonPath('Message', USSD_CONFIRM_50);
+            ->assertJsonPath('Type', 'AddToCart')
+            ->assertJsonPath('Item.ItemName', 'CediBites Lakeside')
+            ->assertJsonPath('Item.Price', 50);
 
         expect(HubtelUssdSession::sole()->branch_id)->toBe($this->lakeside->id);
     })->with([
@@ -226,52 +214,22 @@ describe('the dial', function () {
 
     it('pays the branch whose code was dialled', function () {
         ussdPost(['ServiceCode' => '713*8501', 'Message' => '*713*8501*20#'])
-            ->assertJsonPath('Message', "Pay GHS 20.00 to CediBites Ashaiman\n1. Pay\n2. Cancel");
-
-        ussdTyped('1')
             ->assertJsonPath('Item.ItemName', 'CediBites Ashaiman')
-            ->assertJsonPath('Item.Price', 20);
+            ->assertJsonPath('Item.Price', 20)
+            ->assertJsonPath('Message', "Pay GHS 20.00 to CediBites Ashaiman.\nApprove the MoMo prompt with your PIN.");
 
         expect(HubtelUssdSession::sole()->branch_id)->toBe($this->ashaiman->id);
     });
 
-    it('sends nothing to pay when the customer presses 2', function () {
-        ussdPost();
-
-        ussdTyped('2')
-            ->assertJsonPath('Type', 'release')
-            ->assertJsonPath('Message', 'Payment cancelled.')
-            ->assertJsonMissingPath('Item');
-
-        expect(HubtelUssdSession::sole()->state)->toBe(HubtelUssdSession::CANCELLED);
-    });
-
-    it('takes only a 1 as yes, and asks three times at most', function () {
-        ussdPost();
-
-        ussdTyped('yes')
-            ->assertJsonPath('Type', 'response')
-            ->assertJsonPath('Message', "Press 1 or 2.\n".USSD_CONFIRM_50);
-        ussdTyped('11')->assertJsonPath('Type', 'response');
-        ussdTyped('')
-            ->assertJsonPath('Type', 'release')
-            ->assertJsonPath('Message', 'Nothing was paid. Please dial again.');
-
-        expect(HubtelUssdSession::sole()->state)->toBe(HubtelUssdSession::REFUSED);
-    });
-
-    it('asks for the amount when the dial has none, and takes pesewas', function () {
+    it('asks for the amount when the dial has none, takes pesewas, then goes to the PIN', function () {
         ussdPost(['Message' => '*713*1552#'])
             ->assertJsonPath('Type', 'response')
             ->assertJsonPath('Message', "CediBites Lakeside\nEnter amount to pay (GHS)")
             ->assertJsonPath('DataType', 'input')
-            ->assertJsonPath('FieldType', 'decimal');
+            ->assertJsonPath('FieldType', 'decimal')
+            ->assertJsonMissingPath('Item');
 
         ussdTyped('50.5')
-            ->assertJsonPath('Type', 'response')
-            ->assertJsonPath('Message', "Pay GHS 50.50 to CediBites Lakeside\n1. Pay\n2. Cancel");
-
-        ussdTyped('1')
             ->assertJsonPath('Type', 'AddToCart')
             ->assertJsonPath('Item.Price', 50.5)
             ->assertJsonPath('Message', "Pay GHS 50.50 to CediBites Lakeside.\nApprove the MoMo prompt with your PIN.");
@@ -279,7 +237,7 @@ describe('the dial', function () {
         $session = HubtelUssdSession::sole();
         expect($session->amount_from)->toBe('typed')
             ->and($session->state)->toBe(HubtelUssdSession::SENT_TO_PAY)
-            ->and($session->trail)->toHaveCount(3);
+            ->and($session->trail)->toHaveCount(2);
     });
 
     it('asks again for an amount that is not one, three times at most', function () {
@@ -298,17 +256,17 @@ describe('the dial', function () {
             ->and($session->amount)->toBeNull();
     });
 
-    it('does not read back an amount outside the limits', function () {
+    it('does not send an amount outside the limits to pay', function () {
         ussdPost(['Message' => '*713*1552*6000#'])
             ->assertJsonPath('Type', 'response')
-            ->assertJsonPath('Message', "One payment is GHS 1 to GHS 5,000.\nEnter amount to pay (GHS)");
+            ->assertJsonPath('Message', "One payment is GHS 1 to GHS 5,000.\nEnter amount to pay (GHS)")
+            ->assertJsonMissingPath('Item');
 
         // The dial asked nothing, so it has used none of the three tries.
         expect(HubtelUssdSession::sole()->bad_tries)->toBe(0);
 
         ussdTyped('0')->assertJsonPath('Type', 'response');
-        ussdTyped('5000')->assertJsonPath('Message', "Pay GHS 5,000.00 to CediBites Lakeside\n1. Pay\n2. Cancel");
-        ussdTyped('1')->assertJsonPath('Type', 'AddToCart')->assertJsonPath('Item.Price', 5000);
+        ussdTyped('5000')->assertJsonPath('Type', 'AddToCart')->assertJsonPath('Item.Price', 5000);
     });
 
     it('asks which branch when the dial names none', function () {
@@ -321,9 +279,7 @@ describe('the dial', function () {
 
         ussdTyped('2')->assertJsonPath('Message', "CediBites Lakeside\nEnter amount to pay (GHS)");
 
-        ussdTyped('30')->assertJsonPath('Message', "Pay GHS 30.00 to CediBites Lakeside\n1. Pay\n2. Cancel");
-
-        ussdTyped('1')
+        ussdTyped('30')
             ->assertJsonPath('Type', 'AddToCart')
             ->assertJsonPath('Item.ItemName', 'CediBites Lakeside')
             ->assertJsonPath('Item.Price', 30);
@@ -331,19 +287,16 @@ describe('the dial', function () {
         expect(HubtelUssdSession::sole()->branch_id)->toBe($this->lakeside->id);
     });
 
-    it('lets a dial the customer abandoned go', function (string $message) {
-        ussdPost(['Message' => $message]);
+    it('lets a dial the customer abandoned go', function () {
+        ussdPost(['Message' => '*713*1552#']);
 
         ussdPost(['Type' => 'Timeout', 'Message' => ''])->assertJsonPath('Type', 'release');
 
         expect(HubtelUssdSession::sole()->state)->toBe(HubtelUssdSession::CANCELLED);
-    })->with([
-        'at the amount' => ['*713*1552#'],
-        'at the confirm' => ['*713*1552*50#'],
-    ]);
+    });
 
     it('does not undo a hand-over when Hubtel posts the same dial again', function () {
-        ussdDialledAndConfirmed();
+        ussdDialled();
 
         ussdPost(['Message' => '*713*1552#'])
             ->assertJsonPath('Type', 'AddToCart')
@@ -353,7 +306,7 @@ describe('the dial', function () {
     });
 
     it('ends a key press for a dial it never saw', function () {
-        ussdTyped('1')->assertJsonPath('Type', 'release');
+        ussdTyped('50')->assertJsonPath('Type', 'release');
 
         expect(HubtelUssdSession::count())->toBe(0);
     });
@@ -390,23 +343,24 @@ describe('a branch\'s own address', function () {
     it('reads the amount after a code that is not the branch\'s own', function () {
         // Hubtel attached Lakeside's service to a fresh code, *713*4040#.
         ussdPost(['ServiceCode' => '713*4040', 'Message' => '*713*4040*50#'], '/v1/payments/hubtel/ussd/1552')
-            ->assertJsonPath('Message', USSD_CONFIRM_50);
+            ->assertJsonPath('Type', 'AddToCart')
+            ->assertJsonPath('Message', USSD_PAY_50);
     });
 
     it('goes by the address when the address and the dial disagree', function () {
         ussdPost(['ServiceCode' => '713*8501', 'Message' => '*713*8501*50#'], '/v1/payments/hubtel/ussd/1552')
-            ->assertJsonPath('Message', USSD_CONFIRM_50);
+            ->assertJsonPath('Message', USSD_PAY_50);
 
         expect(HubtelUssdSession::sole()->branch_id)->toBe($this->lakeside->id);
     });
 
     it('falls back to the dial when the address carries a code no branch has', function () {
         ussdPost([], '/v1/payments/hubtel/ussd/7777')
-            ->assertJsonPath('Message', USSD_CONFIRM_50);
+            ->assertJsonPath('Message', USSD_PAY_50);
     });
 
     it('takes the fulfilment at the branch\'s address too', function () {
-        ussdDialledAndConfirmed();
+        ussdDialled();
         ussdHubtelSays();
 
         ussdFulfilment(address: '/v1/payments/hubtel/ussd/1552/fulfilment');
@@ -418,7 +372,7 @@ describe('a branch\'s own address', function () {
 
 describe('a paid dial', function () {
     beforeEach(function () {
-        ussdDialledAndConfirmed();
+        ussdDialled();
     });
 
     it('lists it on the branch that was dialled, with the MoMo name, and tells Hubtel', function () {
@@ -559,7 +513,7 @@ describe('a paid dial', function () {
 
 describe('the same payment told twice', function () {
     beforeEach(function () {
-        ussdDialledAndConfirmed();
+        ussdDialled();
         ussdHubtelSays();
     });
 
@@ -614,7 +568,7 @@ describe('the till', function () {
         $employee->branches()->attach($this->lakeside);
         $user->syncRoles([RoleEnum::SalesStaff->value]);
 
-        ussdDialledAndConfirmed();
+        ussdDialled();
         ussdHubtelSays();
         ussdFulfilment();
 
