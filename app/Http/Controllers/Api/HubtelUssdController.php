@@ -14,10 +14,12 @@ use Illuminate\Support\Str;
 /**
  * The two URLs Hubtel's Programmable Services calls for our USSD service.
  *
- * Set on the developer portal under Programmable Services, Manage Services:
- * the Service Interaction URL is /v1/payments/hubtel/ussd and the Service
- * Fulfilment URL is /v1/payments/hubtel/ussd/fulfilment. The service is then
- * attached to a USSD code on the Merchant Dashboard.
+ * Set on the developer portal under Programmable Services, Manage Services.
+ * Hubtel's form takes one branch per service, so each branch has a service
+ * of its own, and its two addresses end in that branch's code. For Lakeside:
+ * the Service interaction URL is /v1/payments/hubtel/ussd/1552 and the
+ * Service callback URL is /v1/payments/hubtel/ussd/1552/fulfilment. The
+ * service is then attached to a USSD code on the Merchant Dashboard.
  */
 class HubtelUssdController extends Controller
 {
@@ -30,12 +32,12 @@ class HubtelUssdController extends Controller
      * Hubtel's "response from the provider is invalid". So this never
      * answers with an error, whatever went wrong inside.
      */
-    public function interaction(Request $request, UssdPayments $payments): JsonResponse
+    public function interaction(Request $request, UssdPayments $payments, ?string $code = null): JsonResponse
     {
         $post = $request->all();
 
         try {
-            $answer = $payments->answer($post);
+            $answer = $payments->answer($post, $code);
         } catch (\Throwable $e) {
             report($e);
 
@@ -47,7 +49,9 @@ class HubtelUssdController extends Controller
     }
 
     /**
-     * Hubtel's word that a dial has been paid. Kept whole, then checked.
+     * Hubtel's word that a dial has been paid. Kept whole, then checked. The
+     * branch comes from the dial we answered, so the code in the address is
+     * not read here.
      */
     public function fulfilment(Request $request): JsonResponse
     {

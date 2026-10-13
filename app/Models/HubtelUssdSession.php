@@ -18,6 +18,9 @@ class HubtelUssdSession extends Model
 
     public const ASKED_AMOUNT = 'asked_amount';
 
+    /** Shown "Pay GHS 50.00 to CediBites Lakeside" and waiting for 1 or 2. */
+    public const ASKED_CONFIRM = 'asked_confirm';
+
     /** Handed to Hubtel with the amount. The customer is at the PIN. */
     public const SENT_TO_PAY = 'sent_to_pay';
 
@@ -27,6 +30,9 @@ class HubtelUssdSession extends Model
 
     /** We ended it: no branch to pay, or no usable amount after three tries. */
     public const REFUSED = 'refused';
+
+    /** States in which a screen of ours is still waiting on the customer. */
+    public const WAITING = [self::ASKED_BRANCH, self::ASKED_AMOUNT, self::ASKED_CONFIRM];
 
     /** Posts and answers kept per session. A dial is two or three; this stops a loop filling the row. */
     private const TRAIL_LIMIT = 12;

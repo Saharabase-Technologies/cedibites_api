@@ -14,7 +14,7 @@ return new class extends Migration
      * keeps one notification URL for the whole business. With Hubtel's
      * Programmable Services every dial comes to our server instead. We know
      * the code that was dialled, so we know the branch, and a dial that
-     * carries the amount (*713*1552*50#) goes straight to the PIN.
+     * carries the amount (*713*1552*50#) is one confirm away from the PIN.
      *
      * hubtel_ussd_sessions holds one row per dial: who dialled, which branch,
      * how much, and every post and answer exchanged with Hubtel. Hubtel's
@@ -44,7 +44,7 @@ return new class extends Migration
             $table->decimal('amount', 10, 2)->nullable();
             // dial, typed
             $table->string('amount_from', 8)->nullable();
-            // asked_branch, asked_amount, sent_to_pay, paid, cancelled, refused
+            // asked_branch, asked_amount, asked_confirm, sent_to_pay, paid, cancelled, refused
             $table->string('state', 20);
             $table->unsignedTinyInteger('bad_tries')->default(0);
             $table->string('hubtel_order_id', 64)->nullable();
