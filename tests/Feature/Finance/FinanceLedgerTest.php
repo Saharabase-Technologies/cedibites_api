@@ -336,13 +336,16 @@ describe('a sale is a paid order that was not cancelled', function () {
     });
 
     it('files an order cancelled after payment under what became of the money', function () {
+        // 75 of food, 5 service charge and 15 for the rider. The amount is the
+        // 95 paid less the rider's 15, which no other column adds up to.
         ledgerCancelledOrder($this->ashaiman, 'refunded', [
             'order_number' => 'TEST01',
             'order_source' => 'online',
             'order_type' => 'delivery',
             'subtotal' => 75,
+            'service_charge' => 5,
             'delivery_fee' => 15,
-            'total_amount' => 90,
+            'total_amount' => 95,
             'created_at' => '2026-02-10 13:22:10',
             'cancelled_at' => '2026-02-10 13:40:55',
             'cancelled_reason' => ' Duplicate order ',
@@ -368,7 +371,7 @@ describe('a sale is a paid order that was not cancelled', function () {
             'type' => 'delivery',
             'method' => 'cash',
             'outcome' => 'refunded',
-            'amount' => 75,
+            'amount' => 80,
             'reason' => 'Duplicate order',
         ])->and($data['sales'])->toBe([])
             ->and($data['branches'][0]['first_sale'])->toBeNull();
