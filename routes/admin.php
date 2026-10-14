@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DirectMessageController;
 use App\Http\Controllers\Api\EmployeeController;
+use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\MenuBranchAvailabilityController;
 use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
@@ -366,6 +367,11 @@ Route::prefix('admin')->group(function () {
             Route::get('daily', [AdminReportController::class, 'daily']);
             Route::get('monthly', [AdminReportController::class, 'monthly']);
         });
+
+        // Finance reads the same paid orders as Analytics, so it sits behind
+        // the same permission. FinanceController holds every figure to the
+        // caller's own branches, through the trait Analytics uses.
+        Route::get('finance/ledger', [FinanceController::class, 'ledger']);
     });
 
     // Cancel management (admin only)
