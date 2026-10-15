@@ -8,6 +8,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * A payment a customer made to a branch by dialling its code, which Hubtel's
  * status check has called Paid. Written only by BranchCodePayments::verify.
+ *
+ * branch_id is the till it was sent to, by BranchCodeRouter's rules or by a
+ * cashier. Null means it waits on the shared list that every till sees.
  */
 class HubtelIncomingPayment extends Model
 {
@@ -24,6 +27,12 @@ class HubtelIncomingPayment extends Model
         'paid_at',
         'verified_at',
         'notification_id',
+        'routed_by',
+        'routed_at',
+        'matched_order_id',
+        'taken_by',
+        'returned_at',
+        'returned_by',
     ];
 
     protected function casts(): array
@@ -33,12 +42,24 @@ class HubtelIncomingPayment extends Model
             'amount_charged' => 'decimal:2',
             'paid_at' => 'datetime',
             'verified_at' => 'datetime',
+            'routed_at' => 'datetime',
+            'returned_at' => 'datetime',
         ];
     }
 
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);
+    }
+
+    public function matchedOrder(): BelongsTo
+    {
+        return $this->belongsTo(Order::class, 'matched_order_id');
+    }
+
+    public function takenBy(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'taken_by');
     }
 
     /**

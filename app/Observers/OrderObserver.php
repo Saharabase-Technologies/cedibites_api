@@ -4,6 +4,7 @@ namespace App\Observers;
 
 use App\Events\OrderBroadcastEvent;
 use App\Jobs\RequestOrderFeedback;
+use App\Jobs\RouteSharedBranchCodePayments;
 use App\Models\Employee;
 use App\Models\Order;
 use App\Models\ShiftOrder;
@@ -15,6 +16,7 @@ use App\Notifications\OrderConfirmedNotification;
 use App\Notifications\OrderOutForDeliveryNotification;
 use App\Notifications\OrderPreparingNotification;
 use App\Notifications\OrderReadyNotification;
+use App\Services\Payments\BranchCodeRouter;
 
 class OrderObserver
 {
@@ -110,6 +112,20 @@ class OrderObserver
         if ($order->order_source === 'manual_entry') {
             return;
         }
+
+        // A customer often pays by the branch code before the sale is rung.
+        // This order may be the one a shared payment was for. Guarded, because
+        // an exception here would surface at the till as a failed sale for an
+        // order that has already committed.
+        \DB::afterCommit(function () {
+            try {
+                if (app(BranchCodeRouter::class)->hasRecentShared()) {
+                    RouteSharedBranchCodePayments::dispatch();
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('Could not retry routing branch code payments', ['error' => $e->getMessage()]);
+            }
+        });
 
         // Defer notifications until after the DB transaction commits so the
         // payment row is available and we don't send SMS before payment is confirmed.

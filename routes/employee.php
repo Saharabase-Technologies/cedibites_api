@@ -48,6 +48,10 @@ Route::middleware('password.reset')->group(function () {
         Route::get('branch-code-payments', [CheckoutSessionController::class, 'posBranchCodePayments']);
         Route::post('branch-code-payments/check', [CheckoutSessionController::class, 'posCheckBranchCodePayment'])
             ->middleware('throttle:30,1,payment-check');
+        // A payment no rule could place is taken by the till it belongs to; a
+        // payment on the wrong till is sent back to the shared list.
+        Route::post('branch-code-payments/{payment}/take', [CheckoutSessionController::class, 'posTakeBranchCodePayment']);
+        Route::post('branch-code-payments/{payment}/give-back', [CheckoutSessionController::class, 'posGiveBackBranchCodePayment']);
         Route::get('checkout-sessions/{token}', [CheckoutSessionController::class, 'show']);
         Route::post('checkout-sessions/{token}/confirm-cash', [CheckoutSessionController::class, 'confirmCash']);
         Route::post('checkout-sessions/{token}/confirm-card', [CheckoutSessionController::class, 'confirmCard']);

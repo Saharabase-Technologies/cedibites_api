@@ -34,7 +34,10 @@ class BranchCodePayments
     /** Hubtel has not answered yet, or answered "not found" too soon. Ask again later. */
     public const RETRY = 'retry';
 
-    public function __construct(private HubtelPaymentService $hubtel) {}
+    public function __construct(
+        private HubtelPaymentService $hubtel,
+        private BranchCodeRouter $router,
+    ) {}
 
     /**
      * Ask Hubtel about one post and keep the payment if it is real.
@@ -82,8 +85,6 @@ class BranchCodePayments
         }
 
         $checked = $answer['data'];
-        $branchId = $notification->branch_id
-            ?? Branch::where('hubtel_account_number', $notification->account_number)->value('id');
         $payerNumber = $this->payerNumber($reference);
 
         // Asked before the row is written, so the till never lists the
@@ -91,8 +92,10 @@ class BranchCodePayments
         $payerName = $this->nameFor($payerNumber);
 
         try {
-            HubtelIncomingPayment::create([
-                'branch_id' => $branchId,
+            // No branch yet. Hubtel posts every branch's payments to one
+            // address, so the address says nothing about the branch (D19).
+            $payment = HubtelIncomingPayment::create([
+                'branch_id' => null,
                 'account_number' => $notification->account_number,
                 'client_reference' => $reference,
                 'network_transaction_id' => $checked['externalTransactionId'] ?? $data['ExternalTransactionId'] ?? null,
@@ -111,13 +114,21 @@ class BranchCodePayments
             return 'duplicate';
         }
 
+        // To its branch's till if a rule can tell which; otherwise it waits on
+        // the shared list, and an order rung later may still place it.
+        $this->router->route($payment);
+
         return 'paid';
     }
 
-    /** Today's branch code payments at this branch, newest first. */
+    /**
+     * Today's branch code payments for this branch's till, newest first: the
+     * ones sent to this branch and the ones no branch has yet.
+     */
     public function today(int $branchId): Collection
     {
-        return HubtelIncomingPayment::where('branch_id', $branchId)
+        return HubtelIncomingPayment::with(['matchedOrder:id,order_number', 'takenBy.user:id,name'])
+            ->where(fn ($q) => $q->where('branch_id', $branchId)->orWhereNull('branch_id'))
             ->where('paid_at', '>=', now()->startOfDay())
             ->orderByDesc('paid_at')
             ->limit(100)

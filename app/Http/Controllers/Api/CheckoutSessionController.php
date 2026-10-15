@@ -16,6 +16,7 @@ use App\Services\HubtelPaymentService;
 use App\Services\Openings\BranchOpeningService;
 use App\Services\OrderCreationService;
 use App\Services\Payments\BranchCodePayments;
+use App\Services\Payments\BranchCodeRouter;
 use App\Services\PromoResolutionService;
 use App\Services\SystemSettingService;
 use App\Support\Promos\PromoCodeRefused;
@@ -671,7 +672,8 @@ class CheckoutSessionController extends Controller
      *
      * Only payments Hubtel's status check has called Paid are in here. Each
      * shows the payer's whole number and the name it is registered to (D13),
-     * so the cashier can tell which customer at the counter it was.
+     * so the cashier can tell which customer at the counter it was. The list
+     * holds this branch's payments and the shared ones no branch has yet.
      */
     public function posBranchCodePayments(Request $request): JsonResponse
     {
@@ -690,15 +692,89 @@ class CheckoutSessionController extends Controller
         $payments = app(BranchCodePayments::class)->today((int) $validated['branch_id']);
 
         return response()->json([
-            'data' => $payments->map(fn (HubtelIncomingPayment $p) => [
-                'id' => $p->id,
-                'amount' => (float) $p->amount,
-                'paid_at' => $p->paid_at->toIso8601String(),
-                'payer_number' => $p->payerLocalNumber(),
-                'payer_name' => $p->payer_name,
-                'network_transaction_id' => $p->network_transaction_id,
-            ])->values(),
+            'data' => $payments->map(fn (HubtelIncomingPayment $p) => $this->branchCodePaymentRow($p))->values(),
         ]);
+    }
+
+    /**
+     * POST /pos/branch-code-payments/{payment}/take: a payment on the shared
+     * list is this branch's. When two tills press at once, the first wins.
+     */
+    public function posTakeBranchCodePayment(Request $request, HubtelIncomingPayment $payment): JsonResponse
+    {
+        [$employee, $branchId] = $this->branchCodeCashier($request);
+
+        if (! app(BranchCodeRouter::class)->take($payment, $branchId, $employee)) {
+            $taker = $payment->fresh('branch')?->branch?->name;
+
+            return response()->json([
+                'message' => $taker ? "{$taker} has already taken this payment." : 'This payment could not be taken. Refresh and try again.',
+            ], 409);
+        }
+
+        return response()->json(['data' => $this->branchCodePaymentRow($this->freshBranchCodePayment($payment))]);
+    }
+
+    /**
+     * POST /pos/branch-code-payments/{payment}/give-back: a payment on this
+     * till is not this branch's. It goes back on the shared list.
+     */
+    public function posGiveBackBranchCodePayment(Request $request, HubtelIncomingPayment $payment): JsonResponse
+    {
+        [$employee, $branchId] = $this->branchCodeCashier($request);
+
+        if (! app(BranchCodeRouter::class)->giveBack($payment, $branchId, $employee)) {
+            return response()->json(['message' => 'This payment is no longer on this till. Refresh the list.'], 409);
+        }
+
+        return response()->json(['data' => $this->branchCodePaymentRow($this->freshBranchCodePayment($payment))]);
+    }
+
+    /** The signed-in employee and the branch they act for, checked. */
+    private function branchCodeCashier(Request $request): array
+    {
+        $validated = $request->validate([
+            'branch_id' => ['required', 'integer', 'exists:branches,id'],
+        ]);
+
+        $employee = $request->user()->employee;
+
+        if (! $employee) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json(['message' => 'Employee record not found.'], 403)
+            );
+        }
+
+        $this->verifyStaffAuthorization($employee, (int) $validated['branch_id']);
+
+        return [$employee, (int) $validated['branch_id']];
+    }
+
+    private function freshBranchCodePayment(HubtelIncomingPayment $payment): HubtelIncomingPayment
+    {
+        return $payment->fresh(['matchedOrder:id,order_number', 'takenBy.user:id,name']);
+    }
+
+    /**
+     * One branch code payment as the till lists it. `routed_by` says why it is
+     * on this till: number_amount and amount name the order they matched,
+     * history means the number orders here, cashier names who took it. A
+     * shared one has no branch yet.
+     */
+    private function branchCodePaymentRow(HubtelIncomingPayment $p): array
+    {
+        return [
+            'id' => $p->id,
+            'amount' => (float) $p->amount,
+            'paid_at' => $p->paid_at->toIso8601String(),
+            'payer_number' => $p->payerLocalNumber(),
+            'payer_name' => $p->payer_name,
+            'network_transaction_id' => $p->network_transaction_id,
+            'shared' => $p->branch_id === null,
+            'routed_by' => $p->routed_by,
+            'order_number' => $p->matchedOrder?->order_number,
+            'taken_by' => $p->takenBy?->user?->name,
+        ];
     }
 
     /**

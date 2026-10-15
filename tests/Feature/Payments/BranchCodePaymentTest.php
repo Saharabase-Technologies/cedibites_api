@@ -162,14 +162,15 @@ function bcIncoming(Branch $branch, array $attrs = []): HubtelIncomingPayment
 }
 
 describe('checking what Hubtel posts', function () {
-    it('keeps a payment Hubtel calls Paid, against the branch the post was for', function () {
-        $lakeside = bcLakeside();
+    it('keeps a payment Hubtel calls Paid, on the shared list while no rule can place it', function () {
+        bcLakeside();
         bcHubtelSaysPaid();
 
         bcPost();
 
         $payment = HubtelIncomingPayment::sole();
-        expect($payment->branch_id)->toBe($lakeside->id)
+        expect($payment->branch_id)->toBeNull()
+            ->and($payment->routed_by)->toBeNull()
             ->and((float) $payment->amount)->toBe(25.0)
             ->and((float) $payment->amount_charged)->toBe(25.5)
             ->and($payment->payer_number)->toBe('233247879103')
@@ -281,13 +282,45 @@ describe('checking what Hubtel posts', function () {
         Http::assertNothingSent();
     });
 
-    it('puts a payment to the company account on the branch that owns it', function () {
-        $ashaiman = bcBranch('Ashaiman', ['hubtel_account_number' => BC_COMPANY]);
+    it('sends a payment to the branch of the order it was for', function () {
+        $lakeside = bcLakeside();
+        $order = Order::factory()->create([
+            'branch_id' => $lakeside->id,
+            'order_source' => 'pos',
+            'status' => 'completed',
+            'delivery_fee' => 0,
+            'total_amount' => 25,
+            'contact_phone' => '+233247879103',
+        ]);
+        bcHubtelSaysPaid();
+
+        bcPost();
+
+        $payment = HubtelIncomingPayment::sole();
+        expect($payment->branch_id)->toBe($lakeside->id)
+            ->and($payment->routed_by)->toBe('number_amount')
+            ->and($payment->matched_order_id)->toBe($order->id);
+    });
+
+    it('does not take the branch from the address Hubtel posted to', function () {
+        // One address receives every branch's payments (D19). This one was
+        // posted to the company account's, which Ashaiman holds, for a sale
+        // East Legon rang.
+        bcBranch('Ashaiman', ['hubtel_account_number' => BC_COMPANY]);
+        $eastLegon = bcBranch('East Legon');
+        Order::factory()->create([
+            'branch_id' => $eastLegon->id,
+            'order_source' => 'pos',
+            'status' => 'completed',
+            'delivery_fee' => 0,
+            'total_amount' => 25,
+            'contact_phone' => '+233247879103',
+        ]);
         bcHubtelSaysPaid();
 
         bcPost(account: BC_COMPANY);
 
-        expect(HubtelIncomingPayment::sole()->branch_id)->toBe($ashaiman->id);
+        expect(HubtelIncomingPayment::sole()->branch_id)->toBe($eastLegon->id);
     });
 });
 
