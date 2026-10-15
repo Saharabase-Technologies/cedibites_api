@@ -9,6 +9,8 @@ use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\User;
 use App\Services\Orders\PreparationRouter;
+use App\Services\Payments\PaymentCollector;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -142,9 +144,26 @@ class OrderCreationService
             $paymentMethod = $session->payment_method;
             $paymentStatus = $this->resolvePaymentStatus($paymentMethod);
 
+            // The money is whoever rang the sale's, on the shift they were on
+            // when they rang it. For a MoMo prompt paid later that is still the
+            // cashier who sent it. An online customer's payment is nobody's.
+            $isTill = $session->session_type === 'pos';
+            $collector = app(PaymentCollector::class)->stamp(
+                $isTill ? $session->staff_id : null,
+                $session->branch_id,
+                match (true) {
+                    $isManualEntry => PaymentCollector::SOURCE_MANUAL_ENTRY,
+                    $isTill => PaymentCollector::SOURCE_TILL,
+                    default => PaymentCollector::SOURCE_ONLINE,
+                },
+                $isManualEntry && $session->recorded_at
+                    ? Carbon::parse($session->recorded_at)
+                    : Carbon::parse($session->created_at ?? 'now'),
+            );
+
             // Restaurant collects the goods amount only; the third-party delivery
             // fee is collected by the rider on delivery (tracked via delivery_fee_status).
-            Payment::create([
+            Payment::create($collector + [
                 'order_id' => $order->id,
                 'customer_id' => $customerId,
                 'payment_method' => $paymentMethod,

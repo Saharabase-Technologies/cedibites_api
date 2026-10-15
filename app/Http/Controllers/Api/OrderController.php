@@ -254,7 +254,7 @@ class OrderController extends Controller
             $isMomo = $paymentMethod === 'mobile_money';
 
             // Goods amount only — delivery fee is collected by the rider on delivery.
-            Payment::create([
+            Payment::create(app(\App\Services\Payments\PaymentCollector::class)->stamp(null, $order->branch_id, \App\Services\Payments\PaymentCollector::SOURCE_ONLINE) + [
                 'order_id' => $order->id,
                 'customer_id' => $resolvedCustomerId,
                 'payment_method' => $paymentMethod,

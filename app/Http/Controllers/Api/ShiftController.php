@@ -10,6 +10,7 @@ use App\Http\Resources\ShiftResource;
 use App\Models\Order;
 use App\Models\Shift;
 use App\Models\ShiftOrder;
+use App\Services\Payments\ShiftMoney;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -137,10 +138,38 @@ class ShiftController extends Controller
                 'branch' => $shift->branch?->name,
                 'total_sales' => $shift->total_sales,
                 'order_count' => $shift->order_count,
+                // The server's own figures, from the payments, kept with the
+                // record of the shift ending.
+                'money' => app(ShiftMoney::class)->for($shift),
             ])
             ->log("Shift ended: {$request->user()->name} at ".($shift->branch?->name ?? 'the call centre'));
 
         return response()->success(new ShiftResource($shift));
+    }
+
+    /**
+     * GET /shifts/{shift}/money: what this shift took, by method, worked out
+     * from the payments themselves (D11). This is the figure to count against.
+     * total_sales is only what the browser remembered to send (T12).
+     */
+    public function money(Request $request, Shift $shift): JsonResponse
+    {
+        $user = $request->user();
+        $employee = $user?->employee;
+
+        $allowed = ($employee && $shift->employee_id === $employee->id)
+            || $user?->hasAnyRole([Role::Admin, Role::TechAdmin])
+            || ($employee && $user->hasRole(Role::Manager)
+                && $employee->managedBranches()->where('branches.id', $shift->branch_id)->exists());
+
+        if (! $allowed) {
+            return response()->forbidden('Cannot see another employee\'s shift');
+        }
+
+        return response()->success([
+            'shift_id' => $shift->id,
+            'money' => app(ShiftMoney::class)->for($shift),
+        ]);
     }
 
     /**

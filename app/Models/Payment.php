@@ -37,6 +37,11 @@ class Payment extends Model
         'paid_at',
         'refunded_at',
         'refund_reason',
+        // Who took the money and on which shift (D9). See PaymentCollector.
+        'collected_by',
+        'collector_inferred',
+        'shift_id',
+        'source',
     ];
 
     protected function casts(): array
@@ -45,6 +50,7 @@ class Payment extends Model
             'amount' => 'decimal:2',
             'payment_gateway_response' => 'array',
             'paid_at' => 'datetime',
+            'collector_inferred' => 'boolean',
             'refunded_at' => 'datetime',
         ];
     }
@@ -52,6 +58,17 @@ class Payment extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
+    }
+
+    /** Whoever took the money, which may not be whoever placed the order (D9). */
+    public function collector(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'collected_by');
+    }
+
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
     }
 
     public function customer(): BelongsTo

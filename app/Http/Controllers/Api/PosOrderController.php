@@ -210,6 +210,14 @@ class PosOrderController extends Controller
                 // Create payment record based on payment method
                 $paymentMethod = $request->validated('payment_method');
 
+                // The money is this employee's, on the shift they are on (D9).
+                $collector = app(\App\Services\Payments\PaymentCollector::class)->stamp(
+                    $employee->id,
+                    $branchId,
+                    $isManualEntry ? \App\Services\Payments\PaymentCollector::SOURCE_MANUAL_ENTRY : \App\Services\Payments\PaymentCollector::SOURCE_TILL,
+                    $isManualEntry ? \Illuminate\Support\Carbon::parse($request->validated('recorded_at')) : now(),
+                );
+
                 if ($paymentMethod === 'mobile_money') {
                     // For mobile money, use Hubtel Direct Receive Money (RMP)
                     // This sends a USSD prompt directly to the customer's phone
@@ -239,7 +247,7 @@ class PosOrderController extends Controller
                             'error' => $e->getMessage(),
                         ]);
 
-                        \App\Models\Payment::create([
+                        \App\Models\Payment::create($collector + [
                             'order_id' => $order->id,
                             'payment_method' => $paymentMethod,
                             'amount' => $order->goods_amount,
@@ -248,7 +256,7 @@ class PosOrderController extends Controller
                         ]);
                     }
                 } elseif ($paymentMethod === 'no_charge') {
-                    \App\Models\Payment::create([
+                    \App\Models\Payment::create($collector + [
                         'order_id' => $order->id,
                         'payment_method' => 'no_charge',
                         'amount' => 0,
@@ -257,7 +265,7 @@ class PosOrderController extends Controller
                     ]);
                 } elseif ($paymentMethod === 'manual_momo') {
                     // Manual MoMo — direct transfer to branch, no gateway
-                    \App\Models\Payment::create([
+                    \App\Models\Payment::create($collector + [
                         'order_id' => $order->id,
                         'payment_method' => 'manual_momo',
                         'amount' => $order->goods_amount,
@@ -268,7 +276,7 @@ class PosOrderController extends Controller
                     ]);
                 } else {
                     // For cash, card, wallet, ghqr - mark as completed immediately
-                    \App\Models\Payment::create([
+                    \App\Models\Payment::create($collector + [
                         'order_id' => $order->id,
                         'payment_method' => $paymentMethod,
                         'amount' => $order->goods_amount,

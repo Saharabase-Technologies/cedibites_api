@@ -66,6 +66,7 @@ Route::middleware('password.reset')->group(function () {
         Route::get('active/{employeeId}', [ShiftController::class, 'getActive']);
         Route::get('by-date/{date}', [ShiftController::class, 'getByDate']);
         Route::get('by-staff/{staffId}', [ShiftController::class, 'getByStaff']);
+        Route::get('{shift}/money', [ShiftController::class, 'money']);
 
         Route::middleware('permission:manage_shifts')->group(function () {
             Route::post('/', [ShiftController::class, 'startShift']);
