@@ -139,6 +139,7 @@ describe('asking for a round\'s cancel', function () {
             ->assertOk()
             ->assertJsonPath('data.0.order_number', $this->order->order_number)
             ->assertJsonPath('data.0.round', 2)
+            ->assertJsonPath('data.0.id', $round->id)
             ->assertJsonPath('data.0.requested_by_name', 'Kofi');
 
         Notification::assertSentTo($this->admin, \App\Notifications\CancelRequestedNotification::class, fn ($n) => $n->round?->id === $round->id);

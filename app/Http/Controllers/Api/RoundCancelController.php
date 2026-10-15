@@ -81,6 +81,7 @@ class RoundCancelController extends Controller
             ->get();
 
         return response()->json(['data' => $rounds->map(fn (OrderRound $round) => [
+            'id' => $round->id,
             'order_id' => $round->order_id,
             'order_number' => $round->order?->order_number,
             'branch' => $round->order?->branch?->name,
