@@ -91,7 +91,8 @@ describe('placing a Pay later order', function () {
         $order = Order::findOrFail($response->json('order.id'));
 
         // The whole of the goods is owed. The till charges the menu's price.
-        expect($response->json('order.balance_due'))->toBe($order->goods_amount)
+        // JSON sends a whole-cedi amount as an integer.
+        expect((float) $response->json('order.balance_due'))->toBe($order->goods_amount)
             ->and($order->goods_amount)->toBeGreaterThan(0.0)
             ->and($order->paid_later)->toBeTrue()
             ->and($order->placed_unpaid_at)->not->toBeNull()
