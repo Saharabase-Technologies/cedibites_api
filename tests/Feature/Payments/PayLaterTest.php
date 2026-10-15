@@ -452,7 +452,8 @@ describe('the kitchen slip', function () {
             ->postJson("/v1/employee/orders/{$order->id}/receipt-printed", ['source' => 'pos_orders'])
             ->assertOk();
 
-        expect($order->receiptPrints()->latest('id')->first()->kind)->toBe('original');
+        // The relation sorts by print time; the newest row is wanted.
+        expect($order->receiptPrints()->reorder()->latest('id')->first()->kind)->toBe('original');
     });
 
     it('is refused for an order that was not placed with Pay later', function () {
