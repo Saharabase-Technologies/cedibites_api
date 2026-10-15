@@ -424,3 +424,66 @@ describe('refunding one part', function () {
         $order->payments()->sole()->update(['payment_status' => 'refunded', 'refunded_at' => now()]);
     });
 });
+
+describe('the kitchen slip', function () {
+    it('is logged on its own, so the paid receipt after it is still the original', function () {
+        $order = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+
+        $this->actingAs($this->rosina)
+            ->postJson("/v1/employee/orders/{$order->id}/receipt-printed", ['source' => 'order_manager', 'slip' => 'kitchen'])
+            ->assertOk()
+            ->assertJsonPath('data.receipt_print_count', 0);
+
+        $order->refresh();
+        expect($order->kitchen_slip_printed_at)->not->toBeNull()
+            ->and($order->receipt_print_count)->toBe(0)
+            ->and($order->receiptPrints()->sole()->kind)->toBe('kitchen');
+
+        oweTake($this->rosina, $order, ['method' => 'cash', 'handed_over' => $order->goods_amount])->assertCreated();
+
+        $this->actingAs($this->rosina)
+            ->postJson("/v1/employee/orders/{$order->id}/receipt-printed", ['source' => 'pos_orders'])
+            ->assertOk();
+
+        expect($order->receiptPrints()->latest('id')->first()->kind)->toBe('original');
+    });
+
+    it('is refused for an order that was not placed with Pay later', function () {
+        $order = Order::factory()->create(['branch_id' => $this->branch->id]);
+
+        $this->actingAs($this->rosina)
+            ->postJson("/v1/employee/orders/{$order->id}/receipt-printed", ['slip' => 'kitchen'])
+            ->assertStatus(422);
+    });
+});
+
+describe('the till\'s list of what is owed', function () {
+    it('lists every order still owing at the branch, from any day, and nothing paid or cancelled', function () {
+        $owing = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        $owing->forceFill(['created_at' => now()->subDays(3)])->saveQuietly();
+
+        $paid = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        oweTake($this->rosina, $paid, ['method' => 'cash', 'handed_over' => $paid->goods_amount])->assertCreated();
+
+        $cancelled = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        $cancelled->update(['status' => 'cancelled', 'cancelled_at' => now()]);
+
+        $ids = collect($this->actingAs($this->rosina)
+            ->getJson('/v1/employee/orders?owing=1&branch_id='.$this->branch->id.'&date_from='.now()->toDateString().'&date_to='.now()->toDateString())
+            ->assertOk()
+            ->json('data.data'))->pluck('id');
+
+        expect($ids->all())->toBe([$owing->id]);
+    });
+
+    it('says which order a linked branch code payment went to', function () {
+        $order = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        $incoming = oweIncoming(['amount' => 5, 'branch_id' => $this->branch->id]);
+        oweTake($this->rosina, $order, ['method' => 'branch_code', 'incoming_payment_id' => $incoming->id])->assertCreated();
+
+        $this->actingAs($this->rosina)
+            ->getJson('/v1/pos/branch-code-payments?branch_id='.$this->branch->id)
+            ->assertOk()
+            ->assertJsonPath('data.0.linked_order_number', $order->order_number);
+    });
+});

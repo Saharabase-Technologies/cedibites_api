@@ -24,6 +24,7 @@ class EmployeeOrderController extends Controller
         $filters = $request->only([
             'branch_id', 'branch_name', 'staff_id', 'status', 'order_type', 'order_source',
             'contact_phone', 'date_from', 'date_to', 'search', 'payment_status', 'payment_method',
+            'owing',
         ]);
 
         $orders = $this->orderManagementService
@@ -96,6 +97,32 @@ class EmployeeOrderController extends Controller
 
         if (! $user->isCompanyWide() && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
             return response()->error('You can only print receipts for orders at your branch.', 403);
+        }
+
+        // The kitchen slip of a Pay later order: FOR THE KITCHEN, NOT PAID (D5).
+        // It is not the customer's receipt, so it is logged as its own kind and
+        // leaves the receipt count alone; the paid receipt that follows is
+        // still the original (D6).
+        if ($request->input('slip') === 'kitchen') {
+            if (! $order->paid_later) {
+                return response()->error('Only a Pay later order has a kitchen slip.', 422);
+            }
+
+            $order->forceFill(['kitchen_slip_printed_at' => $order->kitchen_slip_printed_at ?? now()])->save();
+            $order->receiptPrints()->create([
+                'employee_id' => $employee?->id,
+                'user_id' => $user->id,
+                'kind' => 'kitchen',
+                'reprint_number' => null,
+                'copies' => 1,
+                'source' => $request->input('source'),
+                'printed_at' => now(),
+            ]);
+
+            return response()->success(
+                new OrderResource($order->fresh()->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments'])),
+                'Kitchen slip recorded.'
+            );
         }
 
         // The server's clock, never the caller's. A till at Ashaiman printed a

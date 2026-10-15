@@ -90,6 +90,7 @@ class Order extends Model
         'placed_unpaid_at',
         'fully_paid_at',
         'unpaid_alerted_at',
+        'kitchen_slip_printed_at',
         'receipt_printed_at',
         'receipt_print_count',
         'receipt_verification_code',
@@ -118,6 +119,7 @@ class Order extends Model
             'placed_unpaid_at' => 'datetime',
             'fully_paid_at' => 'datetime',
             'unpaid_alerted_at' => 'datetime',
+            'kitchen_slip_printed_at' => 'datetime',
             'receipt_printed_at' => 'datetime',
             'internal_notes' => 'array',
         ];

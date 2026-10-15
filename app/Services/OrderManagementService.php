@@ -82,11 +82,19 @@ class OrderManagementService
             $query->where('contact_phone', 'like', '%'.$filters['contact_phone'].'%');
         }
 
-        if (! empty($filters['date_from'])) {
+        // Still owing (D7): placed with Pay later, not yet covered, not
+        // cancelled. Dates do not apply. What is owed stays on the till's list
+        // until it is paid or cancelled, whichever day it was placed.
+        $owing = ! empty($filters['owing']);
+        if ($owing) {
+            $query->where('paid_later', true)->whereNull('fully_paid_at')->where('status', '!=', 'cancelled');
+        }
+
+        if (! empty($filters['date_from']) && ! $owing) {
             $query->whereDate('created_at', '>=', $filters['date_from']);
         }
 
-        if (! empty($filters['date_to'])) {
+        if (! empty($filters['date_to']) && ! $owing) {
             $query->whereDate('created_at', '<=', $filters['date_to']);
         }
 

@@ -34,6 +34,7 @@ class OrderResource extends JsonResource
             'balance_due' => $this->balance_due,
             'payment_state' => $this->payment_state,
             'fully_paid_at' => $this->fully_paid_at?->toIso8601String(),
+            'kitchen_slip_printed_at' => $this->kitchen_slip_printed_at?->toIso8601String(),
             'discount' => (float) $this->discount,
             'promo_id' => $this->promo_id,
             'promo_name' => $this->promo_name,

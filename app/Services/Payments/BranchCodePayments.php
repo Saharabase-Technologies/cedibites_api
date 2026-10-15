@@ -127,7 +127,7 @@ class BranchCodePayments
      */
     public function today(int $branchId): Collection
     {
-        return HubtelIncomingPayment::with(['matchedOrder:id,order_number', 'takenBy.user:id,name'])
+        return HubtelIncomingPayment::with(['matchedOrder:id,order_number', 'takenBy.user:id,name', 'payment.order:id,order_number'])
             ->where(fn ($q) => $q->where('branch_id', $branchId)->orWhereNull('branch_id'))
             ->where('paid_at', '>=', now()->startOfDay())
             ->orderByDesc('paid_at')

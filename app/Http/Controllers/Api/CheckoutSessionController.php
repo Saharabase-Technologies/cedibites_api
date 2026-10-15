@@ -760,7 +760,7 @@ class CheckoutSessionController extends Controller
 
     private function freshBranchCodePayment(HubtelIncomingPayment $payment): HubtelIncomingPayment
     {
-        return $payment->fresh(['matchedOrder:id,order_number', 'takenBy.user:id,name']);
+        return $payment->fresh(['matchedOrder:id,order_number', 'takenBy.user:id,name', 'payment.order:id,order_number']);
     }
 
     /**
@@ -782,6 +782,9 @@ class CheckoutSessionController extends Controller
             'routed_by' => $p->routed_by,
             'order_number' => $p->matchedOrder?->order_number,
             'taken_by' => $p->takenBy?->user?->name,
+            // The order it was linked to by Take payment, once it is. A linked
+            // payment is spent and is not offered again.
+            'linked_order_number' => $p->payment?->order?->order_number,
         ];
     }
 
