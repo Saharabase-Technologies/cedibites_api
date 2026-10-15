@@ -90,8 +90,12 @@ class OrderCreationService
 
             $isManualEntry = (bool) $session->is_manual_entry;
             // Placed with nothing paid (D1). The order is made now, with no
-            // payment row; payments are added as they come in.
+            // payment row; payments are added as they come in. A split sale
+            // is placed the same way, and the cashier takes its parts at once
+            // (D41).
             $isPayLater = $session->payment_method === 'pay_later';
+            $isSplit = $session->payment_method === 'split';
+            $placedUnpaid = $isPayLater || $isSplit;
 
             // Items are decoded here rather than after the insert because the
             // order's opening status depends on what is on it: an order with
@@ -133,8 +137,9 @@ class OrderCreationService
                 'status' => $initialStatus,
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,
                 'paid_later' => $isPayLater,
-                'placed_unpaid_at' => $isPayLater ? now() : null,
-                'owing_since' => $isPayLater ? now() : null,
+                'split_payment' => $isSplit,
+                'placed_unpaid_at' => $placedUnpaid ? now() : null,
+                'owing_since' => $placedUnpaid ? now() : null,
                 'manual_entry_reason' => $isManualEntry ? $session->manual_entry_reason : null,
                 'momo_number' => $session->momo_number,
             ]);
@@ -159,7 +164,7 @@ class OrderCreationService
             $paymentMethod = $session->payment_method;
             $paymentStatus = $this->resolvePaymentStatus($paymentMethod);
 
-            if ($isPayLater) {
+            if ($placedUnpaid) {
                 // The kitchen cooks it before any money comes in, so its stock
                 // goes now (T2). Deducting is once per order, so the payment
                 // that settles it later deducts nothing more.
@@ -167,7 +172,7 @@ class OrderCreationService
                     try {
                         app(RecipeDeductionService::class)->deductForOrder($order);
                     } catch (\Throwable $e) {
-                        Log::error('Recipe deduction failed for a Pay later order', [
+                        Log::error('Recipe deduction failed for an order placed unpaid', [
                             'order_id' => $order->id,
                             'error' => $e->getMessage(),
                         ]);
@@ -194,7 +199,7 @@ class OrderCreationService
 
             // Restaurant collects the goods amount only; the third-party delivery
             // fee is collected by the rider on delivery (tracked via delivery_fee_status).
-            if (! $isPayLater) {
+            if (! $placedUnpaid) {
                 Payment::create($collector + [
                     'order_id' => $order->id,
                     'customer_id' => $customerId,

@@ -34,6 +34,9 @@ class OrderResource extends JsonResource
             // Pay later (D1 to D7). paid_later is internal and never reaches
             // the customer's copy of a receipt (D2).
             'paid_later' => (bool) $this->paid_later,
+            // A new sale paid in parts at the counter (D41). Internal too: only
+            // the cashier's copy says so (D42).
+            'split_payment' => (bool) $this->split_payment,
             'amount_paid' => $this->amount_paid,
             'balance_due' => $this->balance_due,
             'payment_state' => $this->payment_state,

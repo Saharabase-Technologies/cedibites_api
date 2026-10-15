@@ -93,6 +93,8 @@ class Order extends Model
         'kitchen_slip_printed_at',
         // When it last started owing (Phase 4b). Cleared when paid.
         'owing_since',
+        // A new sale paid in parts at the counter (Phase 5). Never cleared.
+        'split_payment',
         'receipt_printed_at',
         'receipt_print_count',
         'receipt_verification_code',
@@ -123,6 +125,7 @@ class Order extends Model
             'unpaid_alerted_at' => 'datetime',
             'kitchen_slip_printed_at' => 'datetime',
             'owing_since' => 'datetime',
+            'split_payment' => 'boolean',
             'receipt_printed_at' => 'datetime',
             'internal_notes' => 'array',
         ];
@@ -274,15 +277,23 @@ class Order extends Model
     }
 
     /**
-     * Paid, or placed by staff with Pay later (D4).
+     * Paid, or placed by staff with Pay later (D4) or as a split sale (D41).
      *
-     * Placing a Pay later order is the staff member vouching for it, so the
-     * kitchen and the Order Manager see it at once. An online order waiting on
-     * its MoMo prompt is neither, and stays out.
+     * Placing either is the staff member vouching for it, so the kitchen and
+     * the Order Manager see it at once. An online order waiting on its MoMo
+     * prompt is neither, and stays out.
      */
     public function scopeConfirmedOrPayLater(Builder $query): void
     {
-        $query->where(fn (Builder $q) => $q->paymentConfirmed()->orWhere('paid_later', true));
+        $query->where(fn (Builder $q) => $q->paymentConfirmed()
+            ->orWhere('paid_later', true)
+            ->orWhere('split_payment', true));
+    }
+
+    /** Placed by staff before any money came in: Pay later or a split sale. */
+    public function placedUnpaid(): bool
+    {
+        return (bool) $this->paid_later || (bool) $this->split_payment;
     }
 
     /** The money in so far: completed payments only (D16). */

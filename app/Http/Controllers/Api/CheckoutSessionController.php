@@ -462,7 +462,7 @@ class CheckoutSessionController extends Controller
             'items.*.menu_item_option_id' => ['nullable', 'integer', 'exists:menu_item_options,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
-            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo,pay_later'],
+            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo,pay_later,split'],
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
             // Why the sale was written on paper: the power, the network, the
@@ -647,7 +647,7 @@ class CheckoutSessionController extends Controller
 
         // A recorded past order was paid when it happened. Pay later is for a
         // customer standing at the counter now.
-        if ($paymentMethod === 'pay_later' && $isManualEntry) {
+        if (in_array($paymentMethod, ['pay_later', 'split'], true) && $isManualEntry) {
             return response()->json(['message' => 'A recorded past order was paid at the time. Choose how it was paid.'], 422);
         }
 
@@ -699,6 +699,8 @@ class CheckoutSessionController extends Controller
             'no_charge' => $this->posInstantFlow($session),
             // Placed now, to the kitchen now, paid later (D1, D4).
             'pay_later' => $this->posInstantFlow($session),
+            // Placed now, to the kitchen now, its parts taken at once (D41).
+            'split' => $this->posInstantFlow($session),
             'wallet', 'ghqr' => $this->posInstantFlow($session),
             default => response()->json(['message' => 'Unsupported payment method.'], 422),
         };

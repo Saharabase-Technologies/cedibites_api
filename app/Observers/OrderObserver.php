@@ -392,15 +392,16 @@ class OrderObserver
      */
     protected function handleCancellationSideEffects(Order $order): void
     {
-        // A Pay later order's stock went when it was placed (T2), and an unpaid
-        // one has no payment to refund, so nothing below would bring it back.
-        // Reversing is once per order, so a refunded part doing it too is safe.
-        if ($order->paid_later) {
+        // A Pay later or split order's stock went when it was placed (T2), and
+        // an unpaid one has no payment to refund, so nothing below would bring
+        // it back. Reversing is once per order, so a refunded part doing it too
+        // is safe.
+        if ($order->placedUnpaid()) {
             \DB::afterCommit(function () use ($order) {
                 try {
                     app(\App\Domain\Inventory\Recipes\RecipeDeductionService::class)->reverseForOrder($order);
                 } catch (\Throwable $e) {
-                    \Log::error('Stock reversal failed for a cancelled Pay later order', [
+                    \Log::error('Stock reversal failed for a cancelled order placed unpaid', [
                         'order_id' => $order->id,
                         'error' => $e->getMessage(),
                     ]);
