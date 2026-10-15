@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\MenuBranchAvailabilityController;
 use App\Http\Controllers\Api\MenuCategoryController;
 use App\Http\Controllers\Api\MenuItemController;
 use App\Http\Controllers\Api\MenuItemOptionController;
+use App\Http\Controllers\Api\MenuPriceController;
 use App\Http\Controllers\Api\MenuTagController;
 use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PaymentController;
@@ -294,6 +295,18 @@ Route::prefix('admin')->group(function () {
         Route::delete('menu-items/{menuItem}/options/{option}', [MenuItemOptionController::class, 'destroy']);
         Route::post('menu-items/{menuItem}/options/{option}/image', [MenuItemOptionController::class, 'uploadImage']);
         Route::delete('menu-items/{menuItem}/options/{option}/image', [MenuItemOptionController::class, 'deleteImage']);
+
+        // New prices: changes typed in ahead of time, and the button that
+        // puts them live. See MenuPriceController and docs/MENU_PRICES_BUILD.md
+        // in the frontend repo.
+        Route::get('menu-prices', [MenuPriceController::class, 'index']);
+        Route::put('menu-drafts', [MenuPriceController::class, 'setDraft']);
+        Route::post('menu-drafts/new-option', [MenuPriceController::class, 'addOption']);
+        Route::delete('menu-drafts', [MenuPriceController::class, 'clearDrafts']);
+        Route::delete('menu-drafts/{draft}', [MenuPriceController::class, 'removeDraft']);
+        Route::post('menu-publications', [MenuPriceController::class, 'publish']);
+        Route::post('menu-publications/{publication}/cancel', [MenuPriceController::class, 'cancel']);
+        Route::post('menu-publications/{publication}/undo', [MenuPriceController::class, 'undo']);
 
         // Smart category settings
         Route::get('smart-categories', [SmartCategorySettingController::class, 'index']);
