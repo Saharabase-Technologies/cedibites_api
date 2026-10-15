@@ -403,3 +403,42 @@ describe('undo', function () {
         expect((float) $this->full->fresh()->price)->toBe(200.0);
     });
 });
+
+describe('the October list', function () {
+    it('stages what matches, skips what does not, and changes nothing live', function () {
+        $jollof = MenuItem::factory()->create(['name' => 'Jollof Rice']);
+        $jollof->options()->delete();
+        $assorted = MenuItemOption::create([
+            'menu_item_id' => $jollof->id, 'option_key' => 'assorted', 'option_label' => 'Assorted',
+            'display_name' => 'Assorted Jollof Rice', 'price' => 85, 'display_order' => 0,
+        ]);
+        // Not what the list expects today, so it must be left alone.
+        $seafood = MenuItemOption::create([
+            'menu_item_id' => $jollof->id, 'option_key' => 'seafood', 'option_label' => 'Seafood',
+            'display_name' => 'Seafood Jollof Rice', 'price' => 99, 'display_order' => 1,
+        ]);
+
+        $this->drumsticks->options()->delete();
+        MenuItemOption::create([
+            'menu_item_id' => $this->drumsticks->id, 'option_key' => '5-pieces', 'option_label' => '5 Pieces',
+            'display_name' => '5 Pieces of Special Crunch Drumsticks', 'price' => 65, 'display_order' => 0,
+        ]);
+
+        $this->artisan('menu:stage-october-prices', ['--dry-run' => true])->assertSuccessful();
+        expect(MenuDraft::count())->toBe(0);
+
+        $this->artisan('menu:stage-october-prices')->assertSuccessful();
+        $this->artisan('menu:stage-october-prices')->assertSuccessful();
+
+        $price = fn (MenuItemOption $o) => MenuDraft::where('menu_item_option_id', $o->id)->where('field', 'price')->value('value');
+
+        expect($price($assorted))->toEqual(90)
+            ->and($price($seafood))->toBeNull()
+            ->and((float) $this->full->fresh()->price)->toBe(170.0)
+            ->and(MenuDraft::where('menu_item_option_id', $this->full->id)->value('value'))->toEqual(200)
+            ->and(MenuDraft::where('menu_item_id', $this->drumsticks->id)->where('field', 'name')->value('value'))
+            ->toBe('Drumsticks and Wings (Special Crunch)')
+            // Run twice, the wings are waiting once.
+            ->and(MenuDraft::where('menu_item_id', $this->drumsticks->id)->where('field', 'new_option')->count())->toBe(2);
+    });
+});

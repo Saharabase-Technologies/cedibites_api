@@ -19,7 +19,7 @@ class MenuDrafts
      * page would count a change that changes nothing, and the review would
      * show 90 becoming 90.
      */
-    public function set(MenuItem $item, ?MenuItemOption $option, string $field, mixed $value, User $by): void
+    public function set(MenuItem $item, ?MenuItemOption $option, string $field, mixed $value, ?User $by): void
     {
         $existing = MenuDraft::query()
             ->where('menu_item_id', $item->id)
@@ -36,7 +36,7 @@ class MenuDrafts
         $stored = $field === 'off_sale' ? true : MenuValues::normalise($field, $value);
 
         if ($existing !== null) {
-            $existing->update(['value' => $stored, 'updated_by' => $by->id]);
+            $existing->update(['value' => $stored, 'updated_by' => $by?->id]);
 
             return;
         }
@@ -46,15 +46,15 @@ class MenuDrafts
             'menu_item_option_id' => $option?->id,
             'field' => $field,
             'value' => $stored,
-            'created_by' => $by->id,
-            'updated_by' => $by->id,
+            'created_by' => $by?->id,
+            'updated_by' => $by?->id,
         ]);
     }
 
     /**
      * An option that will be created when the changes go live.
      */
-    public function addOption(MenuItem $item, string $label, string $receiptName, float $price, User $by): MenuDraft
+    public function addOption(MenuItem $item, string $label, string $receiptName, float $price, ?User $by): MenuDraft
     {
         $waiting = MenuDraft::query()
             ->where('menu_item_id', $item->id)
@@ -79,8 +79,8 @@ class MenuDrafts
                 'price' => MenuValues::normalise('price', $price),
                 'display_order' => $nextOrder,
             ],
-            'created_by' => $by->id,
-            'updated_by' => $by->id,
+            'created_by' => $by?->id,
+            'updated_by' => $by?->id,
         ]);
     }
 
