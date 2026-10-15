@@ -395,8 +395,15 @@ describe('taking payment', function () {
             'data' => ['status' => 'Paid', 'clientReference' => $payment->reference, 'externalTransactionId' => '555'],
         ])]);
 
+        // Read from our own record, Hubtel not asked: still waiting.
         $this->actingAs($this->kofi)
             ->postJson("/v1/pos/orders/{$this->order->id}/payments/{$payment->id}/check")
+            ->assertOk()
+            ->assertJsonPath('data.payment_status', 'pending');
+        Http::assertNotSent(fn ($r) => str_contains($r->url(), 'api-txnstatus'));
+
+        $this->actingAs($this->kofi)
+            ->postJson("/v1/pos/orders/{$this->order->id}/payments/{$payment->id}/check", ['ask_hubtel' => true])
             ->assertOk()
             ->assertJsonPath('data.payment_status', 'completed');
     });

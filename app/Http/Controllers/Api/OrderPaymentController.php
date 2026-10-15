@@ -61,8 +61,12 @@ class OrderPaymentController extends Controller
     }
 
     /**
-     * POST /pos/orders/{order}/payments/{payment}/check: ask Hubtel about a
-     * prompt still waiting, in case its callback was lost.
+     * POST /pos/orders/{order}/payments/{payment}/check: where a part stands.
+     *
+     * Read from our own record by default, which Hubtel's callback updates, so
+     * the till can ask every few seconds while a prompt waits. With
+     * ask_hubtel, Hubtel's status check is asked too, for a callback that
+     * never came. The cashier presses for that one.
      */
     public function check(Request $request, Order $order, Payment $payment, TakePayment $take): JsonResponse
     {
@@ -72,10 +76,14 @@ class OrderPaymentController extends Controller
 
         $this->cashier($request, $order);
 
-        try {
-            $payment = $take->checkPrompt($payment);
-        } catch (\Throwable) {
-            return response()->json(['message' => 'Hubtel did not answer. Try again in a moment.'], 502);
+        if ($request->boolean('ask_hubtel')) {
+            try {
+                $payment = $take->checkPrompt($payment);
+            } catch (\Throwable) {
+                return response()->json(['message' => 'Hubtel did not answer. Try again in a moment.'], 502);
+            }
+        } else {
+            $payment->refresh();
         }
 
         return response()->json(['data' => [
