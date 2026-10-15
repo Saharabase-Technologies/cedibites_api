@@ -5,12 +5,15 @@ use App\Enums\EmployeeStatus;
 use App\Enums\Role as RoleEnum;
 use App\Models\Branch;
 use App\Models\Employee;
+use App\Models\HubtelIncomingPayment;
 use App\Models\MenuItem;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\Shift;
 use App\Models\User;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RoleSeeder;
+use Illuminate\Support\Facades\Http;
 
 /*
 |--------------------------------------------------------------------------
@@ -167,5 +170,234 @@ describe('the kitchen and the Order Manager', function () {
 
         expect($ids)->toContain($this->payLater->id)
             ->and($ids)->not->toContain($this->waiting->id);
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| Taking payment on an order that owes (D7)
+|--------------------------------------------------------------------------
+*/
+
+function oweTake(User $cashier, Order $order, array $body)
+{
+    return test()->actingAs($cashier)->postJson("/v1/pos/orders/{$order->id}/payments", $body);
+}
+
+function oweIncoming(array $attrs = []): HubtelIncomingPayment
+{
+    static $n = 0;
+    $n++;
+
+    return HubtelIncomingPayment::create(array_merge([
+        'branch_id' => null,
+        'account_number' => '2040195',
+        'client_reference' => "NHowe{$n}_233247879103_1",
+        'network_transaction_id' => "7000000000{$n}",
+        'payer_number' => '233247879103',
+        'amount' => 10,
+        'paid_at' => now(),
+        'verified_at' => now(),
+    ], $attrs));
+}
+
+function oweHubtelPrompt(): void
+{
+    config()->set('services.hubtel.rmp_client_id', 'company-id');
+    config()->set('services.hubtel.rmp_client_secret', 'company-secret');
+    config()->set('services.hubtel.payment_client_id', 'company-id');
+    config()->set('services.hubtel.payment_client_secret', 'company-secret');
+    config()->set('services.hubtel.merchant_account_number', '2038092');
+
+    // A transaction ID of its own for every prompt, as Hubtel gives.
+    Http::fake([
+        'rmp.hubtel.com/*' => fn () => Http::response([
+            'ResponseCode' => '0001',
+            'Message' => 'Transaction pending. Expect callback request for final state',
+            'Data' => ['TransactionId' => 'hub-tx-'.uniqid('', true), 'ClientReference' => 'x'],
+        ]),
+    ]);
+}
+
+function oweCallback(string $reference, string $code = '0000')
+{
+    return test()->postJson('/v1/payments/hubtel/rmp/callback', [
+        'ResponseCode' => $code,
+        'Message' => $code === '0000' ? 'success' : 'failed',
+        'Data' => [
+            'ClientReference' => $reference,
+            'TransactionId' => 'hub-'.$reference,
+            'ExternalTransactionId' => 'mtn-'.$reference,
+            'Amount' => 1,
+        ],
+    ]);
+}
+
+describe('taking payment', function () {
+    beforeEach(function () {
+        $this->order = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        $this->owed = $this->order->goods_amount;
+
+        // Kofi is on the till by the time Ama pays.
+        ['user' => $this->kofi, 'employee' => $this->kofiEmployee] = oweStaff($this->branch, 'Kofi');
+        $this->kofiShift = Shift::create([
+            'employee_id' => $this->kofiEmployee->id,
+            'branch_id' => $this->branch->id,
+            'login_at' => now()->subHour(),
+            'total_sales' => 0,
+            'order_count' => 0,
+        ]);
+    });
+
+    it('takes part in cash, against whoever took it, and leaves the sale with whoever placed it', function () {
+        oweTake($this->kofi, $this->order, ['method' => 'cash', 'handed_over' => 10])
+            ->assertCreated()
+            ->assertJsonPath('data.change', 0)
+            ->assertJsonPath('data.order.payment_state', 'part_paid')
+            ->assertJsonPath('data.order.amount_paid', 10);
+
+        $payment = $this->order->payments()->sole();
+        expect($payment->collected_by)->toBe($this->kofiEmployee->id)
+            ->and($payment->shift_id)->toBe($this->kofiShift->id)
+            ->and($payment->source)->toBe('pay_later')
+            ->and($this->order->fresh()->assigned_employee_id)->toBe($this->rosinaEmployee->id)
+            ->and($this->order->fresh()->fully_paid_at)->toBeNull();
+    });
+
+    it('gives change when more cash is handed over than is owed, and marks the order paid', function () {
+        $response = oweTake($this->kofi, $this->order, ['method' => 'cash', 'handed_over' => $this->owed + 5])
+            ->assertCreated()
+            ->assertJsonPath('data.order.payment_state', 'paid');
+
+        $payment = $this->order->payments()->sole();
+        expect((float) $response->json('data.change'))->toBe(5.0)
+            ->and((float) $payment->amount)->toBe($this->owed)
+            ->and((float) $payment->amount_tendered)->toBe(round($this->owed + 5, 2))
+            ->and($this->order->fresh()->fully_paid_at)->not->toBeNull();
+    });
+
+    it('refuses a card part over what is owed, and takes one that fits', function () {
+        oweTake($this->kofi, $this->order, ['method' => 'card', 'amount' => $this->owed + 1])->assertStatus(422);
+
+        oweTake($this->kofi, $this->order, ['method' => 'card', 'amount' => $this->owed])
+            ->assertCreated()
+            ->assertJsonPath('data.order.payment_state', 'paid');
+    });
+
+    it('takes nothing on an order already paid', function () {
+        oweTake($this->kofi, $this->order, ['method' => 'cash', 'handed_over' => $this->owed])->assertCreated();
+
+        oweTake($this->kofi, $this->order, ['method' => 'cash', 'handed_over' => 5])->assertStatus(409);
+    });
+
+    it('takes nothing on a cancelled order', function () {
+        $this->order->update(['status' => 'cancelled', 'cancelled_at' => now()]);
+
+        oweTake($this->kofi, $this->order, ['method' => 'cash', 'handed_over' => 5])->assertStatus(409);
+    });
+
+    it('does not let another branch\'s cashier take money for the order', function () {
+        $elsewhere = Branch::factory()->create(['is_active' => true]);
+        ['user' => $stranger] = oweStaff($elsewhere, 'Yaw');
+
+        oweTake($stranger, $this->order, ['method' => 'cash', 'handed_over' => 5])->assertForbidden();
+    });
+
+    it('links a branch code payment, which becomes this branch\'s and is linked once', function () {
+        $incoming = oweIncoming(['amount' => 10]);
+
+        oweTake($this->kofi, $this->order, ['method' => 'branch_code', 'incoming_payment_id' => $incoming->id])
+            ->assertCreated()
+            ->assertJsonPath('data.order.amount_paid', 10);
+
+        $payment = $this->order->payments()->sole();
+        $incoming->refresh();
+        expect($payment->payment_method)->toBe('mobile_money')
+            ->and($payment->source)->toBe('branch_code_link')
+            ->and($payment->transaction_id)->toBe($incoming->network_transaction_id)
+            ->and($incoming->payment_id)->toBe($payment->id)
+            ->and($incoming->branch_id)->toBe($this->branch->id)
+            ->and($incoming->taken_by)->toBe($this->kofiEmployee->id);
+
+        oweTake($this->kofi, $this->order, ['method' => 'branch_code', 'incoming_payment_id' => $incoming->id])
+            ->assertStatus(409);
+    });
+
+    it('refuses a branch code payment on another branch\'s till, or worth more than is owed', function () {
+        $ashaiman = Branch::factory()->create(['name' => 'Ashaiman', 'is_active' => true]);
+
+        oweTake($this->kofi, $this->order, ['method' => 'branch_code', 'incoming_payment_id' => oweIncoming(['branch_id' => $ashaiman->id])->id])
+            ->assertStatus(409)
+            ->assertJsonPath('message', "That payment is on Ashaiman's till.");
+
+        oweTake($this->kofi, $this->order, ['method' => 'branch_code', 'incoming_payment_id' => oweIncoming(['amount' => $this->owed + 50])->id])
+            ->assertStatus(422);
+
+        expect($this->order->payments()->count())->toBe(0);
+    });
+
+    it('sends a MoMo prompt for a part, with a reference of its own, and settles it on Hubtel\'s answer', function () {
+        oweHubtelPrompt();
+
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => 10, 'momo_number' => '0241234567'])
+            ->assertCreated()
+            ->assertJsonPath('data.payment_status', 'pending')
+            ->assertJsonPath('data.order.payment_state', 'not_paid');
+
+        $reference = 'PL-'.$this->order->order_number.'-1';
+        Http::assertSent(fn ($r) => str_contains($r->url(), 'receive/mobilemoney')
+            && $r['ClientReference'] === $reference
+            && (float) $r['Amount'] === 10.0);
+
+        oweCallback($reference)->assertOk();
+
+        $payment = $this->order->payments()->sole();
+        expect($payment->payment_status)->toBe('completed')
+            ->and($payment->collected_by)->toBe($this->kofiEmployee->id)
+            ->and($this->order->fresh()->payment_state)->toBe('part_paid');
+    });
+
+    it('settles the right part when two prompts were sent for one order', function () {
+        oweHubtelPrompt();
+
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => $this->owed, 'momo_number' => '0241234567'])->assertCreated();
+        $first = 'PL-'.$this->order->order_number.'-1';
+        oweCallback($first, '2001')->assertOk();
+
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => $this->owed, 'momo_number' => '0551234567'])->assertCreated();
+        $second = 'PL-'.$this->order->order_number.'-2';
+        oweCallback($second)->assertOk();
+
+        expect(Payment::where('reference', $first)->value('payment_status'))->toBe('failed')
+            ->and(Payment::where('reference', $second)->value('payment_status'))->toBe('completed')
+            ->and($this->order->fresh()->fully_paid_at)->not->toBeNull();
+    });
+
+    it('does not send a second prompt for money a waiting prompt already asks for', function () {
+        oweHubtelPrompt();
+
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => $this->owed, 'momo_number' => '0241234567'])->assertCreated();
+
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => 1, 'momo_number' => '0241234567'])->assertStatus(409);
+    });
+
+    it('knows a part\'s prompt as our own when Hubtel posts it as a payment notification', function () {
+        expect(app(\App\Services\Payments\BranchCodePayments::class)->isOurs('PL-AJ700-1'))->toBeTrue();
+    });
+
+    it('asks Hubtel about a prompt whose answer never came', function () {
+        oweHubtelPrompt();
+        oweTake($this->kofi, $this->order, ['method' => 'mobile_money', 'amount' => 10, 'momo_number' => '0241234567'])->assertCreated();
+        $payment = $this->order->payments()->sole();
+
+        Http::fake(['api-txnstatus.hubtel.com/*' => Http::response([
+            'responseCode' => '0000',
+            'data' => ['status' => 'Paid', 'clientReference' => $payment->reference, 'externalTransactionId' => '555'],
+        ])]);
+
+        $this->actingAs($this->kofi)
+            ->postJson("/v1/pos/orders/{$this->order->id}/payments/{$payment->id}/check")
+            ->assertOk()
+            ->assertJsonPath('data.payment_status', 'completed');
     });
 });

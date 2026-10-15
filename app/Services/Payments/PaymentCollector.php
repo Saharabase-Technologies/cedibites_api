@@ -23,6 +23,15 @@ class PaymentCollector
     /** A recorded past order. */
     public const SOURCE_MANUAL_ENTRY = 'manual_entry';
 
+    /** A part taken on an order placed with Pay later. */
+    public const SOURCE_PAY_LATER = 'pay_later';
+
+    /** A part taken on any other order that owes. */
+    public const SOURCE_SPLIT = 'split';
+
+    /** A branch code payment a cashier linked to an order. */
+    public const SOURCE_BRANCH_CODE_LINK = 'branch_code_link';
+
     /**
      * The columns for a payment taken by this employee at this branch.
      *

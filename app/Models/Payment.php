@@ -42,6 +42,9 @@ class Payment extends Model
         'collector_inferred',
         'shift_id',
         'source',
+        // A part taken on an order that owes (D7). See TakePayment.
+        'reference',
+        'amount_tendered',
     ];
 
     protected function casts(): array
@@ -51,6 +54,7 @@ class Payment extends Model
             'payment_gateway_response' => 'array',
             'paid_at' => 'datetime',
             'collector_inferred' => 'boolean',
+            'amount_tendered' => 'decimal:2',
             'refunded_at' => 'datetime',
         ];
     }

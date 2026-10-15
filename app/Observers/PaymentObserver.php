@@ -4,6 +4,7 @@ namespace App\Observers;
 
 use App\Domain\Inventory\Recipes\RecipeDeductionService;
 use App\Models\Employee;
+use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Shift;
 use App\Models\ShiftOrder;
@@ -25,6 +26,7 @@ class PaymentObserver
         if (in_array($payment->payment_status, self::PAID_STATES, true)) {
             $this->deductStock($payment);
             $this->recordOnShift($payment);
+            $this->markFullyPaid($payment);
         }
     }
 
@@ -38,18 +40,27 @@ class PaymentObserver
             return;
         }
 
-        // Notify customer when payment fails
+        // Notify customer when payment fails. Guarded: a message that cannot
+        // be sent must never undo the payment's own update.
         if ($payment->payment_status === 'failed') {
-            $payment->customer?->user?->notify(new PaymentFailedNotification($payment));
+            try {
+                $payment->customer?->user?->notify(new PaymentFailedNotification($payment));
 
-            // Also notify branch manager
-            $this->notifyBranchManager($payment);
+                // Also notify branch manager
+                $this->notifyBranchManager($payment);
+            } catch (\Throwable $e) {
+                Log::warning('Could not tell anyone a payment failed', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         // Auto-deduct recipe ingredients once payment is confirmed; reverse on refund.
         if (in_array($payment->payment_status, self::PAID_STATES, true)) {
             $this->deductStock($payment);
             $this->recordOnShift($payment);
+            $this->markFullyPaid($payment);
         } elseif ($payment->payment_status === 'refunded') {
             $this->reverseStock($payment);
         }
@@ -120,6 +131,29 @@ class PaymentObserver
         });
     }
 
+    /**
+     * When the payments first cover the order, say when, once. A sale paid
+     * on the spot is fully paid as it is made; a Pay later order when its
+     * last part comes in.
+     */
+    protected function markFullyPaid(Payment $payment): void
+    {
+        DB::afterCommit(function () use ($payment) {
+            try {
+                $order = Order::with('payments')->find($payment->order_id);
+
+                if ($order && $order->fully_paid_at === null && $order->balance_due <= 0) {
+                    Order::whereKey($order->id)->whereNull('fully_paid_at')->update(['fully_paid_at' => now()]);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Could not mark an order fully paid', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
+    }
+
     protected function reverseStock(Payment $payment): void
     {
         DB::afterCommit(function () use ($payment) {
@@ -143,7 +177,9 @@ class PaymentObserver
      */
     protected function notifyBranchManager(Payment $payment): void
     {
-        $manager = Employee::where('branch_id', $payment->order->branch_id)
+        // Employees reach branches through employee_branch. There is no
+        // employees.branch_id, so the old where('branch_id') was an error.
+        $manager = Employee::whereHas('branches', fn ($q) => $q->where('branches.id', $payment->order->branch_id))
             ->whereHas('user.roles', fn ($q) => $q->where('name', 'manager'))
             ->with('user')
             ->first();

@@ -901,6 +901,16 @@ class HubtelPaymentService
             // RMP success = "0000", failure = "2001" and others
             $paymentStatus = $responseCode === '0000' ? 'completed' : 'failed';
 
+            // A part of what an order owes (D7). Its reference is ours, one per
+            // attempt (T5), and never a session token, so it is answered here,
+            // before the session lookup compares it with a uuid column (T7).
+            if (str_starts_with($clientReference, \App\Services\Payments\TakePayment::REFERENCE_PREFIX)) {
+                app(\App\Services\Payments\TakePayment::class)
+                    ->settlePrompt($clientReference, $paymentStatus === 'completed', $data['ExternalTransactionId'] ?? $transactionId, $payload);
+
+                return;
+            }
+
             // ── New flow: Try CheckoutSession first ──
             // Look up by exact session_token, transactionId, or by prefix match
             // (handles legacy truncated clientReference where UUID was cut to 32 chars)

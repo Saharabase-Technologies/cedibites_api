@@ -31,6 +31,9 @@ Route::middleware('password.reset')->group(function () {
     // the only endpoint that can record their work.
     Route::prefix('pos')->middleware('permission:create_orders')->group(function () {
         Route::post('orders', [PosOrderController::class, 'store']);
+        // Money on an order that owes, one part at a time (D7).
+        Route::post('orders/{order}/payments', [\App\Http\Controllers\Api\OrderPaymentController::class, 'store']);
+        Route::post('orders/{order}/payments/{payment}/check', [\App\Http\Controllers\Api\OrderPaymentController::class, 'check']);
         Route::post('verify-momo', [PosOrderController::class, 'verifyMomo']);
 
         // No stock, no sale — advisory reads so the till can grey an item out

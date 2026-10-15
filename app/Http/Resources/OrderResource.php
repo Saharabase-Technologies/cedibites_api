@@ -104,6 +104,11 @@ class OrderResource extends JsonResource
                 'amount' => (float) $payment->amount,
                 'transaction_id' => $payment->transaction_id,
                 'paid_at' => $payment->paid_at?->toIso8601String(),
+                // Who took it, how, and the cash handed over when there was
+                // change (D9). The receipt lists each part (D31).
+                'collected_by_name' => $payment->collector?->user?->name,
+                'source' => $payment->source,
+                'amount_tendered' => $payment->amount_tendered !== null ? (float) $payment->amount_tendered : null,
             ]),
             'payment' => $this->payments->first() ? [
                 'id' => $this->payments->first()->id,

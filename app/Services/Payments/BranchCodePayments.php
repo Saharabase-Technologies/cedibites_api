@@ -243,6 +243,11 @@ class BranchCodePayments
             return true;
         }
 
+        // A prompt the till sent for a part of what an order owes (T6).
+        if (str_starts_with($reference, TakePayment::REFERENCE_PREFIX)) {
+            return true;
+        }
+
         // session_token is a uuid column on Postgres, and comparing it with
         // Hubtel's own reference is an error there, not a false. SQLite, which
         // the tests run on, lets it through, so the guard has to be explicit.

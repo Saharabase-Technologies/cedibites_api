@@ -33,6 +33,7 @@ class HubtelIncomingPayment extends Model
         'taken_by',
         'returned_at',
         'returned_by',
+        'payment_id',
     ];
 
     protected function casts(): array
@@ -55,6 +56,12 @@ class HubtelIncomingPayment extends Model
     public function matchedOrder(): BelongsTo
     {
         return $this->belongsTo(Order::class, 'matched_order_id');
+    }
+
+    /** The payment row it became when a cashier linked it to an order. */
+    public function payment(): BelongsTo
+    {
+        return $this->belongsTo(Payment::class);
     }
 
     public function takenBy(): BelongsTo
