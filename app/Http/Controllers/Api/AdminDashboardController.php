@@ -53,7 +53,7 @@ class AdminDashboardController extends Controller
             ];
         });
         $liveOrders = Order::with(['customer.user', 'branch', 'assignedEmployee.user'])
-            ->paymentConfirmed()
+            ->confirmedOrPayLater()
             ->whereIn('status', AnalyticsQueryBuilder::ACTIVE_STATUSES)
             ->when($assignedBranchIds !== null, fn ($q) => $q->whereIn('branch_id', $assignedBranchIds ?: [-1]))
             ->latest()

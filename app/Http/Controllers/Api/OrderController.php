@@ -411,7 +411,8 @@ class OrderController extends Controller
         $branchId = $request->query('branch_id');
 
         $query = Order::with(['branch', 'customer.user', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
-            ->paymentConfirmed()
+            // Paid, or placed to pay later (D4).
+            ->confirmedOrPayLater()
             // Accepted belongs here. It was omitted while nothing opened in it
             // and every order passed through on its way to Preparing, so the
             // gap never showed. A till sale now opens in Accepted, and without
@@ -453,7 +454,8 @@ class OrderController extends Controller
         $branchId = $request->query('branch_id');
 
         $query = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media'])
-            ->paymentConfirmed()
+            // Paid, or placed to pay later (D4).
+            ->confirmedOrPayLater()
             ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
 

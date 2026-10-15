@@ -27,6 +27,13 @@ class OrderResource extends JsonResource
             'delivery_fee_collected_at' => $this->delivery_fee_collected_at?->toISOString(),
             'goods_amount' => (float) $this->goods_amount,
             'total_amount' => (float) $this->total_amount,
+            // Pay later (D1 to D7). paid_later is internal and never reaches
+            // the customer's copy of a receipt (D2).
+            'paid_later' => (bool) $this->paid_later,
+            'amount_paid' => $this->amount_paid,
+            'balance_due' => $this->balance_due,
+            'payment_state' => $this->payment_state,
+            'fully_paid_at' => $this->fully_paid_at?->toIso8601String(),
             'discount' => (float) $this->discount,
             'promo_id' => $this->promo_id,
             'promo_name' => $this->promo_name,

@@ -85,6 +85,11 @@ class Order extends Model
         'cancel_requested_at',
         'recorded_at',
         'manual_entry_reason',
+        // Pay later (D1 to D7). See the migration of 2026-10-15.
+        'paid_later',
+        'placed_unpaid_at',
+        'fully_paid_at',
+        'unpaid_alerted_at',
         'receipt_printed_at',
         'receipt_print_count',
         'receipt_verification_code',
@@ -109,6 +114,10 @@ class Order extends Model
             'cancelled_at' => 'datetime',
             'cancel_requested_at' => 'datetime',
             'recorded_at' => 'datetime',
+            'paid_later' => 'boolean',
+            'placed_unpaid_at' => 'datetime',
+            'fully_paid_at' => 'datetime',
+            'unpaid_alerted_at' => 'datetime',
             'receipt_printed_at' => 'datetime',
             'internal_notes' => 'array',
         ];
@@ -239,6 +248,44 @@ class Order extends Model
     public function scopePaymentConfirmed(Builder $query): void
     {
         $query->whereHas('payments', fn (Builder $q) => $q->whereIn('payment_status', ['completed', 'no_charge']));
+    }
+
+    /**
+     * Paid, or placed by staff with Pay later (D4).
+     *
+     * Placing a Pay later order is the staff member vouching for it, so the
+     * kitchen and the Order Manager see it at once. An online order waiting on
+     * its MoMo prompt is neither, and stays out.
+     */
+    public function scopeConfirmedOrPayLater(Builder $query): void
+    {
+        $query->where(fn (Builder $q) => $q->paymentConfirmed()->orWhere('paid_later', true));
+    }
+
+    /** The money in so far: completed payments only (D16). */
+    public function getAmountPaidAttribute(): float
+    {
+        return round((float) $this->payments->where('payment_status', 'completed')->sum('amount'), 2);
+    }
+
+    /** What is still owed on the goods. Never below zero. */
+    public function getBalanceDueAttribute(): float
+    {
+        if ($this->payments->contains('payment_status', 'no_charge')) {
+            return 0.0;
+        }
+
+        return max(0.0, round($this->goods_amount - $this->amount_paid, 2));
+    }
+
+    /** not_paid, part_paid or paid. */
+    public function getPaymentStateAttribute(): string
+    {
+        if ($this->balance_due <= 0) {
+            return 'paid';
+        }
+
+        return $this->amount_paid > 0 ? 'part_paid' : 'not_paid';
     }
 
     /**

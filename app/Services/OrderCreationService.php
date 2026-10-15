@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Domain\Inventory\Recipes\RecipeDeductionService;
 use App\Helpers\PhoneHelper;
 use App\Models\MenuItem;
 use App\Models\Order;
@@ -80,6 +81,9 @@ class OrderCreationService
             }
 
             $isManualEntry = (bool) $session->is_manual_entry;
+            // Placed with nothing paid (D1). The order is made now, with no
+            // payment row; payments are added as they come in.
+            $isPayLater = $session->payment_method === 'pay_later';
 
             // Items are decoded here rather than after the insert because the
             // order's opening status depends on what is on it: an order with
@@ -120,6 +124,8 @@ class OrderCreationService
                 'total_amount' => $session->total_amount,
                 'status' => $initialStatus,
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,
+                'paid_later' => $isPayLater,
+                'placed_unpaid_at' => $isPayLater ? now() : null,
                 'manual_entry_reason' => $isManualEntry ? $session->manual_entry_reason : null,
                 'momo_number' => $session->momo_number,
             ]);
@@ -144,6 +150,22 @@ class OrderCreationService
             $paymentMethod = $session->payment_method;
             $paymentStatus = $this->resolvePaymentStatus($paymentMethod);
 
+            if ($isPayLater) {
+                // The kitchen cooks it before any money comes in, so its stock
+                // goes now (T2). Deducting is once per order, so the payment
+                // that settles it later deducts nothing more.
+                DB::afterCommit(function () use ($order) {
+                    try {
+                        app(RecipeDeductionService::class)->deductForOrder($order);
+                    } catch (\Throwable $e) {
+                        Log::error('Recipe deduction failed for a Pay later order', [
+                            'order_id' => $order->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                });
+            }
+
             // The money is whoever rang the sale's, on the shift they were on
             // when they rang it. For a MoMo prompt paid later that is still the
             // cashier who sent it. An online customer's payment is nobody's.
@@ -163,19 +185,21 @@ class OrderCreationService
 
             // Restaurant collects the goods amount only; the third-party delivery
             // fee is collected by the rider on delivery (tracked via delivery_fee_status).
-            Payment::create($collector + [
-                'order_id' => $order->id,
-                'customer_id' => $customerId,
-                'payment_method' => $paymentMethod,
-                'payment_status' => $paymentStatus,
-                'amount' => $order->goods_amount,
-                'transaction_id' => $session->hubtel_transaction_id,
-                // Travels with the transaction id: together they say where to
-                // ask Hubtel about this payment.
-                'hubtel_account_number' => $session->hubtel_account_number,
-                'payment_gateway_response' => $session->payment_gateway_response,
-                'paid_at' => $paymentStatus === 'completed' ? ($isManualEntry ? $session->recorded_at : now()) : null,
-            ]);
+            if (! $isPayLater) {
+                Payment::create($collector + [
+                    'order_id' => $order->id,
+                    'customer_id' => $customerId,
+                    'payment_method' => $paymentMethod,
+                    'payment_status' => $paymentStatus,
+                    'amount' => $order->goods_amount,
+                    'transaction_id' => $session->hubtel_transaction_id,
+                    // Travels with the transaction id: together they say where to
+                    // ask Hubtel about this payment.
+                    'hubtel_account_number' => $session->hubtel_account_number,
+                    'payment_gateway_response' => $session->payment_gateway_response,
+                    'paid_at' => $paymentStatus === 'completed' ? ($isManualEntry ? $session->recorded_at : now()) : null,
+                ]);
+            }
 
             // Mark session as confirmed + link to order
             DB::table('checkout_sessions')
