@@ -401,3 +401,26 @@ describe('taking payment', function () {
             ->assertJsonPath('data.payment_status', 'completed');
     });
 });
+
+describe('refunding one part', function () {
+    it('keeps the stock taken when only one part of a paid order is refunded', function () {
+        $order = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        oweTake($this->rosina, $order, ['method' => 'cash', 'handed_over' => 5])->assertCreated();
+        oweTake($this->rosina, $order, ['method' => 'card', 'amount' => round($order->goods_amount - 5, 2)])->assertCreated();
+
+        $stock = $this->mock(RecipeDeductionService::class);
+        $stock->shouldNotReceive('reverseForOrder');
+
+        $order->payments()->where('payment_method', 'cash')->first()->update(['payment_status' => 'refunded', 'refunded_at' => now()]);
+    });
+
+    it('gives the stock back when the last paid part is refunded', function () {
+        $order = Order::findOrFail(owePlace($this->rosina, $this->branch)->json('order.id'));
+        oweTake($this->rosina, $order, ['method' => 'cash', 'handed_over' => $order->goods_amount])->assertCreated();
+
+        $stock = $this->mock(RecipeDeductionService::class);
+        $stock->shouldReceive('reverseForOrder')->once();
+
+        $order->payments()->sole()->update(['payment_status' => 'refunded', 'refunded_at' => now()]);
+    });
+});

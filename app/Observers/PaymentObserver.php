@@ -62,7 +62,14 @@ class PaymentObserver
             $this->recordOnShift($payment);
             $this->markFullyPaid($payment);
         } elseif ($payment->payment_status === 'refunded') {
-            $this->reverseStock($payment);
+            // One part refunded on an order that keeps going is not the food
+            // coming back (T3). Stock returns only when the order is
+            // cancelled, or nothing paid is left on it.
+            $order = $payment->order()->with('payments')->first();
+
+            if ($order && ($order->status === 'cancelled' || $order->amount_paid <= 0)) {
+                $this->reverseStock($payment);
+            }
         }
     }
 
