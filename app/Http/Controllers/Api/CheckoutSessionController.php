@@ -669,9 +669,9 @@ class CheckoutSessionController extends Controller
      * GET /pos/branch-code-payments?branch_id= — what customers paid by
      * dialling this branch's code today, newest first.
      *
-     * Only payments Hubtel's status check has called Paid are in here. The
-     * payer's number is cut to its last four digits: enough to match the
-     * customer in front of the till, and no more.
+     * Only payments Hubtel's status check has called Paid are in here. Each
+     * shows the payer's whole number and the name it is registered to (D13),
+     * so the cashier can tell which customer at the counter it was.
      */
     public function posBranchCodePayments(Request $request): JsonResponse
     {
@@ -694,7 +694,8 @@ class CheckoutSessionController extends Controller
                 'id' => $p->id,
                 'amount' => (float) $p->amount,
                 'paid_at' => $p->paid_at->toIso8601String(),
-                'payer_last_four' => $p->payerLastFour(),
+                'payer_number' => $p->payerLocalNumber(),
+                'payer_name' => $p->payer_name,
                 'network_transaction_id' => $p->network_transaction_id,
             ])->values(),
         ]);

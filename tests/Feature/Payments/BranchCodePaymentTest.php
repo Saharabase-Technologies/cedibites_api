@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\Payments\BranchCodePayments;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RoleSeeder;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
@@ -99,9 +100,23 @@ function bcPost(string $account = BC_LAKESIDE, array $data = [], string $code = 
     ])->assertOk();
 }
 
-/** Hubtel's status check answering Paid, as it did for that payment. */
-function bcHubtelSaysPaid(string $reference = BC_REFERENCE): void
+/**
+ * Hubtel's status check answering Paid, as it did for that payment, and its
+ * name lookup answering for the payer's number. A name of false makes the
+ * lookup fail; null makes it say the number is not registered.
+ */
+function bcHubtelSaysPaid(string $reference = BC_REFERENCE, string|false|null $name = 'AMA MENSAH'): void
 {
+    Http::fake(['rnv.hubtel.com/*' => match (true) {
+        $name === false => Http::response(['message' => 'Internal error'], 500),
+        $name === null => Http::response(['responseCode' => '2001', 'message' => 'Not registered', 'data' => null]),
+        default => Http::response([
+            'responseCode' => '0000',
+            'message' => 'Success',
+            'data' => ['isRegistered' => true, 'name' => $name, 'status' => 'active', 'profile' => null],
+        ]),
+    }]);
+
     Http::fake(['api-txnstatus.hubtel.com/*' => Http::response([
         'message' => 'Successful',
         'responseCode' => '0000',
@@ -158,12 +173,54 @@ describe('checking what Hubtel posts', function () {
             ->and((float) $payment->amount)->toBe(25.0)
             ->and((float) $payment->amount_charged)->toBe(25.5)
             ->and($payment->payer_number)->toBe('233247879103')
+            ->and($payment->payer_name)->toBe('AMA MENSAH')
             ->and($payment->network_transaction_id)->toBe('90967196991')
             ->and(HubtelPaymentNotification::sole()->outcome)->toBe('paid');
 
         // The company key reaches every branch's payments.
         Http::assertSent(fn (Request $r) => str_contains($r->url(), 'clientReference=')
             && $r->header('Authorization')[0] === 'Basic '.base64_encode('company-id:company-secret'));
+    });
+
+    it('asks Hubtel whose name the paying number is registered to', function () {
+        bcLakeside();
+        bcHubtelSaysPaid();
+
+        bcPost();
+
+        Http::assertSent(fn (Request $r) => str_contains($r->url(), 'rnv.hubtel.com')
+            && str_contains($r->url(), 'customerMsisdn=0247879103')
+            && str_contains($r->url(), 'channel=mtn-gh'));
+    });
+
+    it('keeps the payment without a name when the lookup fails', function () {
+        bcLakeside();
+        bcHubtelSaysPaid(name: false);
+
+        bcPost();
+
+        expect(HubtelIncomingPayment::sole()->payer_name)->toBeNull()
+            ->and(HubtelPaymentNotification::sole()->outcome)->toBe('paid');
+    });
+
+    it('keeps the payment without a name when Hubtel cannot be reached for it', function () {
+        bcLakeside();
+        Http::fake(['rnv.hubtel.com/*' => fn () => throw new ConnectionException('Connection timed out')]);
+        bcHubtelSaysPaid();
+
+        bcPost();
+
+        expect(HubtelIncomingPayment::sole()->payer_name)->toBeNull()
+            ->and(HubtelPaymentNotification::sole()->outcome)->toBe('paid');
+    });
+
+    it('keeps the payment without a name when the number is not registered', function () {
+        bcLakeside();
+        bcHubtelSaysPaid(name: null);
+
+        bcPost();
+
+        expect(HubtelIncomingPayment::sole()->payer_name)->toBeNull();
     });
 
     it('leaves a payment the till started alone', function () {
@@ -249,8 +306,8 @@ describe('the till', function () {
         $this->cashier = $user->fresh();
     });
 
-    it('lists today\'s payments at the branch, with the last four digits only', function () {
-        $today = bcIncoming($this->branch);
+    it('lists today\'s payments at the branch, with the payer\'s name and whole number', function () {
+        $today = bcIncoming($this->branch, ['payer_name' => 'AMA MENSAH']);
         bcIncoming($this->branch, ['paid_at' => now()->subDay()]);
         bcIncoming(bcBranch('East Legon'));
 
@@ -260,8 +317,19 @@ describe('the till', function () {
 
         expect($response->json('data'))->toHaveCount(1)
             ->and($response->json('data.0.id'))->toBe($today->id)
-            ->and($response->json('data.0.payer_last_four'))->toBe('9103')
-            ->and($response->getContent())->not->toContain('233247879103');
+            ->and($response->json('data.0.payer_number'))->toBe('0247879103')
+            ->and($response->json('data.0.payer_name'))->toBe('AMA MENSAH');
+    });
+
+    it('lists a payment whose name could not be found with its number alone', function () {
+        bcIncoming($this->branch);
+
+        $response = $this->actingAs($this->cashier)
+            ->getJson('/v1/pos/branch-code-payments?branch_id='.$this->branch->id)
+            ->assertOk();
+
+        expect($response->json('data.0.payer_number'))->toBe('0247879103')
+            ->and($response->json('data.0.payer_name'))->toBeNull();
     });
 
     it('does not show one branch\'s payments to another branch\'s cashier', function () {
@@ -273,14 +341,15 @@ describe('the till', function () {
     });
 
     it('answers a check from the list without asking Hubtel', function () {
-        bcIncoming($this->branch, ['network_transaction_id' => '90967196991']);
+        bcIncoming($this->branch, ['network_transaction_id' => '90967196991', 'payer_name' => 'AMA MENSAH']);
         Http::fake();
 
         bcCheck('9096 7196 991')
             ->assertOk()
             ->assertJsonPath('data.outcome', 'paid')
             ->assertJsonPath('data.amount', 25)
-            ->assertJsonPath('data.payer_last_four', '9103')
+            ->assertJsonPath('data.payer_number', '0247879103')
+            ->assertJsonPath('data.payer_name', 'AMA MENSAH')
             ->assertJsonPath('data.branch', 'Lakeside')
             ->assertJsonPath('data.first_checked', null);
 
@@ -295,7 +364,8 @@ describe('the till', function () {
             ->assertOk()
             ->assertJsonPath('data.outcome', 'paid')
             ->assertJsonPath('data.amount', 25)
-            ->assertJsonPath('data.payer_last_four', '9103');
+            ->assertJsonPath('data.payer_number', '0247879103')
+            ->assertJsonPath('data.payer_name', 'AMA MENSAH');
 
         Http::assertSent(fn (Request $r) => str_contains($r->url(), 'networkTransactionId=90967196991'));
     });
@@ -308,7 +378,12 @@ describe('the till', function () {
         bcCheck('90969345699')
             ->assertOk()
             ->assertJsonPath('data.outcome', 'ours')
-            ->assertJsonPath('data.order_number', 'AJ664');
+            ->assertJsonPath('data.order_number', 'AJ664')
+            ->assertJsonPath('data.payer_number', null)
+            ->assertJsonPath('data.payer_name', null);
+
+        // Our own reference holds no number, so there is nothing to look up.
+        Http::assertNotSent(fn (Request $r) => str_contains($r->url(), 'rnv.hubtel.com'));
     });
 
     it('says plainly when Hubtel has no such payment', function () {

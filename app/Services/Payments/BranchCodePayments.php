@@ -84,6 +84,11 @@ class BranchCodePayments
         $checked = $answer['data'];
         $branchId = $notification->branch_id
             ?? Branch::where('hubtel_account_number', $notification->account_number)->value('id');
+        $payerNumber = $this->payerNumber($reference);
+
+        // Asked before the row is written, so the till never lists the
+        // payment without its name and then has it change under the cashier.
+        $payerName = $this->nameFor($payerNumber);
 
         try {
             HubtelIncomingPayment::create([
@@ -92,7 +97,8 @@ class BranchCodePayments
                 'client_reference' => $reference,
                 'network_transaction_id' => $checked['externalTransactionId'] ?? $data['ExternalTransactionId'] ?? null,
                 'hubtel_transaction_id' => $checked['transactionId'] ?? null,
-                'payer_number' => $this->payerNumber($reference),
+                'payer_number' => $payerNumber,
+                'payer_name' => $payerName,
                 // Hubtel's figures, not the post's.
                 'amount' => $checked['amountAfterCharges'] ?? $checked['amount'],
                 'amount_charged' => $checked['amount'] ?? null,
@@ -127,7 +133,7 @@ class BranchCodePayments
      * shown for a second sale says when, where and by whom it was checked
      * first.
      *
-     * @return array{outcome: string, amount: ?float, paid_at: ?string, payer_last_four: ?string, branch: ?string, order_number: ?string, first_checked: ?array}
+     * @return array{outcome: string, amount: ?float, paid_at: ?string, payer_number: ?string, payer_name: ?string, branch: ?string, order_number: ?string, first_checked: ?array}
      */
     public function check(string $transactionId, Branch $branch, Employee $employee): array
     {
@@ -164,7 +170,7 @@ class BranchCodePayments
     /** What we or Hubtel know about one transaction ID. */
     private function ask(string $transactionId): array
     {
-        $blank = ['amount' => null, 'paid_at' => null, 'payer_last_four' => null, 'branch' => null, 'order_number' => null];
+        $blank = ['amount' => null, 'paid_at' => null, 'payer_number' => null, 'payer_name' => null, 'branch' => null, 'order_number' => null];
 
         $known = HubtelIncomingPayment::with('branch')->where('network_transaction_id', $transactionId)->first();
 
@@ -173,7 +179,8 @@ class BranchCodePayments
                 'outcome' => 'paid',
                 'amount' => (float) $known->amount,
                 'paid_at' => $known->paid_at->toIso8601String(),
-                'payer_last_four' => $known->payerLastFour(),
+                'payer_number' => $known->payerLocalNumber(),
+                'payer_name' => $known->payer_name,
                 'branch' => $known->branch?->name,
                 'order_number' => null,
             ];
@@ -201,12 +208,15 @@ class BranchCodePayments
 
         $reference = (string) ($data['clientReference'] ?? '');
         $ours = $reference !== '' && $this->isOurs($reference);
+        // A till prompt's reference is our own token and holds no number.
+        $payerNumber = $ours ? null : $this->payerNumber($reference);
 
         return [
             'outcome' => $ours ? 'ours' : 'paid',
             'amount' => (float) ($data['amountAfterCharges'] ?? $data['amount'] ?? 0),
             'paid_at' => Carbon::parse($data['date'] ?? 'now')->toIso8601String(),
-            'payer_last_four' => ($number = $this->payerNumber($reference)) ? substr($number, -4) : null,
+            'payer_number' => HubtelIncomingPayment::localNumber($payerNumber),
+            'payer_name' => $this->nameFor($payerNumber),
             'branch' => null,
             'order_number' => $ours ? $this->orderFor($reference) : null,
         ];
@@ -245,6 +255,31 @@ class BranchCodePayments
     public function payerNumber(string $reference): ?string
     {
         return preg_match('/_(233\d{9})_/', $reference, $m) ? $m[1] : null;
+    }
+
+    /**
+     * The name a MoMo number is registered to, by Hubtel's lookup: the same
+     * one behind the till's Verify Number button.
+     *
+     * The name is only a check beside the payment (D12). A lookup that fails,
+     * or a number Hubtel does not know, leaves it blank and never holds the
+     * payment back.
+     */
+    private function nameFor(?string $number): ?string
+    {
+        if ($number === null) {
+            return null;
+        }
+
+        try {
+            $name = $this->hubtel->verifyMomoNumber($number)['name'] ?? null;
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $name = is_string($name) ? trim($name) : '';
+
+        return $name === '' ? null : mb_substr($name, 0, 120);
     }
 
     /** The order a payment we started belongs to, by its session or its number. */

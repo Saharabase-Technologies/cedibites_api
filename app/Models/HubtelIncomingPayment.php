@@ -18,6 +18,7 @@ class HubtelIncomingPayment extends Model
         'network_transaction_id',
         'hubtel_transaction_id',
         'payer_number',
+        'payer_name',
         'amount',
         'amount_charged',
         'paid_at',
@@ -40,9 +41,24 @@ class HubtelIncomingPayment extends Model
         return $this->belongsTo(Branch::class);
     }
 
-    /** The last four digits, which is all the till needs to match a customer. */
-    public function payerLastFour(): ?string
+    /**
+     * The payer's number as people write it: 0247879103.
+     *
+     * The till shows it whole with the MoMo name (D13), so the cashier can
+     * match the customer standing there to the payment.
+     */
+    public function payerLocalNumber(): ?string
     {
-        return $this->payer_number ? substr($this->payer_number, -4) : null;
+        return self::localNumber($this->payer_number);
+    }
+
+    /** 233247879103 to 0247879103. Anything else comes back as it was. */
+    public static function localNumber(?string $number): ?string
+    {
+        if ($number === null || $number === '') {
+            return null;
+        }
+
+        return preg_match('/^233(\d{9})$/', $number, $m) ? '0'.$m[1] : $number;
     }
 }
