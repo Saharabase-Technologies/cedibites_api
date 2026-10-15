@@ -271,7 +271,8 @@ class EmployeeOrderController extends Controller
                 return true;
             }
 
-            if (! $locked->canTransitionTo($validated['status'])) {
+            // Held while its cancel is asked, as an order is (D45).
+            if ($locked->cancelAsked() || ! $locked->canTransitionTo($validated['status'])) {
                 return false;
             }
 
@@ -281,7 +282,11 @@ class EmployeeOrderController extends Controller
         });
 
         if (! $updated) {
-            return response()->error("This round cannot move from {$round->fresh()->status} to {$validated['status']}.", 422);
+            $fresh = $round->fresh();
+
+            return response()->error($fresh->cancelAsked()
+                ? "Round {$fresh->number} is waiting on a cancel."
+                : "This round cannot move from {$fresh->status} to {$validated['status']}.", 422);
         }
 
         $order->refresh();

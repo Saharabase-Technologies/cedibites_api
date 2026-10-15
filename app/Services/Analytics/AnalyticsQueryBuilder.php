@@ -128,6 +128,7 @@ class AnalyticsQueryBuilder
             })
             ->where('orders.status', '!=', 'cancelled');
 
+        OrderItem::leaveOutCancelledRounds($query);
         $this->applyFilters($query, $filters, 'orders');
 
         return $query;

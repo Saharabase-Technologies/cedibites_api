@@ -392,6 +392,11 @@ Route::prefix('admin')->group(function () {
         Route::post('orders/{order}/approve-cancel', [CancelRequestController::class, 'approveCancel']);
         Route::post('orders/{order}/reject-cancel', [CancelRequestController::class, 'rejectCancel']);
         Route::post('orders/{order}/cancel', [CancelRequestController::class, 'directCancel']);
+        // One round of added items, on its own (D45).
+        Route::get('round-cancel-requests', [\App\Http\Controllers\Api\RoundCancelController::class, 'index']);
+        Route::post('orders/{order}/rounds/{round}/approve-cancel', [\App\Http\Controllers\Api\RoundCancelController::class, 'approve'])->scopeBindings();
+        Route::post('orders/{order}/rounds/{round}/reject-cancel', [\App\Http\Controllers\Api\RoundCancelController::class, 'reject'])->scopeBindings();
+        Route::post('orders/{order}/rounds/{round}/cancel', [\App\Http\Controllers\Api\RoundCancelController::class, 'directCancel'])->scopeBindings();
         Route::post('orders/{order}/notes', [\App\Http\Controllers\Api\OrderNoteController::class, 'store']);
     });
 

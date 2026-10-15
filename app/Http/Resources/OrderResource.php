@@ -40,6 +40,8 @@ class OrderResource extends JsonResource
             'amount_paid' => $this->amount_paid,
             'balance_due' => $this->balance_due,
             'payment_state' => $this->payment_state,
+            // Paid more than it now costs, after a round was cancelled (D45).
+            'to_give_back' => $this->to_give_back,
             'fully_paid_at' => $this->fully_paid_at?->toIso8601String(),
             'kitchen_slip_printed_at' => $this->kitchen_slip_printed_at?->toIso8601String(),
             // When it last started owing; null when nothing is owed.
@@ -55,6 +57,10 @@ class OrderResource extends JsonResource
                 'added_by_name' => $round->addedBy?->user?->name,
                 'receipt_printed_at' => $round->receipt_printed_at?->toIso8601String(),
                 'kitchen_slip_printed_at' => $round->kitchen_slip_printed_at?->toIso8601String(),
+                // Its own cancel (D45): asked for, and then done.
+                'cancel_requested_at' => $round->cancel_requested_at?->toIso8601String(),
+                'cancel_request_reason' => $round->cancel_request_reason,
+                'cancelled_at' => $round->cancelled_at?->toIso8601String(),
                 'created_at' => $round->created_at?->toIso8601String(),
                 'updated_at' => $round->updated_at?->toIso8601String(),
             ]),

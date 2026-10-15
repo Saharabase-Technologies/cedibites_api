@@ -264,6 +264,37 @@ class TakePayment
         return $payment;
     }
 
+    /**
+     * Cash handed back to the customer from the till, when a cancelled round
+     * left more paid than the order now costs (D45).
+     *
+     * Written as a negative cash payment against whoever hands it over, on
+     * their shift, so their cash count is held to it. The payment it came out
+     * of stays on record as it was. Without the payment's events: it is not a
+     * sale, so it puts nothing on a shift and takes no stock.
+     */
+    public function giveBack(Order $order, Employee $by): Payment
+    {
+        return DB::transaction(function () use ($order, $by) {
+            $locked = Order::with('payments')->whereKey($order->id)->lockForUpdate()->first();
+
+            if (! $locked || $locked->to_give_back <= 0) {
+                throw new TakePaymentRefused("Nothing is owed back on {$order->order_number}.", 409);
+            }
+
+            $amount = $locked->to_give_back;
+
+            return Payment::withoutEvents(fn () => Payment::create($this->stamp($order, $by, PaymentCollector::SOURCE_CASH_BACK) + [
+                'order_id' => $order->id,
+                'customer_id' => $order->customer_id,
+                'payment_method' => 'cash',
+                'payment_status' => 'completed',
+                'amount' => -$amount,
+                'paid_at' => now(),
+            ]));
+        });
+    }
+
     /** Ask Hubtel about a prompt that is still waiting, in case its callback was lost. */
     public function checkPrompt(Payment $payment): Payment
     {

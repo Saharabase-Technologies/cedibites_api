@@ -55,4 +55,17 @@ class OrderItem extends Model
     {
         return $this->belongsTo(MenuItemOption::class);
     }
+
+    /**
+     * Leave out the lines of a round cancelled on its own (D45). They stay on
+     * the order as a record, and were never sold. For any item count or item
+     * sales figure; $table is the alias the query gives order_items.
+     */
+    public static function leaveOutCancelledRounds($query, string $table = 'order_items')
+    {
+        return $query->where(fn ($q) => $q->whereNull("{$table}.order_round_id")
+            ->orWhereNotExists(fn ($r) => $r->from('order_rounds')
+                ->whereColumn('order_rounds.id', "{$table}.order_round_id")
+                ->where('order_rounds.status', 'cancelled')));
+    }
 }

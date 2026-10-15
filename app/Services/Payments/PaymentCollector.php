@@ -33,6 +33,12 @@ class PaymentCollector
     public const SOURCE_BRANCH_CODE_LINK = 'branch_code_link';
 
     /**
+     * Cash handed back to the customer from the till, written as a negative
+     * cash payment against whoever handed it over (D45).
+     */
+    public const SOURCE_CASH_BACK = 'cash_back';
+
+    /**
      * The columns for a payment taken by this employee at this branch.
      *
      * $at is when they took it. For a MoMo prompt that is when the cashier

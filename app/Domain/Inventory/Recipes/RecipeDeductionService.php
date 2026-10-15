@@ -156,11 +156,26 @@ class RecipeDeductionService
     {
         $roundIds = OrderRound::where('order_id', $order->id)->pluck('id');
 
+        $this->reverse(fn ($q) => $q
+            ->where(fn ($o) => $o->where('reference_type', 'order')->where('reference_id', $order->id))
+            ->orWhere(fn ($r) => $r->where('reference_type', 'order_round')->whereIn('reference_id', $roundIds)));
+    }
+
+    /**
+     * Give back one round's stock, when the round alone is cancelled (D45).
+     * The rest of the order is still being eaten, so nothing else moves.
+     */
+    public function reverseForRound(OrderRound $round): void
+    {
+        $this->reverse(fn ($q) => $q->where('reference_type', 'order_round')->where('reference_id', $round->id));
+    }
+
+    /** Reverse each sale movement the scope picks out, once. */
+    private function reverse(\Closure $scope): void
+    {
         $sales = StockMovement::query()
             ->where('movement_type', 'sale')
-            ->where(fn ($q) => $q
-                ->where(fn ($o) => $o->where('reference_type', 'order')->where('reference_id', $order->id))
-                ->orWhere(fn ($r) => $r->where('reference_type', 'order_round')->whereIn('reference_id', $roundIds)))
+            ->where($scope)
             ->whereNotIn('id', StockMovement::query()
                 ->where('movement_type', 'reversal')
                 ->whereNotNull('parent_movement_id')

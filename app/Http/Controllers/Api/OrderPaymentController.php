@@ -61,6 +61,27 @@ class OrderPaymentController extends Controller
     }
 
     /**
+     * POST /pos/orders/{order}/give-back: the cashier hands back, in cash,
+     * what a cancelled round left overpaid (D45). Recorded against them.
+     */
+    public function giveBack(Request $request, Order $order, TakePayment $take): JsonResponse
+    {
+        $employee = $this->cashier($request, $order);
+
+        try {
+            $payment = $take->giveBack($order, $employee);
+        } catch (TakePaymentRefused $refused) {
+            return response()->json(['message' => $refused->getMessage()], $refused->status);
+        }
+
+        return response()->json(['data' => [
+            'payment_id' => $payment->id,
+            'given_back' => round(-1 * (float) $payment->amount, 2),
+            'order' => new OrderResource($order->fresh()),
+        ]], 201);
+    }
+
+    /**
      * POST /pos/orders/{order}/payments/{payment}/check: where a part stands.
      *
      * Read from our own record by default, which Hubtel's callback updates, so

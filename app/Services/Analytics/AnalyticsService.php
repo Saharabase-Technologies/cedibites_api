@@ -74,11 +74,11 @@ class AnalyticsService
 
         // Average items per order + supporting stats
         $revenueOrderIds = (clone $this->queryBuilder->revenueOrders($filters))->select('id');
-        $totalItems = \App\Models\OrderItem::whereIn('order_id', $revenueOrderIds)->sum('quantity');
+        $totalItems = \App\Models\OrderItem::leaveOutCancelledRounds(\App\Models\OrderItem::whereIn('order_id', $revenueOrderIds))->sum('quantity');
         $avgItemsPerOrder = $revenueOrderCount > 0 ? round($totalItems / $revenueOrderCount, 1) : 0;
 
         // Items-per-order distribution
-        $itemCounts = \App\Models\OrderItem::whereIn('order_id', $revenueOrderIds)
+        $itemCounts = \App\Models\OrderItem::leaveOutCancelledRounds(\App\Models\OrderItem::whereIn('order_id', $revenueOrderIds))
             ->select('order_id', DB::raw('SUM(quantity) as item_count'))
             ->groupBy('order_id')
             ->get();

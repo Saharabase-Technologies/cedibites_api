@@ -34,6 +34,8 @@ Route::middleware('password.reset')->group(function () {
         // Money on an order that owes, one part at a time (D7).
         Route::post('orders/{order}/payments', [\App\Http\Controllers\Api\OrderPaymentController::class, 'store']);
         Route::post('orders/{order}/payments/{payment}/check', [\App\Http\Controllers\Api\OrderPaymentController::class, 'check']);
+        // Cash handed back after a round paid inside a bigger payment was cancelled (D45).
+        Route::post('orders/{order}/give-back', [\App\Http\Controllers\Api\OrderPaymentController::class, 'giveBack']);
         Route::post('verify-momo', [PosOrderController::class, 'verifyMomo']);
 
         // No stock, no sale — advisory reads so the till can grey an item out
@@ -101,6 +103,10 @@ Route::middleware('password.reset')->group(function () {
         // through the kitchen, and the call centre needs exactly one of the two.
         // See Permission::OrderCancelRequest.
         Route::post('orders/{order}/request-cancel', [\App\Http\Controllers\Api\CancelRequestController::class, 'requestCancel'])
+            ->middleware('permission:order.cancel.request');
+        // One round of added items, on its own (D45).
+        Route::post('orders/{order}/rounds/{round}/request-cancel', [\App\Http\Controllers\Api\RoundCancelController::class, 'requestCancel'])
+            ->scopeBindings()
             ->middleware('permission:order.cancel.request');
     });
 });

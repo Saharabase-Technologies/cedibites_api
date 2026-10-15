@@ -312,6 +312,16 @@ class Order extends Model
         return max(0.0, round($this->goods_amount - $this->amount_paid, 2));
     }
 
+    /**
+     * Money to hand back to the customer: more is paid than the order now
+     * costs, because a round paid inside a bigger payment was cancelled
+     * (D45). Cleared by the cashier who gives it back.
+     */
+    public function getToGiveBackAttribute(): float
+    {
+        return max(0.0, round($this->amount_paid - $this->goods_amount, 2));
+    }
+
     /** not_paid, part_paid or paid. */
     public function getPaymentStateAttribute(): string
     {

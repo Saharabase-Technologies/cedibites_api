@@ -52,6 +52,7 @@ class TrendingResolver implements SmartCategoryResolver
                     ->whereIn('payments.payment_status', ['completed', 'no_charge']);
             })
             ->where('orders.status', '!=', 'cancelled')
+            ->where(fn ($q) => \App\Models\OrderItem::leaveOutCancelledRounds($q))
             ->where('orders.branch_id', $branchId)
             ->whereBetween('orders.created_at', [$from, $to])
             ->where('menu_items.is_available', true)

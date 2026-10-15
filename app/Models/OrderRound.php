@@ -16,17 +16,27 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class OrderRound extends Model
 {
-    /** The kitchen statuses a round moves through, in order. */
+    /**
+     * The kitchen statuses a round moves through, in order. A round is
+     * cancelled on its own (D45), up to the pass, as an order is.
+     */
     public const VALID_TRANSITIONS = [
-        'received' => ['accepted', 'preparing'],
-        'accepted' => ['preparing'],
-        'preparing' => ['ready'],
-        'ready' => ['completed'],
+        'received' => ['accepted', 'preparing', 'cancelled'],
+        'accepted' => ['preparing', 'cancelled'],
+        'preparing' => ['ready', 'cancelled'],
+        'ready' => ['completed', 'cancelled'],
         'completed' => [],
+        'cancelled' => [],
     ];
 
     /** A round still in the kitchen's or the pass's hands. */
     public const LIVE_STATUSES = ['received', 'accepted', 'preparing', 'ready'];
+
+    /**
+     * Staff may ask for a round's cancel until it is ready, the same window
+     * as an order's (D45). An admin may cancel one outright up to the pass.
+     */
+    public const CANCEL_REQUEST_STATUSES = ['received', 'accepted', 'preparing'];
 
     protected $fillable = [
         'order_id',
@@ -39,6 +49,12 @@ class OrderRound extends Model
         'checkout_session_id',
         'receipt_printed_at',
         'kitchen_slip_printed_at',
+        'cancel_requested_by',
+        'cancel_request_reason',
+        'cancel_requested_at',
+        'cancelled_by',
+        'cancelled_reason',
+        'cancelled_at',
     ];
 
     protected function casts(): array
@@ -48,6 +64,8 @@ class OrderRound extends Model
             'paid_later' => 'boolean',
             'receipt_printed_at' => 'datetime',
             'kitchen_slip_printed_at' => 'datetime',
+            'cancel_requested_at' => 'datetime',
+            'cancelled_at' => 'datetime',
             'subtotal' => 'decimal:2',
             'total' => 'decimal:2',
         ];
@@ -71,5 +89,21 @@ class OrderRound extends Model
     public function addedBy(): BelongsTo
     {
         return $this->belongsTo(Employee::class, 'added_by');
+    }
+
+    public function cancelRequestedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancel_requested_by');
+    }
+
+    public function cancelledBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by');
+    }
+
+    /** A cancel has been asked for and not yet answered. */
+    public function cancelAsked(): bool
+    {
+        return $this->cancel_requested_at !== null && $this->status !== 'cancelled';
     }
 }

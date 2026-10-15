@@ -175,9 +175,9 @@ class FinanceLedgerService
         $option = 'COALESCE(oi.menu_item_option_id, 0)';
         $keys = "{$month}, o.branch_id, o.order_source, o.order_type, p.payment_method, {$option}";
 
-        return $this->paidOrders($filters)
+        return \App\Models\OrderItem::leaveOutCancelledRounds($this->paidOrders($filters)
             ->join('order_items as oi', 'oi.order_id', '=', 'o.id')
-            ->whereNull('oi.deleted_at')
+            ->whereNull('oi.deleted_at'), 'oi')
             ->selectRaw("{$month} as month, o.branch_id, o.order_source, o.order_type, p.payment_method")
             ->selectRaw("{$option} as option_id, SUM(oi.quantity) as quantity, SUM(oi.subtotal) as sales")
             ->groupByRaw($keys)

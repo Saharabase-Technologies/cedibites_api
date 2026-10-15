@@ -28,6 +28,7 @@ class OrderAgainResolver implements SmartCategoryResolver
                     ->whereIn('payments.payment_status', ['completed', 'no_charge']);
             })
             ->where('orders.status', '!=', 'cancelled')
+            ->where(fn ($q) => \App\Models\OrderItem::leaveOutCancelledRounds($q))
             ->where('orders.branch_id', $branchId)
             ->where('orders.customer_id', $customerId)
             ->where('menu_items.is_available', true)
