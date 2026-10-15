@@ -6,10 +6,12 @@ use App\Models\Branch;
 use App\Models\BranchRevenueTarget;
 use App\Models\CheckoutSession;
 use App\Models\Customer;
+use App\Models\Employee;
 use App\Models\MenuItem;
 use App\Models\MenuItemOption;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderRound;
 use App\Models\OrderStatusHistory;
 use App\Models\Payment;
 use Carbon\Carbon;
@@ -391,10 +393,18 @@ class AnalyticsService
     // ─── F. STAFF SALES METRICS ─────────────────────────────────────
 
     /**
-     * Per-staff sales breakdown by payment method for a given date and branch.
+     * Per-staff sales and money for a given date and branch (D44).
      *
-     * Uses DB-level conditional aggregation on payments.amount (not orders.total_amount)
-     * to avoid double-counting when an order has multiple payment records.
+     * Two different things, kept apart:
+     *  - Sales, what each person rang up: an order's first items count for
+     *    whoever placed it, each round added later for whoever added it.
+     *  - Money, the method columns: each payment counts for whoever took it
+     *    (payments.collected_by), as My Sales counts it. A payment with no
+     *    collector (older rows, a customer paying online) counts for whoever
+     *    the order is assigned to, as every payment did before.
+     *
+     * Uses payments.amount (not orders.total_amount) for money, so an order
+     * with several payments is never counted twice.
      *
      * Payment grouping:
      *  - MoMo:        mobile_money
@@ -405,26 +415,24 @@ class AnalyticsService
      */
     public function getStaffSalesMetrics(array $filters = []): array
     {
+        $taker = 'COALESCE(payments.collected_by, orders.assigned_employee_id, 0)';
+
         // Build from scratch with explicit table prefixes to avoid
-        // "ambiguous column" errors when joining payments/employees/users.
+        // "ambiguous column" errors when joining payments.
         $query = Order::query()
             ->join('payments', function ($join) {
                 $join->on('payments.order_id', '=', 'orders.id')
                     ->whereIn('payments.payment_status', ['completed', 'no_charge']);
             })
-            ->leftJoin('employees', 'orders.assigned_employee_id', '=', 'employees.id')
-            ->leftJoin('users', 'employees.user_id', '=', 'users.id')
             ->where('orders.status', '!=', 'cancelled')
             ->whereNull('orders.deleted_at');
 
         // Apply filters with explicit orders. prefix
         $this->queryBuilder->applyFilters($query, $filters, 'orders');
 
-        $rows = $query
+        $money = $query
             ->select(
-                DB::raw('COALESCE(orders.assigned_employee_id, 0) as employee_id'),
-                DB::raw("COALESCE(users.name, 'Unassigned') as staff_name"),
-                DB::raw('COUNT(DISTINCT orders.id) as total_orders'),
+                DB::raw("{$taker} as employee_id"),
                 // MoMo (uses payments.amount to avoid double-count)
                 DB::raw("SUM(CASE WHEN payments.payment_method = 'mobile_money' AND payments.payment_status = 'completed' THEN payments.amount ELSE 0 END) as momo_total"),
                 DB::raw("COUNT(DISTINCT CASE WHEN payments.payment_method = 'mobile_money' AND payments.payment_status = 'completed' THEN orders.id END) as momo_count"),
@@ -441,29 +449,78 @@ class AnalyticsService
                 DB::raw("SUM(CASE WHEN payments.payment_status = 'no_charge' THEN payments.amount ELSE 0 END) as no_charge_total"),
                 DB::raw("COUNT(DISTINCT CASE WHEN payments.payment_status = 'no_charge' THEN orders.id END) as no_charge_count"),
             )
-            ->groupBy(DB::raw('COALESCE(orders.assigned_employee_id, 0)'), DB::raw("COALESCE(users.name, 'Unassigned')"))
-            ->orderByDesc(DB::raw("SUM(CASE WHEN payments.payment_status = 'completed' THEN payments.amount ELSE 0 END)"))
-            ->get();
+            ->groupBy(DB::raw($taker))
+            ->get()
+            ->keyBy(fn ($r) => (int) $r->employee_id);
 
-        return $rows->map(fn ($r) => [
-            'employee_id' => $r->employee_id,
-            'staff_name' => $r->staff_name,
-            'total_orders' => (int) $r->total_orders,
-            'momo_total' => round((float) $r->momo_total, 2),
-            'momo_count' => (int) $r->momo_count,
-            'cash_total' => round((float) $r->cash_total, 2),
-            'cash_count' => (int) $r->cash_count,
-            'manual_momo_total' => round((float) $r->manual_momo_total, 2),
-            'manual_momo_count' => (int) $r->manual_momo_count,
-            'card_total' => round((float) $r->card_total, 2),
-            'card_count' => (int) $r->card_count,
-            'no_charge_total' => round((float) $r->no_charge_total, 2),
-            'no_charge_count' => (int) $r->no_charge_count,
-            'total_revenue' => round(
-                (float) $r->momo_total + (float) $r->cash_total + (float) $r->manual_momo_total + (float) $r->card_total,
-                2,
-            ),
-        ])->toArray();
+        // Orders placed, with a payment in (or no charge), not cancelled.
+        $placed = $this->queryBuilder->placedOrders($filters)
+            ->where('status', '!=', 'cancelled')
+            ->whereHas('payments', fn ($q) => $q->whereIn('payment_status', ['completed', 'no_charge']))
+            ->selectRaw('COALESCE(assigned_employee_id, 0) as employee_id, COUNT(*) as orders')
+            ->groupByRaw('COALESCE(assigned_employee_id, 0)')
+            ->pluck('orders', 'employee_id');
+
+        // What each person rang up. The order's own total holds its rounds,
+        // so the rounds still standing come off before it is credited to
+        // whoever placed it; each round is credited to whoever added it.
+        $liveRounds = "(SELECT COALESCE(SUM(r.total), 0) FROM order_rounds r WHERE r.order_id = orders.id AND r.status != 'cancelled')";
+        $rangUp = $this->queryBuilder->revenueOrders($filters)
+            ->selectRaw('COALESCE(assigned_employee_id, 0) as employee_id, SUM('.AnalyticsQueryBuilder::revenueExpr()." - {$liveRounds}) as sales")
+            ->groupByRaw('COALESCE(assigned_employee_id, 0)')
+            ->pluck('sales', 'employee_id');
+
+        $rounds = OrderRound::query()
+            ->where('status', '!=', 'cancelled')
+            ->whereIn('order_id', $this->queryBuilder->revenueOrders($filters)->select('id'))
+            ->selectRaw('COALESCE(added_by, 0) as employee_id, COUNT(*) as rounds, SUM(total) as sales')
+            ->groupByRaw('COALESCE(added_by, 0)')
+            ->get()
+            ->keyBy(fn ($r) => (int) $r->employee_id);
+
+        $ids = collect($money->keys())
+            ->merge(array_keys($placed->all()))
+            ->merge(array_keys($rangUp->all()))
+            ->merge($rounds->keys())
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $names = Employee::with('user:id,name')->whereIn('id', $ids->filter())->get()
+            ->mapWithKeys(fn (Employee $e) => [$e->id => $e->user?->name ?? 'Unassigned']);
+
+        return $ids->map(function (int $id) use ($money, $placed, $rangUp, $rounds, $names) {
+            $m = $money->get($id);
+            $total = fn (string $key) => round((float) ($m?->{$key} ?? 0), 2);
+            $count = fn (string $key) => (int) ($m?->{$key} ?? 0);
+
+            return [
+                'employee_id' => $id,
+                'staff_name' => $id === 0 ? 'Unassigned' : ($names[$id] ?? 'Unassigned'),
+                'total_orders' => (int) ($placed[$id] ?? 0),
+                // Rang up: their orders' first items and the rounds they added.
+                'sales_total' => round((float) ($rangUp[$id] ?? 0) + (float) ($rounds->get($id)?->sales ?? 0), 2),
+                'rounds_added' => (int) ($rounds->get($id)?->rounds ?? 0),
+                'momo_total' => $total('momo_total'),
+                'momo_count' => $count('momo_count'),
+                'cash_total' => $total('cash_total'),
+                'cash_count' => $count('cash_count'),
+                'manual_momo_total' => $total('manual_momo_total'),
+                'manual_momo_count' => $count('manual_momo_count'),
+                'card_total' => $total('card_total'),
+                'card_count' => $count('card_count'),
+                'no_charge_total' => $total('no_charge_total'),
+                'no_charge_count' => $count('no_charge_count'),
+                // The money they took, every method but no charge.
+                'total_revenue' => round(
+                    $total('momo_total') + $total('cash_total') + $total('manual_momo_total') + $total('card_total'),
+                    2,
+                ),
+            ];
+        })
+            ->sortByDesc(fn ($row) => [$row['total_revenue'], $row['sales_total']])
+            ->values()
+            ->toArray();
     }
 
     // ─── G. DELIVERY & PICKUP METRICS ───────────────────────────────
