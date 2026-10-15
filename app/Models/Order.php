@@ -91,6 +91,8 @@ class Order extends Model
         'fully_paid_at',
         'unpaid_alerted_at',
         'kitchen_slip_printed_at',
+        // When it last started owing (Phase 4b). Cleared when paid.
+        'owing_since',
         'receipt_printed_at',
         'receipt_print_count',
         'receipt_verification_code',
@@ -120,6 +122,7 @@ class Order extends Model
             'fully_paid_at' => 'datetime',
             'unpaid_alerted_at' => 'datetime',
             'kitchen_slip_printed_at' => 'datetime',
+            'owing_since' => 'datetime',
             'receipt_printed_at' => 'datetime',
             'internal_notes' => 'array',
         ];
@@ -221,6 +224,24 @@ class Order extends Model
     public function items(): HasMany
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    /** Items added after the order was placed, round 2 onwards (Phase 4b). */
+    public function rounds(): HasMany
+    {
+        return $this->hasMany(OrderRound::class)->orderBy('number');
+    }
+
+    /**
+     * On the kitchen's boards: the order's own status is live, or one of its
+     * rounds is. An order served long ago comes back for its round only.
+     */
+    public function scopeLiveForKitchen(Builder $query, array $statuses): void
+    {
+        $roundStatuses = array_values(array_intersect($statuses, OrderRound::LIVE_STATUSES));
+
+        $query->where(fn (Builder $q) => $q->whereIn('status', $statuses)
+            ->orWhereHas('rounds', fn (Builder $r) => $r->whereIn('status', $roundStatuses ?: ['-'])));
     }
 
     public function statusHistory(): HasMany

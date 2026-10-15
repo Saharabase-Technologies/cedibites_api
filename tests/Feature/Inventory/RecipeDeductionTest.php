@@ -264,3 +264,45 @@ it('is a no-op when the ordered option has no recipe', function () {
     expect(onHand($this->item->id, $this->warehouse->id))->toBe(100.0)
         ->and(StockMovement::where('movement_type', 'sale')->count())->toBe(0);
 });
+
+/*
+| Items added to an order later are a round (Phase 4b). The order's own
+| deduction leaves them alone; each round takes its own, once; a cancel gives
+| both back.
+*/
+it('deducts a round on its own, once, and never in the order\'s deduction', function () {
+    $option = MenuItemOption::factory()->create();
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 1);
+
+    $order = Order::factory()->create();
+    OrderItem::factory()->create(['order_id' => $order->id, 'menu_item_id' => $option->menu_item_id, 'menu_item_option_id' => $option->id, 'quantity' => 2]);
+    $round = App\Models\OrderRound::create(['order_id' => $order->id, 'number' => 2, 'status' => 'accepted', 'subtotal' => 5, 'total' => 5]);
+    OrderItem::factory()->create(['order_id' => $order->id, 'order_round_id' => $round->id, 'menu_item_id' => $option->menu_item_id, 'menu_item_option_id' => $option->id, 'quantity' => 3]);
+
+    $this->service->deductForOrder($order);
+    expect(onHand($this->item->id, $this->warehouse->id))->toBe(98.0);
+
+    $this->service->deductForRound($round);
+    $this->service->deductForRound($round);
+    $this->service->deductForOrder($order);
+    expect(onHand($this->item->id, $this->warehouse->id))->toBe(95.0)
+        ->and(StockMovement::where('movement_type', 'sale')->where('reference_type', 'order_round')->where('reference_id', $round->id)->count())->toBe(1);
+});
+
+it('gives back the order\'s and its rounds\' stock on a reversal, once', function () {
+    $option = MenuItemOption::factory()->create();
+    makeRecipe($option->id, $this->item->id, $this->item->base_unit_id, 1);
+
+    $order = Order::factory()->create();
+    OrderItem::factory()->create(['order_id' => $order->id, 'menu_item_id' => $option->menu_item_id, 'menu_item_option_id' => $option->id, 'quantity' => 2]);
+    $round = App\Models\OrderRound::create(['order_id' => $order->id, 'number' => 2, 'status' => 'accepted', 'subtotal' => 5, 'total' => 5]);
+    OrderItem::factory()->create(['order_id' => $order->id, 'order_round_id' => $round->id, 'menu_item_id' => $option->menu_item_id, 'menu_item_option_id' => $option->id, 'quantity' => 3]);
+
+    $this->service->deductForOrder($order);
+    $this->service->deductForRound($round);
+    $this->service->reverseForOrder($order);
+    $this->service->reverseForOrder($order);
+
+    expect(onHand($this->item->id, $this->warehouse->id))->toBe(100.0)
+        ->and(StockMovement::where('movement_type', 'reversal')->count())->toBe(2);
+});

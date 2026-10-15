@@ -14,6 +14,10 @@ class OrderResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        // Items added after the order was placed (Phase 4b). Round 1 is the
+        // order as placed and has no row.
+        $roundNumbers = $this->rounds->pluck('number', 'id');
+
         return [
             'id' => $this->id,
             'order_number' => $this->order_number,
@@ -35,6 +39,22 @@ class OrderResource extends JsonResource
             'payment_state' => $this->payment_state,
             'fully_paid_at' => $this->fully_paid_at?->toIso8601String(),
             'kitchen_slip_printed_at' => $this->kitchen_slip_printed_at?->toIso8601String(),
+            // When it last started owing; null when nothing is owed.
+            'owing_since' => $this->owing_since?->toIso8601String(),
+            // Each addition, with its own kitchen status (Phase 4b).
+            'rounds' => $this->rounds->map(fn ($round) => [
+                'id' => $round->id,
+                'number' => $round->number,
+                'status' => $round->status,
+                'paid_later' => (bool) $round->paid_later,
+                'subtotal' => (float) $round->subtotal,
+                'total' => (float) $round->total,
+                'added_by_name' => $round->addedBy?->user?->name,
+                'receipt_printed_at' => $round->receipt_printed_at?->toIso8601String(),
+                'kitchen_slip_printed_at' => $round->kitchen_slip_printed_at?->toIso8601String(),
+                'created_at' => $round->created_at?->toIso8601String(),
+                'updated_at' => $round->updated_at?->toIso8601String(),
+            ]),
             'discount' => (float) $this->discount,
             'promo_id' => $this->promo_id,
             'promo_name' => $this->promo_name,
@@ -73,6 +93,8 @@ class OrderResource extends JsonResource
                 'unit_price' => (float) $item->unit_price,
                 'subtotal' => (float) $item->subtotal,
                 'special_instructions' => $item->special_instructions,
+                // 1 for the order as placed, 2 onwards for an addition.
+                'round' => $item->order_round_id ? ($roundNumbers[$item->order_round_id] ?? null) : 1,
                 'menu_item_snapshot' => $item->menu_item_snapshot,
                 'menu_item' => [
                     'id' => $item->menuItem?->id,

@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Domain\Inventory\Recipes\RecipeDeductionService;
+use App\Events\OrderBroadcastEvent;
 use App\Helpers\PhoneHelper;
 use App\Models\MenuItem;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderRound;
 use App\Models\Payment;
 use App\Models\User;
 use App\Services\Orders\PreparationRouter;
@@ -50,6 +52,12 @@ class OrderCreationService
             // Guard: do not create orders from expired or abandoned sessions
             if (in_array($locked->status, ['expired', 'abandoned'])) {
                 throw new \RuntimeException("Cannot create order from {$locked->status} session {$session->id}.");
+            }
+
+            // Items added to an order already placed (Phase 4b). The sale ran
+            // every check a new sale runs; what it makes is a round.
+            if ($session->add_to_order_id) {
+                return $this->appendRound($session);
             }
 
             // Generate order number inside the transaction for atomicity
@@ -126,6 +134,7 @@ class OrderCreationService
                 'recorded_at' => $isManualEntry ? $session->recorded_at : null,
                 'paid_later' => $isPayLater,
                 'placed_unpaid_at' => $isPayLater ? now() : null,
+                'owing_since' => $isPayLater ? now() : null,
                 'manual_entry_reason' => $isManualEntry ? $session->manual_entry_reason : null,
                 'momo_number' => $session->momo_number,
             ]);
@@ -249,6 +258,164 @@ class OrderCreationService
 
             return $order;
         });
+    }
+
+    /**
+     * Add a confirmed sale's items to the order it was rung against, as a
+     * round (Phase 4b, D29). Called inside createFromCheckoutSession's
+     * transaction, with the session row locked.
+     *
+     * One order number, one total, many payments: the order's total grows by
+     * the round, and a round paid now adds one payment. A round placed with
+     * Pay later makes the order owe again. The round reaches the kitchen as
+     * its own ticket, with its own status and its own stock deduction.
+     */
+    protected function appendRound($session): Order
+    {
+        $order = Order::whereKey($session->add_to_order_id)->lockForUpdate()->firstOrFail();
+        $order->load('payments');
+
+        // The till refused this a moment ago. A MoMo prompt can take minutes,
+        // and the money is in by now, so the round is still written.
+        if (in_array($order->status, ['cancelled', 'cancel_requested'], true)) {
+            Log::warning('A round was paid for an order that is cancelled or waiting on a cancel', [
+                'order_id' => $order->id,
+                'session_id' => $session->id,
+            ]);
+        }
+
+        $items = is_string($session->items) ? json_decode($session->items, true) : ($session->items ?? []);
+        $menuItems = MenuItem::with('category')
+            ->whereIn('id', array_filter(array_column($items, 'menu_item_id')))
+            ->get();
+
+        $isPayLater = $session->payment_method === 'pay_later';
+        $wasPaid = $order->balance_due <= 0;
+        $roundTotal = round((float) $session->total_amount, 2);
+
+        $round = OrderRound::create([
+            'order_id' => $order->id,
+            'number' => max(1, (int) $order->rounds()->max('number')) + 1,
+            'added_by' => $session->staff_id,
+            // Its own kitchen status. A round with nothing to cook is done as
+            // it is added, as a sale of the same items would be.
+            'status' => app(PreparationRouter::class)->initialStatus($menuItems, 'pos'),
+            'paid_later' => $isPayLater,
+            'subtotal' => $session->subtotal,
+            'total' => $roundTotal,
+            'checkout_session_id' => $session->id,
+        ]);
+
+        foreach ($items as $item) {
+            OrderItem::create([
+                'order_id' => $order->id,
+                'order_round_id' => $round->id,
+                'menu_item_id' => $item['menu_item_id'],
+                'menu_item_option_id' => $item['menu_item_option_id'] ?? null,
+                'quantity' => $item['quantity'],
+                'unit_price' => $item['unit_price'],
+                'subtotal' => $item['quantity'] * $item['unit_price'],
+                'special_instructions' => $item['special_instructions'] ?? null,
+                'menu_item_snapshot' => $item['menu_item_snapshot'] ?? null,
+                'menu_item_option_snapshot' => $item['menu_item_option_snapshot'] ?? null,
+            ]);
+        }
+
+        $order->subtotal = round((float) $order->subtotal + (float) $session->subtotal, 2);
+        $order->total_amount = round((float) $order->total_amount + $roundTotal, 2);
+
+        if ($isPayLater) {
+            // Its meaning widens to "some of this order was placed with Pay
+            // later", so the Not paid list, the boards and the cashier's copy
+            // of the receipt follow it with no new rule (D2).
+            $order->paid_later = true;
+
+            // A paid order that starts owing again starts a new spell: the
+            // one-hour alert counts from now and may go once more (D10, D32).
+            if ($wasPaid || $order->owing_since === null) {
+                $order->owing_since = now();
+                $order->unpaid_alerted_at = null;
+            }
+        }
+
+        $order->save();
+
+        if (! $isPayLater) {
+            $collector = app(PaymentCollector::class)->stamp(
+                $session->staff_id,
+                $session->branch_id,
+                PaymentCollector::SOURCE_TILL,
+                Carbon::parse($session->created_at ?? 'now'),
+            );
+            $paymentStatus = $this->resolvePaymentStatus($session->payment_method);
+
+            Payment::create($collector + [
+                'order_id' => $order->id,
+                'order_round_id' => $round->id,
+                'customer_id' => $order->customer_id,
+                'payment_method' => $session->payment_method,
+                'payment_status' => $paymentStatus,
+                'amount' => $roundTotal,
+                // Cash handed over, when there was change, as Take payment
+                // keeps it. The receipt's payments block prints it (D31).
+                'amount_tendered' => $session->payment_method === 'cash' && (float) $session->amount_paid > $roundTotal
+                    ? (float) $session->amount_paid
+                    : null,
+                'transaction_id' => $session->hubtel_transaction_id,
+                'hubtel_account_number' => $session->hubtel_account_number,
+                'payment_gateway_response' => $session->payment_gateway_response,
+                'paid_at' => $paymentStatus === 'completed' ? now() : null,
+            ]);
+        }
+
+        DB::table('checkout_sessions')
+            ->where('id', $session->id)
+            ->update([
+                'status' => 'confirmed',
+                'order_id' => $order->id,
+                'updated_at' => now(),
+            ]);
+
+        // Once per round, paid now or Pay later: the kitchen cooks it either way.
+        DB::afterCommit(function () use ($round, $order) {
+            try {
+                app(RecipeDeductionService::class)->deductForRound($round);
+            } catch (\Throwable $e) {
+                Log::error('Recipe deduction failed for a round', [
+                    'order_id' => $order->id,
+                    'round_id' => $round->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // The observer broadcasts on a status change only. The order's own
+            // status has not moved, so the boards are told here.
+            try {
+                OrderBroadcastEvent::dispatch($order->fresh(), 'updated');
+            } catch (\Throwable $e) {
+                Log::warning('Order broadcast failed for a round', [
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
+
+        if ($session->staff_id) {
+            $staffUser = \App\Models\Employee::find($session->staff_id)?->user;
+
+            activity()
+                ->causedBy($staffUser)
+                ->performedOn($order)
+                ->withProperties([
+                    'order_number' => $order->order_number,
+                    'round' => $round->number,
+                    'round_total' => $roundTotal,
+                    'payment_method' => $session->payment_method,
+                ])
+                ->log("Round {$round->number} added to {$order->order_number} by ".($staffUser?->name ?? 'Staff')." for GHS {$roundTotal}");
+        }
+
+        return $order->load(['customer.user', 'branch', 'items.menuItem', 'items.menuItemOption.media', 'payments', 'rounds.addedBy.user']);
     }
 
     /**

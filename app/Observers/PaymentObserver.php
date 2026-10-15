@@ -142,6 +142,9 @@ class PaymentObserver
      * When the payments first cover the order, say when, once. A sale paid
      * on the spot is fully paid as it is made; a Pay later order when its
      * last part comes in.
+     *
+     * Every time they cover it, the order stops owing. An order can owe more
+     * than once: items added to a paid order make it owe again (Phase 4b).
      */
     protected function markFullyPaid(Payment $payment): void
     {
@@ -149,8 +152,9 @@ class PaymentObserver
             try {
                 $order = Order::with('payments')->find($payment->order_id);
 
-                if ($order && $order->fully_paid_at === null && $order->balance_due <= 0) {
+                if ($order && $order->balance_due <= 0) {
                     Order::whereKey($order->id)->whereNull('fully_paid_at')->update(['fully_paid_at' => now()]);
+                    Order::whereKey($order->id)->whereNotNull('owing_since')->update(['owing_since' => null]);
                 }
             } catch (\Throwable $e) {
                 Log::warning('Could not mark an order fully paid', [

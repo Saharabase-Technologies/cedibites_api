@@ -259,10 +259,18 @@ class CatalogController extends Controller
             ->get(['id', 'order_number'])
             ->keyBy('id');
 
+        // Items added to an order later are deducted under their round
+        // (Phase 4b). They read as the order they were added to.
+        $rounds = \App\Models\OrderRound::query()
+            ->whereIn('id', $movements->where('reference_type', 'order_round')->pluck('reference_id')->filter()->unique()->all())
+            ->with('order:id,order_number')
+            ->get(['id', 'order_id', 'number'])
+            ->keyBy('id');
+
         $running = 0.0;
         $suppliers = [];
 
-        $rows = $movements->map(function (StockMovement $m) use (&$running, &$suppliers, $purchaseItems, $orders) {
+        $rows = $movements->map(function (StockMovement $m) use (&$running, &$suppliers, $purchaseItems, $orders, $rounds) {
             $qty = (float) $m->quantity;
             $running = round($running + $qty, 4);
 
@@ -292,6 +300,13 @@ class CatalogController extends Controller
                     'type' => 'order',
                     'order_id' => (int) $m->reference_id,
                     'order_number' => $orders[$m->reference_id]->order_number,
+                ];
+            } elseif ($m->reference_type === 'order_round' && $rounds->has($m->reference_id) && $rounds[$m->reference_id]->order) {
+                $round = $rounds[$m->reference_id];
+                $reference = [
+                    'type' => 'order',
+                    'order_id' => (int) $round->order_id,
+                    'order_number' => $round->order->order_number,
                 ];
             }
 

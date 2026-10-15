@@ -88,6 +88,10 @@ Route::middleware('password.reset')->group(function () {
         Route::get('orders/pending', [EmployeeOrderController::class, 'pending']);
         Route::patch('orders/{order}/status', [EmployeeOrderController::class, 'updateStatus'])
             ->middleware('permission:update_orders');
+        // Items added to an order move through the kitchen on their own (Phase 4b).
+        Route::patch('orders/{order}/rounds/{round}/status', [EmployeeOrderController::class, 'updateRoundStatus'])
+            ->scopeBindings()
+            ->middleware('permission:update_orders');
         // Printing is not moving the order, so it rides on `view_orders` — the
         // permission every till already holds. Gating it behind `update_orders`
         // would mean the people who hand over receipts could not record that

@@ -9,6 +9,7 @@ use App\Models\Inventory\Location;
 use App\Models\Inventory\Recipe;
 use App\Models\Inventory\StockMovement;
 use App\Models\Order;
+use App\Models\OrderRound;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -31,12 +32,37 @@ class RecipeDeductionService
         private readonly BatchService $batches,
     ) {}
 
-    /** Deduct ingredients for every line of a paid order. */
+    /**
+     * Deduct ingredients for every line of a paid order, as it was placed.
+     * Items added later belong to a round and go through deductForRound, so
+     * the two never take the same food twice.
+     */
     public function deductForOrder(Order $order): void
     {
+        $order->loadMissing('items');
+
+        $this->deduct($order, 'order', $order->id, $order->items->whereNull('order_round_id'));
+    }
+
+    /**
+     * Deduct ingredients for a round added to an order (Phase 4b). Once per
+     * round, whatever calls it.
+     */
+    public function deductForRound(OrderRound $round): void
+    {
+        $round->loadMissing(['order', 'items']);
+
+        $this->deduct($round->order, 'order_round', $round->id, $round->items);
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, \App\Models\OrderItem>  $lines
+     */
+    private function deduct(Order $order, string $referenceType, int $referenceId, $lines): void
+    {
         // Idempotent: if this order already deducted, do nothing (safe re-fire).
-        $already = StockMovement::where('reference_type', 'order')
-            ->where('reference_id', $order->id)
+        $already = StockMovement::where('reference_type', $referenceType)
+            ->where('reference_id', $referenceId)
             ->where('movement_type', 'sale')
             ->exists();
         if ($already) {
@@ -52,11 +78,9 @@ class RecipeDeductionService
             return;
         }
 
-        $order->loadMissing('items');
-
         // Aggregate ingredient demand per item across all order lines.
         $demand = []; // item_id => qty
-        foreach ($order->items as $line) {
+        foreach ($lines as $line) {
             $recipe = $this->resolveRecipe((int) $line->menu_item_option_id, $order->branch_id);
             if (! $recipe) {
                 continue; // option without a recipe → logged no-op
@@ -73,7 +97,7 @@ class RecipeDeductionService
             return;
         }
 
-        DB::transaction(function () use ($demand, $location, $order) {
+        DB::transaction(function () use ($demand, $location, $order, $referenceType, $referenceId) {
             foreach ($demand as $itemId => $qty) {
                 $qty = round($qty, 4);
                 if ($qty <= 0) {
@@ -98,11 +122,12 @@ class RecipeDeductionService
                         'location_id' => $location->id,
                         'quantity' => -1 * $alloc['qty'], // sale = stock out
                         'movement_type' => 'sale',
-                        'reference_type' => 'order',
-                        'reference_id' => $order->id,
+                        'reference_type' => $referenceType,
+                        'reference_id' => $referenceId,
                         'batch_id' => $alloc['batch_id'],
                         'unit_cost_at_time' => $cost,
-                        'idempotency_key' => "sale:order:{$order->id}:item:{$itemId}:batch:".($alloc['batch_id'] ?? 0),
+                        // "sale:order:{id}" for an order, as it has always been.
+                        'idempotency_key' => "sale:{$referenceType}:{$referenceId}:item:{$itemId}:batch:".($alloc['batch_id'] ?? 0),
                         'occurred_at' => now(),
                     ]);
                 }
@@ -122,25 +147,31 @@ class RecipeDeductionService
         });
     }
 
-    /** Reverse a previously-deducted order (e.g. cancellation/refund). */
+    /**
+     * Reverse a previously-deducted order (e.g. cancellation/refund), its
+     * rounds included. Each sale movement is reversed once: one already
+     * reversed is skipped, so a second call does nothing.
+     */
     public function reverseForOrder(Order $order): void
     {
-        // Idempotent: don't reverse twice.
-        $alreadyReversed = StockMovement::where('reference_type', 'order')
-            ->where('reference_id', $order->id)
-            ->where('movement_type', 'reversal')
-            ->exists();
-        if ($alreadyReversed) {
+        $roundIds = OrderRound::where('order_id', $order->id)->pluck('id');
+
+        $sales = StockMovement::query()
+            ->where('movement_type', 'sale')
+            ->where(fn ($q) => $q
+                ->where(fn ($o) => $o->where('reference_type', 'order')->where('reference_id', $order->id))
+                ->orWhere(fn ($r) => $r->where('reference_type', 'order_round')->whereIn('reference_id', $roundIds)))
+            ->whereNotIn('id', StockMovement::query()
+                ->where('movement_type', 'reversal')
+                ->whereNotNull('parent_movement_id')
+                ->select('parent_movement_id'))
+            ->get();
+
+        if ($sales->isEmpty()) {
             return;
         }
 
-        $sales = StockMovement::query()
-            ->where('reference_type', 'order')
-            ->where('reference_id', $order->id)
-            ->where('movement_type', 'sale')
-            ->get();
-
-        DB::transaction(function () use ($sales, $order) {
+        DB::transaction(function () use ($sales) {
             foreach ($sales as $sale) {
                 $addBack = -1 * (float) $sale->quantity; // sale qty is negative → positive add-back
 
@@ -149,8 +180,8 @@ class RecipeDeductionService
                     'location_id' => $sale->location_id,
                     'quantity' => $addBack,
                     'movement_type' => 'reversal',
-                    'reference_type' => 'order',
-                    'reference_id' => $order->id,
+                    'reference_type' => $sale->reference_type,
+                    'reference_id' => $sale->reference_id,
                     'batch_id' => $sale->batch_id,
                     'unit_cost_at_time' => $sale->unit_cost_at_time !== null ? (float) $sale->unit_cost_at_time : null,
                     'parent_movement_id' => $sale->id,

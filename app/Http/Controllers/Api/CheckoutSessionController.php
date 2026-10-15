@@ -12,6 +12,7 @@ use App\Models\CheckoutSession;
 use App\Models\HubtelIncomingPayment;
 use App\Models\MenuItem;
 use App\Models\MenuItemOption;
+use App\Models\Order;
 use App\Services\HubtelPaymentService;
 use App\Services\Openings\BranchOpeningService;
 use App\Services\OrderCreationService;
@@ -493,6 +494,10 @@ class CheckoutSessionController extends Controller
             // of inventory.stock_gate.override.
             'override_stock_gate' => ['sometimes', 'boolean'],
             'override_reason' => ['nullable', 'string', 'max:500'],
+
+            // Items added to an order already placed, as a round (Phase 4b).
+            // Every check below still runs: it is a sale like any other.
+            'add_to_order_id' => ['nullable', 'integer'],
         ]);
 
         $user = $request->user();
@@ -504,6 +509,21 @@ class CheckoutSessionController extends Controller
 
         $branchId = $validated['branch_id'];
         $this->verifyStaffAuthorization($employee, $branchId);
+
+        $addTo = null;
+        if (! empty($validated['add_to_order_id'])) {
+            $addTo = Order::find($validated['add_to_order_id']);
+            $refusal = $this->refusalToAddTo($addTo, $branchId, $validated);
+
+            if ($refusal !== null) {
+                return response()->json(['code' => 'cannot_add_to_order', 'message' => $refusal], 422);
+            }
+
+            // The round is the order's: same customer, same table.
+            $validated['contact_name'] = $addTo->contact_name ?: $validated['contact_name'];
+            $validated['contact_phone'] = $addTo->contact_phone ?: $validated['contact_phone'];
+            $validated['fulfillment_type'] = 'dine_in';
+        }
 
         $branch = Branch::findOrFail($branchId);
         $openings = app(BranchOpeningService::class);
@@ -575,19 +595,28 @@ class CheckoutSessionController extends Controller
         // used to send a `discount` that was capped at the promo's figure, so it
         // could never give more than the promo anyway; it is still accepted from
         // older tills and ignored.
-        try {
-            $offer = app(PromoResolutionService::class)->bestOffer(
-                (string) $branchId,
-                $subtotal,
-                $this->promoLines($itemSnapshots),
-                $validated['promo_code'] ?? null,
-                $validated['contact_phone'],
-            );
-        } catch (PromoCodeRefused $refused) {
-            return $this->promoRefusedResponse($refused);
+        //
+        // A round takes no promo (Phase 4b). The order it joins carries one
+        // promo, and on 2026-10-15 prod's only promo was a shared code.
+        $resolvedPromo = null;
+        $promoCodeId = null;
+        $discount = 0;
+        if ($addTo === null) {
+            try {
+                $offer = app(PromoResolutionService::class)->bestOffer(
+                    (string) $branchId,
+                    $subtotal,
+                    $this->promoLines($itemSnapshots),
+                    $validated['promo_code'] ?? null,
+                    $validated['contact_phone'],
+                );
+            } catch (PromoCodeRefused $refused) {
+                return $this->promoRefusedResponse($refused);
+            }
+            $resolvedPromo = $offer->promo;
+            $promoCodeId = $offer->promoCode?->id;
+            $discount = $offer->discount;
         }
-        $resolvedPromo = $offer->promo;
-        $discount = $offer->discount;
 
         // Delivery fee only applies to delivery orders (staff-entered, e.g. phone-in deliveries)
         $deliveryFee = $validated['fulfillment_type'] === 'delivery'
@@ -651,8 +680,9 @@ class CheckoutSessionController extends Controller
             'discount' => $discount,
             'promo_id' => $resolvedPromo?->id,
             'promo_name' => $resolvedPromo?->name,
-            'promo_code_id' => $offer->promoCode?->id,
+            'promo_code_id' => $promoCodeId,
             'total_amount' => $totalAmount,
+            'add_to_order_id' => $addTo?->id,
             'staff_id' => $employee->id,
             'is_manual_entry' => $isManualEntry,
             'recorded_at' => $isManualEntry ? $validated['recorded_at'] : null,
@@ -672,6 +702,50 @@ class CheckoutSessionController extends Controller
             'wallet', 'ghqr' => $this->posInstantFlow($session),
             default => response()->json(['message' => 'Unsupported payment method.'], 422),
         };
+    }
+
+    /**
+     * Why this order cannot take more items, or null when it can (Phase 4b).
+     *
+     * Dine-in, today, this branch, still standing (D29). Takeaway and
+     * delivery customers who come back are a new sale. A recorded past order
+     * was paid when it happened. Pay later is allowed; no charge is not.
+     */
+    private function refusalToAddTo(?Order $order, int $branchId, array $validated): ?string
+    {
+        if (! $order) {
+            return 'That order could not be found.';
+        }
+
+        if ((int) $order->branch_id !== $branchId) {
+            return "#{$order->order_number} belongs to another branch.";
+        }
+
+        if ($order->order_type !== 'dine_in') {
+            return "Only a dine-in order takes more items. #{$order->order_number} is not dine-in, so ring a new sale.";
+        }
+
+        if (! $order->created_at?->isToday()) {
+            return "Items can be added only to today's orders. Ring a new sale.";
+        }
+
+        if ($order->status === 'cancelled') {
+            return "#{$order->order_number} is cancelled.";
+        }
+
+        if ($order->status === 'cancel_requested') {
+            return "#{$order->order_number} is waiting on a cancel.";
+        }
+
+        if ($order->order_source === 'manual_entry' || ($validated['is_manual_entry'] ?? false)) {
+            return 'A recorded past order takes no more items.';
+        }
+
+        if (! in_array($validated['payment_method'], ['cash', 'card', 'mobile_money', 'pay_later'], true)) {
+            return 'Added items are paid by cash, card, MoMo prompt or Pay later.';
+        }
+
+        return null;
     }
 
     /**

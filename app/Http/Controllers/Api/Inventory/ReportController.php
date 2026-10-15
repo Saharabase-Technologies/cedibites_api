@@ -76,15 +76,27 @@ class ReportController extends Controller
             ->get();
 
         // Sale movements are negative; consumption reads better as a positive.
-        $orderNumbers = $this->orderNumbersFor($movements->pluck('reference_id')->filter()->unique()->all());
+        // Items added to an order later are deducted under their round
+        // (Phase 4b). They hang off the order they were added to.
+        $roundOrder = \App\Models\OrderRound::query()
+            ->whereIn('id', $movements->where('reference_type', 'order_round')->pluck('reference_id')->filter()->unique()->all())
+            ->pluck('order_id', 'id')
+            ->all();
+        $orderIdOf = fn ($m) => match ($m->reference_type) {
+            'order' => $m->reference_id ? (int) $m->reference_id : null,
+            'order_round' => $roundOrder[(int) $m->reference_id] ?? null,
+            default => null,
+        };
+
+        $orderNumbers = $this->orderNumbersFor($movements->map($orderIdOf)->filter()->unique()->values()->all());
 
         $items = $movements
             ->groupBy('item_id')
-            ->map(function ($rows) use ($orderNumbers) {
+            ->map(function ($rows) use ($orderNumbers, $orderIdOf) {
                 $first = $rows->first();
                 $orders = $rows
-                    ->filter(fn ($m) => $m->reference_type === 'order' && $m->reference_id)
-                    ->groupBy('reference_id')
+                    ->filter(fn ($m) => $orderIdOf($m) !== null)
+                    ->groupBy(fn ($m) => $orderIdOf($m))
                     ->map(fn ($forOrder, $orderId) => [
                         'order_id' => (int) $orderId,
                         'order_number' => $orderNumbers[(int) $orderId] ?? null,

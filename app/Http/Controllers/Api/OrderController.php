@@ -410,14 +410,14 @@ class OrderController extends Controller
     {
         $branchId = $request->query('branch_id');
 
-        $query = Order::with(['branch', 'customer.user', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments'])
+        $query = Order::with(['branch', 'customer.user', 'items.menuItem.category', 'items.menuItemOption.media', 'statusHistory', 'payments', 'rounds.addedBy.user'])
             // Paid, or placed to pay later (D4).
             ->confirmedOrPayLater()
             // Accepted belongs here. It was omitted while nothing opened in it
             // and every order passed through on its way to Preparing, so the
             // gap never showed. A till sale now opens in Accepted, and without
             // this it would never reach a display board at all.
-            ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
+            ->liveForKitchen(['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
 
         $user = Auth::guard('sanctum')->user();
@@ -453,10 +453,10 @@ class OrderController extends Controller
     {
         $branchId = $request->query('branch_id');
 
-        $query = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media'])
+        $query = Order::with(['branch', 'items.menuItem.category', 'items.menuItemOption.media', 'rounds.addedBy.user'])
             // Paid, or placed to pay later (D4).
             ->confirmedOrPayLater()
-            ->whereIn('status', ['received', 'accepted', 'preparing', 'ready'])
+            ->liveForKitchen(['received', 'accepted', 'preparing', 'ready'])
             ->orderBy('created_at', 'asc');
 
         $user = $request->user();

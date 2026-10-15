@@ -34,7 +34,7 @@ class OrderManagementService
         // each option's media for its image, and without it that was thirteen
         // extra queries on a board of eighteen orders — one per option, every
         // time the board refreshed.
-        $query = Order::with(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItemOption.media', 'items.menuItem.category', 'payments', 'branch', 'statusHistory.changedBy', 'assignedEmployee.user']);
+        $query = Order::with(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItemOption.media', 'items.menuItem.category', 'payments', 'branch', 'statusHistory.changedBy', 'assignedEmployee.user', 'rounds.addedBy.user']);
 
         $employeeBranchIds = $employee?->branches()->pluck('branches.id');
 
@@ -65,7 +65,9 @@ class OrderManagementService
 
         if (! empty($filters['status'])) {
             $statuses = is_array($filters['status']) ? $filters['status'] : [$filters['status']];
-            $query->whereIn('status', $statuses);
+            // An order served long ago is still in the kitchen while a round
+            // added to it is (Phase 4b).
+            $query->liveForKitchen($statuses);
         }
 
         if (! empty($filters['order_type'])) {
@@ -82,12 +84,13 @@ class OrderManagementService
             $query->where('contact_phone', 'like', '%'.$filters['contact_phone'].'%');
         }
 
-        // Still owing (D7): placed with Pay later, not yet covered, not
-        // cancelled. Dates do not apply. What is owed stays on the till's list
-        // until it is paid or cancelled, whichever day it was placed.
+        // Still owing (D7): placed with Pay later, or a paid order that items
+        // were added to (Phase 4b), not yet covered, not cancelled. Dates do
+        // not apply. What is owed stays on the till's list until it is paid or
+        // cancelled, whichever day it was placed.
         $owing = ! empty($filters['owing']);
         if ($owing) {
-            $query->where('paid_later', true)->whereNull('fully_paid_at')->where('status', '!=', 'cancelled');
+            $query->whereNotNull('owing_since')->where('status', '!=', 'cancelled');
         }
 
         if (! empty($filters['date_from']) && ! $owing) {

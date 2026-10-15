@@ -55,6 +55,8 @@ class CheckoutSession extends Model
         'order_id',
         'last_momo_sent_at',
         'failure_reason',
+        // Items added to this order rather than a new sale (Phase 4b).
+        'add_to_order_id',
     ];
 
     protected function casts(): array

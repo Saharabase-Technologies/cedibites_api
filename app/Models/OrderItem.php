@@ -21,6 +21,8 @@ class OrderItem extends Model
         'unit_price',
         'subtotal',
         'special_instructions',
+        // Null for the order as placed; the round for an addition (Phase 4b).
+        'order_round_id',
     ];
 
     protected function casts(): array
@@ -37,6 +39,11 @@ class OrderItem extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
+    }
+
+    public function round(): BelongsTo
+    {
+        return $this->belongsTo(OrderRound::class, 'order_round_id');
     }
 
     public function menuItem(): BelongsTo

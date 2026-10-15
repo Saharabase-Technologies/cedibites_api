@@ -45,6 +45,8 @@ class Payment extends Model
         // A part taken on an order that owes (D7). See TakePayment.
         'reference',
         'amount_tendered',
+        // The round this paid for, when it was paid as it was added (Phase 4b).
+        'order_round_id',
     ];
 
     protected function casts(): array

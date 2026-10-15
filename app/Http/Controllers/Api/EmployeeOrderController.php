@@ -2,13 +2,17 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\OrderBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\UpdateOrderStatusRequest;
 use App\Http\Resources\OrderResource;
 use App\Models\Order;
+use App\Models\OrderRound;
 use App\Services\OrderManagementService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class EmployeeOrderController extends Controller
 {
@@ -108,7 +112,20 @@ class EmployeeOrderController extends Controller
                 return response()->error('Only a Pay later order has a kitchen slip.', 422);
             }
 
-            $order->forceFill(['kitchen_slip_printed_at' => $order->kitchen_slip_printed_at ?? now()])->save();
+            // A round's own slip carries only its items (Phase 4b).
+            $round = $request->filled('round')
+                ? $order->rounds()->where('number', $request->integer('round'))->first()
+                : null;
+
+            if ($request->filled('round') && ! $round) {
+                return response()->error('That round is not on this order.', 422);
+            }
+
+            if ($round) {
+                $round->forceFill(['kitchen_slip_printed_at' => $round->kitchen_slip_printed_at ?? now()])->save();
+            } else {
+                $order->forceFill(['kitchen_slip_printed_at' => $order->kitchen_slip_printed_at ?? now()])->save();
+            }
             $order->receiptPrints()->create([
                 'employee_id' => $employee?->id,
                 'user_id' => $user->id,
@@ -125,6 +142,32 @@ class EmployeeOrderController extends Controller
             );
         }
 
+        // The bill for a table that pays at the end (Phase 4b): the whole
+        // order, what is paid and what is left. Not a receipt, so the count
+        // is left alone.
+        if ($request->input('slip') === 'bill') {
+            $order->load('payments');
+
+            if ($order->balance_due <= 0) {
+                return response()->error('Nothing is owed on this order, so it has no bill.', 422);
+            }
+
+            $order->receiptPrints()->create([
+                'employee_id' => $employee?->id,
+                'user_id' => $user->id,
+                'kind' => 'bill',
+                'reprint_number' => null,
+                'copies' => 1,
+                'source' => $request->input('source'),
+                'printed_at' => now(),
+            ]);
+
+            return response()->success(
+                new OrderResource($order->fresh()->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments'])),
+                'Bill recorded.'
+            );
+        }
+
         // The server's clock, never the caller's. A till at Ashaiman printed a
         // reprint stamped an hour before the order it belonged to, because the
         // only timestamp on that slip not coming from here was the one the
@@ -134,13 +177,19 @@ class EmployeeOrderController extends Controller
 
         // Decided here rather than trusted from the client for the same reason
         // the timestamp is. The count is the server's, so what the slip is is
-        // the server's too.
+        // the server's too. Items added since the last receipt make the next
+        // one an Updated Receipt (Phase 4b, D31), two slips like an original.
         $isOriginal = $order->receipt_print_count === 0;
+        $isUpdated = ! $isOriginal && $order->rounds()->whereNull('receipt_printed_at')->exists();
+        $kind = $isOriginal ? 'original' : ($isUpdated ? 'updated' : 'reprint');
 
         $order->forceFill([
             'receipt_printed_at' => $order->receipt_printed_at ?? $printedAt,
             'receipt_print_count' => $order->receipt_print_count + 1,
         ])->save();
+
+        // Every round is on this slip, so none is waiting for a receipt now.
+        $order->rounds()->whereNull('receipt_printed_at')->update(['receipt_printed_at' => $printedAt]);
 
         // One row per slip. `receipt_printed_at` holds only the first print and
         // the count is a bare total, so before this there was no way to say
@@ -149,11 +198,11 @@ class EmployeeOrderController extends Controller
         $order->receiptPrints()->create([
             'employee_id' => $employee?->id,
             'user_id' => $user->id,
-            'kind' => $isOriginal ? 'original' : 'reprint',
+            'kind' => $kind,
             // The original is print 1, so the first reprint is number 1, the
             // next 2. Matches what the slip itself says.
-            'reprint_number' => $isOriginal ? null : $order->receipt_print_count - 1,
-            'copies' => $isOriginal ? 2 : 1,
+            'reprint_number' => $kind === 'reprint' ? $order->receipt_print_count - 1 : null,
+            'copies' => $kind === 'reprint' ? 1 : 2,
             'source' => $request->input('source'),
             'printed_at' => $printedAt,
         ]);
@@ -190,6 +239,64 @@ class EmployeeOrderController extends Controller
         return response()->success(
             new OrderResource($updatedOrder->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments'])),
             'Order status updated successfully.'
+        );
+    }
+
+    /**
+     * PATCH /employee/orders/{order}/rounds/{round}/status: move a round of
+     * added items through the kitchen (Phase 4b).
+     *
+     * A round has its own ticket and its own status. The order's status is
+     * untouched, and the customer gets no text: they are at the table.
+     * Asking for the status it already has is not an error, so a second tap
+     * from another screen does nothing.
+     */
+    public function updateRoundStatus(Request $request, Order $order, OrderRound $round): JsonResponse
+    {
+        $validated = $request->validate([
+            'status' => ['required', 'string', 'in:accepted,preparing,ready,completed'],
+        ]);
+
+        $user = $request->user();
+        $employee = $user->employee;
+
+        if (! $user->isCompanyWide() && (! $employee || ! $employee->branches()->where('branches.id', $order->branch_id)->exists())) {
+            return response()->error('You can only update orders from your branch.', 403);
+        }
+
+        $updated = DB::transaction(function () use ($round, $validated) {
+            $locked = OrderRound::whereKey($round->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->status === $validated['status']) {
+                return true;
+            }
+
+            if (! $locked->canTransitionTo($validated['status'])) {
+                return false;
+            }
+
+            $locked->update(['status' => $validated['status']]);
+
+            return true;
+        });
+
+        if (! $updated) {
+            return response()->error("This round cannot move from {$round->fresh()->status} to {$validated['status']}.", 422);
+        }
+
+        $order->refresh();
+
+        // The order's own status has not changed, so the observer stays quiet.
+        // The boards are told here.
+        try {
+            OrderBroadcastEvent::dispatch($order, 'updated');
+        } catch (\Throwable $e) {
+            Log::warning('Order broadcast failed for a round', ['order_id' => $order->id, 'error' => $e->getMessage()]);
+        }
+
+        return response()->success(
+            new OrderResource($order->load(['customer.user', 'items.menuItemOption.menuItem', 'items.menuItem.category', 'items.menuItemOption.media', 'payments', 'rounds.addedBy.user'])),
+            'Round status updated.'
         );
     }
 }
