@@ -41,3 +41,7 @@ Schedule::command('alerts:text-tech-errors')->everyFiveMinutes()->withoutOverlap
 // Every 5 min so "Ashaiman has not opened" arrives at 10:15, not 10:45. Each
 // text is stamped on the day's opening, so running often never repeats one.
 Schedule::command('openings:watch')->everyFiveMinutes()->withoutOverlapping();
+
+// Every minute, so new prices set for 06:00 are live by 06:01. Cheap: one
+// indexed query that almost always finds nothing.
+Schedule::command('menu:publish-due')->everyMinute()->withoutOverlapping();
