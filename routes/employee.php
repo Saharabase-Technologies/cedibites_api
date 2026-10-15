@@ -61,6 +61,9 @@ Route::middleware('password.reset')->group(function () {
         Route::delete('checkout-sessions/{token}', [CheckoutSessionController::class, 'destroy']);
     });
 
+    // What the signed-in person took today, by method. My Sales reads it.
+    Route::get('my-money', [ShiftController::class, 'myMoney'])->middleware('permission:view_my_sales');
+
     Route::prefix('shifts')->middleware('permission:view_my_shifts')->group(function () {
         Route::get('/', [ShiftController::class, 'index']);
         Route::get('active/{employeeId}', [ShiftController::class, 'getActive']);

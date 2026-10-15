@@ -338,3 +338,73 @@ describe('the backfill of past payments', function () {
         expect($this->tillPayment->fresh()->collected_by)->toBeNull();
     });
 });
+
+describe('the shift total, kept by the server', function () {
+    it('puts a till sale on the cashier\'s shift', function () {
+        $shift = mfShift($this->rosinaEmployee, $this->branch);
+
+        $payment = mfRing($this->rosina, $this->branch, 'cash');
+
+        $shift->refresh();
+        expect(\App\Models\ShiftOrder::where('shift_id', $shift->id)->where('order_id', $payment->order_id)->exists())->toBeTrue()
+            ->and((float) $shift->total_sales)->toBe((float) $payment->order->total_amount)
+            ->and($shift->order_count)->toBe(1);
+    });
+
+    it('puts a MoMo prompt sale on the shift it was sent from, which the browser never did', function () {
+        $shift = mfShift($this->rosinaEmployee, $this->branch);
+
+        mfPaid(mfSession($this->branch, ['staff_id' => $this->rosinaEmployee->id]));
+
+        expect($shift->fresh()->order_count)->toBe(1);
+    });
+
+    it('counts a sale once when the till\'s browser sends it as well', function () {
+        $shift = mfShift($this->rosinaEmployee, $this->branch);
+        $payment = mfRing($this->rosina, $this->branch, 'cash');
+        $order = $payment->order;
+
+        $this->actingAs($this->rosina)
+            ->postJson("/v1/shifts/{$shift->id}/orders", ['order_id' => $order->order_number, 'order_total' => (float) $order->total_amount])
+            ->assertSuccessful();
+
+        $shift->refresh();
+        expect($shift->order_count)->toBe(1)
+            ->and((float) $shift->total_sales)->toBe((float) $order->total_amount);
+    });
+
+    it('leaves the shifts alone when the cashier had none open', function () {
+        mfRing($this->rosina, $this->branch, 'cash');
+
+        expect(\App\Models\ShiftOrder::count())->toBe(0);
+    });
+});
+
+describe('the money I took today', function () {
+    it('adds up what I took today, on anyone\'s order, and nothing else', function () {
+        ['employee' => $kofi] = mfStaff($this->branch, 'Kofi');
+        // Kofi placed this order. Rosina took the money for it.
+        $order = Order::factory()->create(['branch_id' => $this->branch->id, 'assigned_employee_id' => $kofi->id]);
+        $pay = fn (Employee $by, string $method, float $amount, $at) => Payment::create([
+            'order_id' => $order->id,
+            'payment_method' => $method,
+            'payment_status' => 'completed',
+            'amount' => $amount,
+            'collected_by' => $by->id,
+            'paid_at' => $at,
+        ]);
+
+        $pay($this->rosinaEmployee, 'cash', 40, now());
+        $pay($this->rosinaEmployee, 'mobile_money', 50, now());
+        $pay($this->rosinaEmployee, 'cash', 99, now()->subDay());
+        $pay($kofi, 'cash', 7, now());
+
+        $this->actingAs($this->rosina)
+            ->getJson('/v1/my-money')
+            ->assertOk()
+            ->assertJsonPath('data.date', now()->toDateString())
+            ->assertJsonPath('data.money.cash.amount', 40)
+            ->assertJsonPath('data.money.cash.count', 1)
+            ->assertJsonPath('data.money.momo.amount', 50);
+    });
+});

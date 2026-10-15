@@ -5,6 +5,8 @@ namespace App\Observers;
 use App\Domain\Inventory\Recipes\RecipeDeductionService;
 use App\Models\Employee;
 use App\Models\Payment;
+use App\Models\Shift;
+use App\Models\ShiftOrder;
 use App\Notifications\PaymentFailedNotification;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -22,6 +24,7 @@ class PaymentObserver
     {
         if (in_array($payment->payment_status, self::PAID_STATES, true)) {
             $this->deductStock($payment);
+            $this->recordOnShift($payment);
         }
     }
 
@@ -46,6 +49,7 @@ class PaymentObserver
         // Auto-deduct recipe ingredients once payment is confirmed; reverse on refund.
         if (in_array($payment->payment_status, self::PAID_STATES, true)) {
             $this->deductStock($payment);
+            $this->recordOnShift($payment);
         } elseif ($payment->payment_status === 'refunded') {
             $this->reverseStock($payment);
         }
@@ -67,6 +71,49 @@ class PaymentObserver
                 Log::error('Recipe deduction failed', [
                     'payment_id' => $payment->id,
                     'order_id' => $payment->order_id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
+    }
+
+    /**
+     * Put the sale on the shift of whoever took the money (D9).
+     *
+     * The till's browser used to do this after each sale, and only for a sale
+     * that confirmed on the spot, so no MoMo prompt sale ever reached a shift
+     * (T12). The browser's own call may still arrive for a while; the unique
+     * shift and order pair keeps the sale on the shift once.
+     */
+    protected function recordOnShift(Payment $payment): void
+    {
+        if (! $payment->shift_id) {
+            return;
+        }
+
+        DB::afterCommit(function () use ($payment) {
+            try {
+                $order = $payment->order;
+
+                if (! $order) {
+                    return;
+                }
+
+                $shiftOrder = ShiftOrder::firstOrCreate(
+                    ['shift_id' => $payment->shift_id, 'order_id' => $order->id],
+                    ['order_total' => $order->total_amount],
+                );
+
+                if ($shiftOrder->wasRecentlyCreated) {
+                    Shift::whereKey($payment->shift_id)->increment('total_sales', (float) $order->total_amount);
+                    Shift::whereKey($payment->shift_id)->increment('order_count');
+                }
+            } catch (\Illuminate\Database\UniqueConstraintViolationException) {
+                // The browser's call won the race. The sale is on the shift once.
+            } catch (\Throwable $e) {
+                Log::warning('Could not put a sale on its shift', [
+                    'payment_id' => $payment->id,
+                    'shift_id' => $payment->shift_id,
                     'error' => $e->getMessage(),
                 ]);
             }

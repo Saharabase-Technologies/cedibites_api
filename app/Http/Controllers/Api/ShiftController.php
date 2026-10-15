@@ -173,6 +173,25 @@ class ShiftController extends Controller
     }
 
     /**
+     * GET /my-money: what the signed-in person took today, by method, from
+     * the payments they took (D9). My Sales shows it, and staff count their
+     * cash against it (Q7). Today is the server's day, not the till's (T13).
+     */
+    public function myMoney(Request $request): JsonResponse
+    {
+        $employee = $request->user()?->employee;
+
+        if (! $employee) {
+            return response()->forbidden('User is not an employee');
+        }
+
+        return response()->success([
+            'date' => now()->toDateString(),
+            'money' => app(ShiftMoney::class)->forCollector($employee->id, now()->startOfDay(), now()->endOfDay()),
+        ]);
+    }
+
+    /**
      * Add an order to a shift.
      */
     public function addOrder(AddOrderToShiftRequest $request, Shift $shift): JsonResponse
