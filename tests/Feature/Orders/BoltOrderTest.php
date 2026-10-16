@@ -225,6 +225,27 @@ describe('ringing a Bolt order', function () {
         expect(collect($money)->sum('amount'))->toEqual(0);
     });
 
+    it('stays off Clock out: not money taken, not still owed', function () {
+        // Rosina is on shift when she rings it. Bolt holds the money, so the
+        // sheet she confirms must not ask her for it, or list it as owing.
+        $shift = \App\Models\Shift::create([
+            'employee_id' => $this->rosinaEmployee->id,
+            'branch_id' => $this->branch->id,
+            'login_at' => now()->subHour(),
+            'total_sales' => 0,
+            'order_count' => 0,
+        ]);
+
+        boRing($this->rosina, $this->branch, [[$this->combo, 1]])->assertCreated();
+
+        test()->actingAs($this->rosina)->getJson("/v1/shifts/{$shift->id}/clock-out")
+            ->assertOk()
+            ->assertJsonPath('data.total', 0)
+            ->assertJsonPath('data.count', 0)
+            ->assertJsonPath('data.on_others_orders', [])
+            ->assertJsonPath('data.owing', []);
+    });
+
     it('refuses a dish that has no Bolt price', function () {
         boRing($this->rosina, $this->branch, [[$this->wrap, 1], [$this->water, 1]])
             ->assertUnprocessable()
