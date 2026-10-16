@@ -269,6 +269,36 @@ describe('Staff Sales by shift', function () {
             ->assertJsonPath('data.0.manager_confirm.by_name', 'Kwabena Ofori')
             ->assertJsonPath('data.0.manager_confirm.note', 'Found it')
             ->assertJsonPath('data.0.orders_attended', 1)
-            ->assertJsonPath('data.0.order_value', 90);
+            ->assertJsonPath('data.0.order_value', 90)
+            ->assertJsonPath('data.0.no_charge.count', 0);
+    });
+
+    it('leaves an admin\'s own shift off Staff Sales, and nobody confirms it', function () {
+        coShift($this->kofiEmployee, $this->lakeside);
+        $admins = coShift($this->adminEmployee, $this->lakeside, ['logout_at' => now()]);
+
+        $this->actingAs($this->kwabena)->getJson("/v1/manager/branches/{$this->lakeside->id}/shift-sales")
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.staff_name', 'Kofi Asante');
+
+        $this->actingAs($this->kwabena)->postJson("/v1/shifts/{$admins->id}/confirm")->assertStatus(422);
+    });
+
+    it('gives the food given free on the person\'s orders, apart from the order value', function () {
+        $shift = coShift($this->kofiEmployee, $this->lakeside);
+        coPay($shift, 60);
+        $free = Order::factory()->create([
+            'branch_id' => $this->lakeside->id, 'assigned_employee_id' => $this->kofiEmployee->id,
+            'subtotal' => 45, 'delivery_fee' => 0, 'service_charge' => 0, 'total_amount' => 45, 'status' => 'completed',
+        ]);
+        Payment::create(['order_id' => $free->id, 'payment_method' => 'no_charge', 'payment_status' => 'no_charge', 'amount' => 0]);
+
+        $this->actingAs($this->kwabena)->getJson("/v1/manager/branches/{$this->lakeside->id}/shift-sales")
+            ->assertOk()
+            ->assertJsonPath('data.0.orders_attended', 2)
+            ->assertJsonPath('data.0.order_value', 60)
+            ->assertJsonPath('data.0.no_charge.amount', 45)
+            ->assertJsonPath('data.0.no_charge.count', 1);
     });
 });

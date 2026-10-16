@@ -133,6 +133,10 @@ class ShiftClockOut
                 throw new ShiftActionRefused("A manager's own shift needs no second confirmation.", 422);
             }
 
+            if ($locked->employee?->user?->hasAnyRole([Role::Admin, Role::TechAdmin])) {
+                throw new ShiftActionRefused("An admin's shift needs no confirmation.", 422);
+            }
+
             if ($locked->logout_at === null) {
                 throw new ShiftActionRefused("{$first} is still on shift.", 422);
             }

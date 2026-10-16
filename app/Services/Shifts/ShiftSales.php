@@ -32,6 +32,9 @@ class ShiftSales
     {
         $shifts = Shift::with(['employee.user.roles', 'branch', 'managerConfirmedBy.user'])
             ->when($branchIds !== null, fn ($q) => $q->whereIn('branch_id', $branchIds))
+            // The portal starts a shift for an admin too. It sells nothing and
+            // nobody confirms it, so it is not a line on Staff Sales.
+            ->whereDoesntHave('employee.user.roles', fn ($q) => $q->whereIn('name', [Role::Admin->value, Role::TechAdmin->value]))
             ->where('login_at', '<=', $to)
             ->where(fn ($q) => $q->whereNull('logout_at')->orWhere('logout_at', '>=', $from))
             ->orderByDesc('login_at')
@@ -53,6 +56,7 @@ class ShiftSales
                 ->filter(fn (Order $o) => $o->created_at->between($shift->login_at, $end)
                     && ($shift->branch_id === null || $o->branch_id === $shift->branch_id));
             $live = $theirs->where('status', '!=', 'cancelled');
+            $free = $live->filter(fn (Order $o) => $o->payments->contains('payment_status', 'no_charge'));
             $groups = $money[$shift->id] ?? $this->emptyGroups();
 
             return [
@@ -70,6 +74,11 @@ class ShiftSales
                 'on_shift' => $shift->logout_at === null,
                 'money' => $groups,
                 'total' => round(array_sum(array_column($groups, 'amount')), 2),
+                // Food given free on the person's orders. Not money, never in the total.
+                'no_charge' => [
+                    'amount' => round((float) $free->sum(fn (Order $o) => $o->goods_amount), 2),
+                    'count' => $free->count(),
+                ],
                 'clock_out' => $shift->clocked_out_at ? [
                     'at' => $shift->clocked_out_at->toIso8601String(),
                     'money' => $shift->clock_out_money,
@@ -83,9 +92,7 @@ class ShiftSales
                     'note' => $shift->manager_note,
                 ] : null,
                 'orders_attended' => $live->count(),
-                'order_value' => round((float) $live
-                    ->reject(fn (Order $o) => $o->payments->contains('payment_status', 'no_charge'))
-                    ->sum(fn (Order $o) => $o->goods_amount), 2),
+                'order_value' => round((float) $live->diffKeys($free)->sum(fn (Order $o) => $o->goods_amount), 2),
                 'still_owed' => round((float) $live->sum(fn (Order $o) => $o->balance_due), 2),
             ];
         })->values()->all();
