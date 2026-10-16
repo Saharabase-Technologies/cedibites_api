@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\BranchOpeningController;
 use App\Http\Controllers\Api\MenuItemAvailabilityController;
+use App\Http\Controllers\Api\ShiftSalesController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('manager')->middleware(['permission:view_branches', 'branch.access'])->group(function () {
@@ -14,6 +15,8 @@ Route::prefix('manager')->middleware(['permission:view_branches', 'branch.access
     Route::get('branches/{branch}/top-items', [BranchController::class, 'topItems']);
     Route::get('branches/{branch}/revenue-chart', [BranchController::class, 'revenueChart']);
     Route::get('branches/{branch}/staff-sales', [BranchController::class, 'staffSales']);
+    // Staff Sales by shift, with each Clock out and confirm (staff portal D30).
+    Route::get('branches/{branch}/shift-sales', [ShiftSalesController::class, 'forBranch']);
 });
 
 // "We've run out of Jollof today." The branch manager's only menu power — he

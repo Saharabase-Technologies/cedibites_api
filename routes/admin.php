@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\OrderFeedbackController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RecruitmentAdminController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\ShiftSalesController;
 use App\Http\Controllers\Api\ShortLinkController;
 use Illuminate\Support\Facades\Route;
 
@@ -98,6 +99,8 @@ Route::prefix('admin')->group(function () {
     // wildcard.
     Route::middleware('role:admin|tech_admin')->group(function () {
         Route::get('customers/export-contacts', [CustomerController::class, 'exportContacts']);
+        // Staff Sales by shift, every branch, with both sign-offs (staff portal D30).
+        Route::get('staff/shift-sales', [ShiftSalesController::class, 'forAdmin']);
     });
 
     // Short links and SMS campaigns. Same ceiling as the contact export, by the

@@ -15,7 +15,7 @@ class ShiftResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
-        $this->loadMissing(['employee.user', 'branch', 'shiftOrders.order']);
+        $this->loadMissing(['employee.user', 'branch', 'shiftOrders.order', 'managerConfirmedBy.user']);
 
         // Third-party delivery fees are a pass-through collected on the customer's
         // behalf, not restaurant revenue. Split the stored gross total_sales into
@@ -42,6 +42,18 @@ class ShiftResource extends JsonResource
             'goodsSales' => $goodsSales,
             'deliveryFees' => $deliveryFees,
             'orderCount' => (int) $this->order_count,
+            // Clock out (D29): when, what the person confirmed, their note.
+            // Null when the shift ended without one.
+            'clockedOutAt' => $this->clocked_out_at?->getTimestamp() * 1000 ?: null,
+            'clockOut' => $this->clocked_out_at ? [
+                'money' => $this->clock_out_money,
+                'owing' => $this->clock_out_owing ?? [],
+                'note' => $this->clock_out_note,
+            ] : null,
+            // The manager's confirm (D30).
+            'managerConfirmedAt' => $this->manager_confirmed_at?->getTimestamp() * 1000 ?: null,
+            'managerConfirmedBy' => $this->manager_confirmed_at ? $this->managerConfirmedBy?->user?->name : null,
+            'managerNote' => $this->manager_note,
         ];
     }
 }

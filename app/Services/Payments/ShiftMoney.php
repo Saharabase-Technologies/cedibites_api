@@ -105,12 +105,54 @@ class ShiftMoney
      */
     public function onOthersOrders(int $employeeId, CarbonInterface $from, CarbonInterface $to): array
     {
-        $rows = Payment::query()
+        return $this->others(
+            Payment::query()->where('payments.collected_by', $employeeId)->whereBetween('payments.paid_at', [$from, $to]),
+            $employeeId,
+        );
+    }
+
+    /**
+     * The same, for the payments one shift took. Clock out uses it.
+     *
+     * @return list<array{order_id: int, order_number: string, assigned_to: ?string, group: string, amount: float, count: int}>
+     */
+    public function onOthersOrdersOnShift(Shift $shift): array
+    {
+        return $this->others(Payment::query()->where('payments.shift_id', $shift->id), $shift->employee_id);
+    }
+
+    /**
+     * The person's orders still owing, placed since a time, oldest first.
+     * Clock out lists them under "Still owed on your orders".
+     *
+     * @return list<array{order_id: int, order_number: string, customer: ?string, amount: float}>
+     */
+    public function owingOn(int $employeeId, CarbonInterface $since): array
+    {
+        return Order::with('payments')
+            ->where('assigned_employee_id', $employeeId)
+            ->where('created_at', '>=', $since)
+            ->where('status', '!=', 'cancelled')
+            ->orderBy('created_at')
+            ->get()
+            ->filter(fn (Order $order) => $order->balance_due > 0)
+            ->map(fn (Order $order) => [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'customer' => $order->contact_name,
+                'amount' => $order->balance_due,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /** @return list<array{order_id: int, order_number: string, assigned_to: ?string, group: string, amount: float, count: int}> */
+    private function others(Builder $payments, int $employeeId): array
+    {
+        $rows = $payments
             ->join('orders', 'orders.id', '=', 'payments.order_id')
             ->whereNull('orders.deleted_at')
-            ->where('payments.collected_by', $employeeId)
             ->where('payments.payment_status', 'completed')
-            ->whereBetween('payments.paid_at', [$from, $to])
             ->where(fn ($q) => $q->whereNull('orders.assigned_employee_id')
                 ->orWhere('orders.assigned_employee_id', '!=', $employeeId))
             ->selectRaw('orders.id as order_id, orders.order_number, orders.assigned_employee_id, payments.payment_method, payments.source, COUNT(*) as n, SUM(payments.amount) as total, MIN(payments.paid_at) as first_paid')
@@ -149,6 +191,29 @@ class ShiftMoney
 
             return $line;
         }, $lines);
+    }
+
+    /**
+     * Everything the Clock out sheet shows for a shift, worked out now: the
+     * money by method, its total, No Charge, the money from other people's
+     * orders, and the person's orders still owing since the start of the day
+     * the shift began. What the button stores is this, as it is then.
+     *
+     * @return array{money: array<string, array{amount: float, count: int}>, total: float, count: int, no_charge: array{amount: float, count: int}, on_others_orders: list<array<string, mixed>>, owing: list<array<string, mixed>>}
+     */
+    public function clockOutView(Shift $shift): array
+    {
+        $money = $this->for($shift);
+        $end = $shift->logout_at ?? now();
+
+        return [
+            'money' => $money,
+            'total' => round(array_sum(array_column($money, 'amount')), 2),
+            'count' => array_sum(array_column($money, 'count')),
+            'no_charge' => $this->noChargeFor($shift->employee_id, $shift->login_at, $end),
+            'on_others_orders' => $this->onOthersOrdersOnShift($shift),
+            'owing' => $this->owingOn($shift->employee_id, $shift->login_at->copy()->startOfDay()),
+        ];
     }
 
     /** @return array<string, array{amount: float, count: int}> */

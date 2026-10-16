@@ -11,6 +11,8 @@ use App\Models\Order;
 use App\Models\Shift;
 use App\Models\ShiftOrder;
 use App\Services\Payments\ShiftMoney;
+use App\Services\Shifts\ShiftActionRefused;
+use App\Services\Shifts\ShiftClockOut;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -154,15 +156,7 @@ class ShiftController extends Controller
      */
     public function money(Request $request, Shift $shift): JsonResponse
     {
-        $user = $request->user();
-        $employee = $user?->employee;
-
-        $allowed = ($employee && $shift->employee_id === $employee->id)
-            || $user?->hasAnyRole([Role::Admin, Role::TechAdmin])
-            || ($employee && $user->hasRole(Role::Manager)
-                && $employee->managedBranches()->where('branches.id', $shift->branch_id)->exists());
-
-        if (! $allowed) {
+        if (! $this->maySee($request, $shift)) {
             return response()->forbidden('Cannot see another employee\'s shift');
         }
 
@@ -170,6 +164,71 @@ class ShiftController extends Controller
             'shift_id' => $shift->id,
             'money' => app(ShiftMoney::class)->for($shift),
         ]);
+    }
+
+    /**
+     * GET /shifts/{shift}/clock-out: what the Clock out sheet shows, worked out
+     * now. The person's own shift, or one their branch manager or an admin
+     * may see.
+     */
+    public function clockOutView(Request $request, Shift $shift): JsonResponse
+    {
+        if (! $this->maySee($request, $shift)) {
+            return response()->forbidden('Cannot see another employee\'s shift');
+        }
+
+        return response()->success(['shift_id' => $shift->id] + app(ShiftMoney::class)->clockOutView($shift));
+    }
+
+    /**
+     * POST /shifts/{shift}/clock-out: confirm the money, end the shift and
+     * sign out, in one step (D29). `seen_total` is the total the sheet showed.
+     */
+    public function clockOut(Request $request, Shift $shift): JsonResponse
+    {
+        $validated = $request->validate([
+            'note' => ['nullable', 'string', 'max:1000'],
+            'seen_total' => ['nullable', 'numeric'],
+        ]);
+
+        try {
+            $shift = app(ShiftClockOut::class)->clockOut(
+                $shift,
+                $request->user(),
+                $validated['note'] ?? null,
+                isset($validated['seen_total']) ? (float) $validated['seen_total'] : null,
+            );
+        } catch (ShiftActionRefused $e) {
+            return response()->json(['message' => $e->getMessage(), 'data' => $e->fresh], $e->status);
+        }
+
+        return response()->success(new ShiftResource($shift->fresh()));
+    }
+
+    /** POST /shifts/{shift}/confirm: the branch manager confirms a shift (D30). */
+    public function confirm(Request $request, Shift $shift): JsonResponse
+    {
+        $validated = $request->validate(['note' => ['nullable', 'string', 'max:1000']]);
+
+        try {
+            $shift = app(ShiftClockOut::class)->confirm($shift, $request->user(), $validated['note'] ?? null);
+        } catch (ShiftActionRefused $e) {
+            return response()->json(['message' => $e->getMessage()], $e->status);
+        }
+
+        return response()->success(new ShiftResource($shift->fresh()));
+    }
+
+    /** The shift's own person, a manager of its branch, or an admin. */
+    private function maySee(Request $request, Shift $shift): bool
+    {
+        $user = $request->user();
+        $employee = $user?->employee;
+
+        return ($employee && $shift->employee_id === $employee->id)
+            || $user?->hasAnyRole([Role::Admin, Role::TechAdmin])
+            || ($employee && $user->hasRole(Role::Manager)
+                && $employee->managedBranches()->where('branches.id', $shift->branch_id)->exists());
     }
 
     /**

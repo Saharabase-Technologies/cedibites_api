@@ -25,6 +25,15 @@ class Shift extends Model
         'logout_at',
         'total_sales',
         'order_count',
+        // Clock out and the manager's confirm (staff portal D29, D30). Written
+        // only by ShiftClockOut, never from a request's fields.
+        'clocked_out_at',
+        'clock_out_money',
+        'clock_out_owing',
+        'clock_out_note',
+        'manager_confirmed_by',
+        'manager_confirmed_at',
+        'manager_note',
     ];
 
     protected function casts(): array
@@ -33,6 +42,10 @@ class Shift extends Model
             'login_at' => 'datetime',
             'logout_at' => 'datetime',
             'total_sales' => 'decimal:2',
+            'clocked_out_at' => 'datetime',
+            'clock_out_money' => 'array',
+            'clock_out_owing' => 'array',
+            'manager_confirmed_at' => 'datetime',
         ];
     }
 
@@ -49,6 +62,12 @@ class Shift extends Model
     public function shiftOrders(): HasMany
     {
         return $this->hasMany(ShiftOrder::class);
+    }
+
+    /** The manager who confirmed the shift after its Clock out (D30). */
+    public function managerConfirmedBy(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'manager_confirmed_by');
     }
 
     /** The payments taken on this shift, by its own person (D9). */

@@ -5,14 +5,16 @@ namespace App\Http\Controllers\Api;
 use App\Enums\EmployeeStatus;
 use App\Events\StaffSessionEvent;
 use App\Http\Controllers\Controller;
-use App\Services\SessionDeviceService;
 use App\Http\Requests\EmployeeLoginRequest;
 use App\Http\Requests\ForgotPasswordRequest;
 use App\Http\Requests\ResetPasswordRequest;
 use App\Http\Resources\EmployeeAuthResource;
 use App\Models\Employee;
+use App\Models\Shift;
 use App\Models\User;
 use App\Notifications\StaffPasswordResetNotification;
+use App\Services\SessionDeviceService;
+use App\Services\Shifts\ShiftClockOut;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -169,7 +171,7 @@ class EmployeeAuthController extends Controller
     /**
      * Employee logout.
      */
-    public function logout(Request $request): Response
+    public function logout(Request $request): JsonResponse|Response
     {
         $user = $request->user();
 
@@ -178,9 +180,22 @@ class EmployeeAuthController extends Controller
             ->event('staff_logout')
             ->log('Staff logout');
 
-        StaffSessionEvent::dispatch($user, 'session.revoked');
+        // Signing out ends the shift, on the server, while the token still
+        // works (staff portal Section 7). The browser used to try after it
+        // had dropped its token, so no shift ever ended this way.
+        if ($user->employee) {
+            $ends = app(ShiftClockOut::class);
+            Shift::where('employee_id', $user->employee->id)
+                ->whereNull('logout_at')
+                ->get()
+                ->each(fn (Shift $shift) => $ends->end($shift, $user, 'signed out'));
+        }
 
         $user->tokens()->delete();
+
+        // Tells the person's other tabs. Reverb being down must not undo a
+        // sign out, so this comes after the tokens and cannot fail the request.
+        rescue(fn () => StaffSessionEvent::dispatch($user, 'session.revoked'));
 
         return response()->deleted();
     }

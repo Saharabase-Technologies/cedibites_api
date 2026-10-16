@@ -75,11 +75,16 @@ Route::middleware('password.reset')->group(function () {
         Route::get('by-date/{date}', [ShiftController::class, 'getByDate']);
         Route::get('by-staff/{staffId}', [ShiftController::class, 'getByStaff']);
         Route::get('{shift}/money', [ShiftController::class, 'money']);
+        // What the Clock out sheet shows (staff portal D29).
+        Route::get('{shift}/clock-out', [ShiftController::class, 'clockOutView']);
+        // The branch manager's confirm (D30). Who may is the controller's to say.
+        Route::post('{shift}/confirm', [ShiftController::class, 'confirm']);
 
         Route::middleware('permission:manage_shifts')->group(function () {
             Route::post('/', [ShiftController::class, 'startShift']);
             Route::patch('{shift}/end', [ShiftController::class, 'endShift']);
             Route::post('{shift}/orders', [ShiftController::class, 'addOrder']);
+            Route::post('{shift}/clock-out', [ShiftController::class, 'clockOut']);
         });
     });
 
