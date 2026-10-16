@@ -123,6 +123,16 @@ describe('the menu\'s Bolt page', function () {
             ->and($this->combo->fresh()->bolt_promo_percent)->toBeNull();
     });
 
+    it('tells open tills to reload their menu when a Bolt price changes', function () {
+        \Illuminate\Support\Facades\Event::fake([\App\Events\MenuUpdatedEvent::class]);
+
+        test()->actingAs($this->admin)
+            ->putJson("/v1/admin/bolt/options/{$this->wrap->id}", ['bolt_price' => 85, 'bolt_promo_percent' => null])
+            ->assertOk();
+
+        \Illuminate\Support\Facades\Event::assertDispatched(\App\Events\MenuUpdatedEvent::class, fn ($e) => $e->kind === 'bolt');
+    });
+
     it('sets what Bolt keeps, and what it takes it from', function () {
         test()->actingAs($this->admin)
             ->putJson('/v1/admin/bolt/settings', ['commission_percent' => 25, 'commission_base' => 'listed'])

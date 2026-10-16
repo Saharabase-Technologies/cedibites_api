@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\MenuUpdatedEvent;
 use App\Http\Controllers\Controller;
 use App\Models\MenuItemOption;
 use App\Services\Bolt\BoltBoard;
 use App\Services\Bolt\BoltSettings;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 /**
@@ -81,6 +83,14 @@ class BoltController extends Controller
             ->log($price === null
                 ? "{$name} taken off Bolt"
                 : "{$name} on Bolt at GHS ".number_format($price, 2).($promo ? " with {$promo}% promo" : ''));
+
+        // Open tills reload their menu, so a Bolt order rung a minute from now
+        // shows the price the server will charge.
+        try {
+            event(new MenuUpdatedEvent(0, 'bolt'));
+        } catch (\Throwable $e) {
+            Log::warning('A Bolt price changed but the signal did not go out', ['option_id' => $option->id, 'error' => $e->getMessage()]);
+        }
 
         return $this->index();
     }
