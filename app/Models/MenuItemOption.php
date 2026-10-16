@@ -31,6 +31,10 @@ class MenuItemOption extends Model implements HasMedia
     {
         return [
             'price' => 'decimal:2',
+            // Bolt's own price and promo, set on the menu's Bolt page. Kept out
+            // of $fillable: only BoltController writes them.
+            'bolt_price' => 'decimal:2',
+            'bolt_promo_percent' => 'decimal:2',
             'display_order' => 'integer',
             'is_available' => 'boolean',
         ];

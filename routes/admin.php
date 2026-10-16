@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\AdminDashboardController;
 use App\Http\Controllers\Api\AdminOpeningController;
 use App\Http\Controllers\Api\AdminReportController;
 use App\Http\Controllers\Api\AutomationRuleController;
+use App\Http\Controllers\Api\BoltController;
 use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CancelRequestController;
@@ -307,6 +308,12 @@ Route::prefix('admin')->group(function () {
         Route::post('menu-publications', [MenuPriceController::class, 'publish']);
         Route::post('menu-publications/{publication}/cancel', [MenuPriceController::class, 'cancel']);
         Route::post('menu-publications/{publication}/undo', [MenuPriceController::class, 'undo']);
+
+        // Bolt: each dish's Bolt price and promo, and what Bolt keeps. Saves
+        // at once; see BoltController.
+        Route::get('bolt', [BoltController::class, 'index']);
+        Route::put('bolt/settings', [BoltController::class, 'updateSettings']);
+        Route::put('bolt/options/{option}', [BoltController::class, 'updateOption']);
 
         // Smart category settings
         Route::get('smart-categories', [SmartCategorySettingController::class, 'index']);

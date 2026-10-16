@@ -29,6 +29,9 @@ class PaymentCollector
     /** A part taken on any other order that owes. */
     public const SOURCE_SPLIT = 'split';
 
+    /** Paid to Bolt for a Bolt order. Nobody on staff took it. */
+    public const SOURCE_BOLT = 'bolt';
+
     /** A branch code payment a cashier linked to an order. */
     public const SOURCE_BRANCH_CODE_LINK = 'branch_code_link';
 

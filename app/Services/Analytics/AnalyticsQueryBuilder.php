@@ -164,7 +164,9 @@ class AnalyticsQueryBuilder
     {
         $p = $prefix !== '' ? "{$prefix}." : '';
 
-        return "({$p}total_amount - COALESCE({$p}delivery_fee, 0))";
+        // Less what a delivery app keeps. A Bolt order counts Bolt's 70%
+        // only: the owner, 2026-10-14, "inflating our books" otherwise.
+        return "({$p}total_amount - COALESCE({$p}delivery_fee, 0) - COALESCE({$p}platform_commission, 0))";
     }
 
     /**
