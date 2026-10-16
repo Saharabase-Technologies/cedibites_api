@@ -24,6 +24,10 @@ class MenuItemOptionResource extends JsonResource
             'display_name' => $this->display_name,
             'price' => (float) ($branchOverride?->price ?? $this->price),
             'base_price' => (float) $this->price,
+            // What the till charges when the order comes from Bolt. Null means
+            // the dish is not on Bolt. Bolt's own menu page shows the same.
+            'bolt_price' => $this->bolt_price !== null ? (float) $this->bolt_price : null,
+            'bolt_promo_percent' => $this->bolt_promo_percent !== null ? (float) $this->bolt_promo_percent : null,
             'display_order' => $this->display_order,
             'is_available' => $branchOverride?->is_available ?? $this->is_available,
             'image_url' => ($media = $this->getFirstMedia('menu-item-options'))

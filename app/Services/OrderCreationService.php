@@ -11,6 +11,7 @@ use App\Models\OrderItem;
 use App\Models\OrderRound;
 use App\Models\Payment;
 use App\Models\User;
+use App\Services\Bolt\BoltPricing;
 use App\Services\Orders\PreparationRouter;
 use App\Services\Payments\PaymentCollector;
 use Illuminate\Support\Carbon;
@@ -112,6 +113,16 @@ class OrderCreationService
                 ? 'completed'
                 : app(PreparationRouter::class)->initialStatus($menuItems, $orderSource);
 
+            // Bolt keeps its cut of a Bolt order, worked once on the whole
+            // order. Net sales count what is left (AnalyticsQueryBuilder).
+            $isBolt = $orderSource === BoltPricing::SOURCE;
+            $platformCut = $isBolt
+                ? app(BoltPricing::class)->commission(
+                    (float) $session->subtotal,
+                    round((float) $session->total_amount - (float) $session->delivery_fee, 2),
+                )
+                : null;
+
             // Create the order
             $order = Order::create([
                 'order_number' => $orderNumber,
@@ -120,6 +131,10 @@ class OrderCreationService
                 'assigned_employee_id' => $session->staff_id,
                 'order_type' => $session->fulfillment_type ?? 'pickup',
                 'order_source' => $orderSource,
+                'platform_reference' => $isBolt ? $session->platform_reference : null,
+                'platform_commission' => $platformCut['amount'] ?? 0,
+                'platform_commission_rate' => $platformCut['rate'] ?? null,
+                'platform_commission_base' => $platformCut['base'] ?? null,
                 'delivery_address' => $session->delivery_address,
                 'delivery_latitude' => $session->delivery_latitude,
                 'delivery_longitude' => $session->delivery_longitude,
@@ -183,12 +198,16 @@ class OrderCreationService
             // The money is whoever rang the sale's, on the shift they were on
             // when they rang it. For a MoMo prompt paid later that is still the
             // cashier who sent it. An online customer's payment is nobody's.
+            // A Bolt order's money is Bolt's until Bolt pays out, so nobody on
+            // staff took it and it is on nobody's shift. The sale is still the
+            // cashier's who rang it (assigned_employee_id).
             $isTill = $session->session_type === 'pos';
             $collector = app(PaymentCollector::class)->stamp(
-                $isTill ? $session->staff_id : null,
+                $isTill && ! $isBolt ? $session->staff_id : null,
                 $session->branch_id,
                 match (true) {
                     $isManualEntry => PaymentCollector::SOURCE_MANUAL_ENTRY,
+                    $isBolt => PaymentCollector::SOURCE_BOLT,
                     $isTill => PaymentCollector::SOURCE_TILL,
                     default => PaymentCollector::SOURCE_ONLINE,
                 },

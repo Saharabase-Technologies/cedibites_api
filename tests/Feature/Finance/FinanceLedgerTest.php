@@ -288,7 +288,7 @@ describe('a sale is a paid order that was not cancelled', function () {
         // date, branch, source, type, method, paid orders, gross, discount,
         // service charge, net, delivery fee.
         expect(financeLedger($this->partner)->assertSuccessful()->json('data.sales'))->toEqual([
-            ['2026-02-10', $this->ashaiman->id, 'online', 'delivery', 'mobile_money', 1, 200, 10, 5, 195, 15],
+            ['2026-02-10', $this->ashaiman->id, 'online', 'delivery', 'mobile_money', 1, 200, 10, 5, 195, 15, 0],
         ]);
     });
 
@@ -299,9 +299,9 @@ describe('a sale is a paid order that was not cancelled', function () {
         ledgerOrder($this->ashaiman, ['created_at' => '2026-02-11 09:00:00']);
 
         expect(financeLedger($this->partner)->assertSuccessful()->json('data.sales'))->toEqual([
-            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'cash', 2, 150, 0, 0, 150, 0],
-            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'mobile_money', 1, 30, 0, 0, 30, 0],
-            ['2026-02-11', $this->ashaiman->id, 'pos', 'pickup', 'cash', 1, 100, 0, 0, 100, 0],
+            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'cash', 2, 150, 0, 0, 150, 0, 0],
+            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'mobile_money', 1, 30, 0, 0, 30, 0, 0],
+            ['2026-02-11', $this->ashaiman->id, 'pos', 'pickup', 'cash', 1, 100, 0, 0, 100, 0, 0],
         ]);
     });
 
@@ -316,7 +316,7 @@ describe('a sale is a paid order that was not cancelled', function () {
         $data = financeLedger($this->partner)->assertSuccessful()->json('data');
 
         expect($data['sales'])->toEqual([
-            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'cash', 1, 100, 0, 0, 100, 0],
+            ['2026-02-10', $this->ashaiman->id, 'pos', 'pickup', 'cash', 1, 100, 0, 0, 100, 0, 0],
         ])->and($data['items'])->toEqual([
             ['2026-02', $this->ashaiman->id, 'pos', 'pickup', 'cash', $option->id, 2, 100],
         ]);

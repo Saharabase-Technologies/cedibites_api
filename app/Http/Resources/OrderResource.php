@@ -25,6 +25,12 @@ class OrderResource extends JsonResource
             'status' => $this->status,
             'order_type' => $this->order_type,
             'order_source' => $this->order_source,
+            // A Bolt order: Bolt's code from the tablet, and what Bolt keeps.
+            // `net_amount` is what the order counts for in net sales.
+            'platform_reference' => $this->platform_reference,
+            'platform_commission' => (float) $this->platform_commission,
+            'platform_commission_rate' => $this->platform_commission_rate !== null ? (float) $this->platform_commission_rate : null,
+            'net_amount' => round((float) $this->goods_amount - (float) $this->platform_commission, 2),
             'payment_method' => $this->payment_method,
             'subtotal' => (float) $this->subtotal,
             'delivery_fee' => (float) $this->delivery_fee,

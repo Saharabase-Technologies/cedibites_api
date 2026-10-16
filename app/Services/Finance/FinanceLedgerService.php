@@ -97,7 +97,11 @@ class FinanceLedgerService
      * Sales by day, branch, source, type and payment method.
      *
      * Columns: date, branch, source, type, method, paid orders, gross,
-     * discount, service charge, net, delivery fee.
+     * discount, service charge, net, delivery fee, platform commission.
+     *
+     * Platform commission is what Bolt kept of its orders. It is last so the
+     * columns before it keep their places. Gross less discount, plus service
+     * charge, less platform commission, is net.
      *
      * @return list<array<int, string|int|float>>
      */
@@ -111,6 +115,7 @@ class FinanceLedgerService
             ->selectRaw('COUNT(*) as paid_orders, SUM(o.subtotal) as gross')
             ->selectRaw('SUM(COALESCE(o.discount, 0)) as discount, SUM(COALESCE(o.service_charge, 0)) as service_charge')
             ->selectRaw("SUM({$net}) as net, SUM(COALESCE(o.delivery_fee, 0)) as delivery_fee")
+            ->selectRaw('SUM(COALESCE(o.platform_commission, 0)) as platform_commission')
             ->groupByRaw($keys)
             ->orderByRaw($keys)
             ->get()
@@ -126,6 +131,7 @@ class FinanceLedgerService
                 $this->money($row->service_charge),
                 $this->money($row->net),
                 $this->money($row->delivery_fee),
+                $this->money($row->platform_commission),
             ])
             ->all();
     }
@@ -167,6 +173,10 @@ class FinanceLedgerService
      * Columns: month, branch, source, type, method, option id, quantity,
      * sales. A line sold without an option comes back under option 0.
      *
+     * A Bolt line counts its share of what we kept: its listed price scaled
+     * by the order's net over its listed subtotal. Every other line counts as
+     * it always has.
+     *
      * @return list<array<int, string|int|float>>
      */
     private function items(array $filters): array
@@ -174,12 +184,15 @@ class FinanceLedgerService
         $month = $this->monthOf('o.created_at');
         $option = 'COALESCE(oi.menu_item_option_id, 0)';
         $keys = "{$month}, o.branch_id, o.order_source, o.order_type, p.payment_method, {$option}";
+        $lineSales = 'CASE WHEN COALESCE(o.platform_commission, 0) > 0 AND o.subtotal > 0'
+            .' THEN oi.subtotal * (o.subtotal - COALESCE(o.discount, 0) - o.platform_commission) / o.subtotal'
+            .' ELSE oi.subtotal END';
 
         return \App\Models\OrderItem::leaveOutCancelledRounds($this->paidOrders($filters)
             ->join('order_items as oi', 'oi.order_id', '=', 'o.id')
             ->whereNull('oi.deleted_at'), 'oi')
             ->selectRaw("{$month} as month, o.branch_id, o.order_source, o.order_type, p.payment_method")
-            ->selectRaw("{$option} as option_id, SUM(oi.quantity) as quantity, SUM(oi.subtotal) as sales")
+            ->selectRaw("{$option} as option_id, SUM(oi.quantity) as quantity, SUM({$lineSales}) as sales")
             ->groupByRaw($keys)
             ->orderByRaw($keys)
             ->get()

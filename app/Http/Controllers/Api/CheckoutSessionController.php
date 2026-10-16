@@ -13,6 +13,7 @@ use App\Models\HubtelIncomingPayment;
 use App\Models\MenuItem;
 use App\Models\MenuItemOption;
 use App\Models\Order;
+use App\Services\Bolt\BoltPricing;
 use App\Services\HubtelPaymentService;
 use App\Services\Openings\BranchOpeningService;
 use App\Services\OrderCreationService;
@@ -462,7 +463,8 @@ class CheckoutSessionController extends Controller
             'items.*.menu_item_option_id' => ['nullable', 'integer', 'exists:menu_item_options,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['required', 'numeric', 'min:0'],
-            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo,pay_later,split'],
+            // `bolt`: the customer paid Bolt, and Bolt pays us later.
+            'payment_method' => ['required', 'string', 'in:cash,mobile_money,card,wallet,ghqr,no_charge,manual_momo,pay_later,split,bolt'],
             'is_manual_entry' => ['sometimes', 'boolean'],
             'recorded_at' => ['required_if:is_manual_entry,true', 'nullable', 'date', 'before_or_equal:now'],
             // Why the sale was written on paper: the power, the network, the
@@ -488,7 +490,11 @@ class CheckoutSessionController extends Controller
             // till, so an existing POS client that does not send it keeps
             // recording `pos`. The call centre sends the channel it took the
             // call on. See OrderCreationService::resolveOrderSource.
-            'order_source' => ['nullable', 'string', 'in:pos,phone,whatsapp,social_media'],
+            'order_source' => ['nullable', 'string', 'in:pos,phone,whatsapp,social_media,bolt'],
+
+            // Bolt's code for the order, as the tablet shows it (WWJ98). It is
+            // what matches the order to Bolt's report.
+            'platform_reference' => ['required_if:order_source,bolt', 'nullable', 'string', 'max:40'],
 
             // No stock, no sale — and its exception. Honoured only for a holder
             // of inventory.stock_gate.override.
@@ -509,6 +515,20 @@ class CheckoutSessionController extends Controller
 
         $branchId = $validated['branch_id'];
         $this->verifyStaffAuthorization($employee, $branchId);
+
+        // A Bolt order, rung from the tablet until Bolt's feed is connected.
+        // Bolt's prices, Bolt's promo, collected by Bolt's rider.
+        $isBolt = ($validated['order_source'] ?? null) === BoltPricing::SOURCE;
+        if ($isBolt || $validated['payment_method'] === BoltPricing::PAYMENT_METHOD) {
+            $refusal = $this->boltRefusal($validated, $branchId);
+            if ($refusal !== null) {
+                return $refusal;
+            }
+            $validated['platform_reference'] = $this->boltReference($validated['platform_reference']);
+            $validated['fulfillment_type'] = 'pickup';
+            $validated['delivery_fee'] = 0;
+            $validated['promo_code'] = null;
+        }
 
         $addTo = null;
         if (! empty($validated['add_to_order_id'])) {
@@ -558,16 +578,35 @@ class CheckoutSessionController extends Controller
 
         // Validate menu items belong to branch + resolve DB prices
         $menuItems = $this->validateMenuItems($validated['items'], $branchId);
-        $resolvedItems = $this->resolveItemPrices($validated['items'], $menuItems);
+
+        if ($isBolt) {
+            $resolvedItems = $this->resolveBoltPrices($validated['items'], $menuItems);
+            $notOnBolt = array_values(array_unique(array_filter(array_column($resolvedItems, 'not_on_bolt'))));
+            if ($notOnBolt !== []) {
+                return response()->json([
+                    'code' => 'not_on_bolt',
+                    'message' => implode(', ', $notOnBolt).(count($notOnBolt) === 1 ? ' has' : ' have')
+                        .' no Bolt price. Set it on Menu, Bolt, or take it off this order.',
+                ], 422);
+            }
+        } else {
+            $resolvedItems = $this->resolveItemPrices($validated['items'], $menuItems);
+        }
 
         // Build snapshots
         $itemSnapshots = [];
         $subtotal = 0;
+        $boltPromo = 0.0;
         foreach ($resolvedItems as $item) {
             $mi = $menuItems->get($item['menu_item_id']);
             $opt = isset($item['menu_item_option_id']) ? MenuItemOption::find($item['menu_item_option_id']) : null;
             $lineTotal = $item['quantity'] * $item['unit_price'];
             $subtotal += $lineTotal;
+
+            // The promo Bolt shows the customer, which we pay for, line by line.
+            if ($isBolt) {
+                $boltPromo += app(BoltPricing::class)->linePromo($lineTotal, $item['bolt_promo_percent'] ?? null);
+            }
 
             $itemSnapshots[] = [
                 'menu_item_id' => $item['menu_item_id'],
@@ -587,7 +626,10 @@ class CheckoutSessionController extends Controller
                     'display_name' => $opt->display_name,
                     'price' => (float) $opt->price,
                     'image_url' => $opt->getFirstMediaUrl('menu-item-options') ?: null,
-                ] : null,
+                ] + ($isBolt ? [
+                    'bolt_price' => (float) $item['unit_price'],
+                    'bolt_promo_percent' => $item['bolt_promo_percent'] ?? null,
+                ] : []) : null,
             ];
         }
 
@@ -601,7 +643,10 @@ class CheckoutSessionController extends Controller
         $resolvedPromo = null;
         $promoCodeId = null;
         $discount = 0;
-        if ($addTo === null) {
+        if ($isBolt) {
+            // Bolt's promo, never ours. Our promos are for our own customers.
+            $discount = round($boltPromo, 2);
+        } elseif ($addTo === null) {
             try {
                 $offer = app(PromoResolutionService::class)->bestOffer(
                     (string) $branchId,
@@ -679,9 +724,10 @@ class CheckoutSessionController extends Controller
             'delivery_fee' => $deliveryFee,
             'discount' => $discount,
             'promo_id' => $resolvedPromo?->id,
-            'promo_name' => $resolvedPromo?->name,
+            'promo_name' => $isBolt && $discount > 0 ? 'Bolt promo' : $resolvedPromo?->name,
             'promo_code_id' => $promoCodeId,
             'total_amount' => $totalAmount,
+            'platform_reference' => $isBolt ? $validated['platform_reference'] : null,
             'add_to_order_id' => $addTo?->id,
             'staff_id' => $employee->id,
             'is_manual_entry' => $isManualEntry,
@@ -702,6 +748,8 @@ class CheckoutSessionController extends Controller
             // Placed now, to the kitchen now, its parts taken at once (D41).
             'split' => $this->posInstantFlow($session),
             'wallet', 'ghqr' => $this->posInstantFlow($session),
+            // Paid to Bolt. Nothing comes to the till, so it is placed at once.
+            'bolt' => $this->posInstantFlow($session),
             default => response()->json(['message' => 'Unsupported payment method.'], 422),
         };
     }
@@ -1517,6 +1565,93 @@ class CheckoutSessionController extends Controller
         }
 
         return $menuItems;
+    }
+
+    /**
+     * Why this Bolt sale cannot be rung, or null when it can.
+     *
+     * A Bolt order is paid to Bolt and nothing else, comes in as Bolt and
+     * nothing else, and is rung as it arrives: not on paper afterwards, and
+     * not added to another order. One Bolt code makes one order at a branch,
+     * so a sale rung twice is caught here rather than in Bolt's report.
+     */
+    private function boltRefusal(array $validated, int $branchId): ?JsonResponse
+    {
+        $refuse = fn (string $message, string $code = 'bolt_refused') => response()->json(['code' => $code, 'message' => $message], 422);
+
+        if (($validated['order_source'] ?? null) !== BoltPricing::SOURCE) {
+            return $refuse('Paid on Bolt is only for an order that came from Bolt.');
+        }
+
+        if ($validated['payment_method'] !== BoltPricing::PAYMENT_METHOD) {
+            return $refuse('A Bolt order is paid on Bolt. Nothing is taken at the till.');
+        }
+
+        if ($validated['is_manual_entry'] ?? false) {
+            return $refuse('A Bolt order is rung as it comes in, not recorded afterwards.');
+        }
+
+        if (! empty($validated['add_to_order_id'])) {
+            return $refuse('A Bolt order is its own order. Ring it as a new sale.');
+        }
+
+        $reference = $this->boltReference($validated['platform_reference'] ?? '');
+
+        if (! preg_match('/^[A-Z0-9-]{3,40}$/', $reference)) {
+            return $refuse('Type the Bolt order code from the tablet, like WWJ98.', 'bolt_reference');
+        }
+
+        $existing = Order::query()
+            ->where('order_source', BoltPricing::SOURCE)
+            ->where('platform_reference', $reference)
+            ->where('branch_id', $branchId)
+            ->where('status', '!=', 'cancelled')
+            ->where('created_at', '>=', now()->subDays(30))
+            ->latest('id')
+            ->first();
+
+        if ($existing) {
+            return $refuse("Bolt order {$reference} is already on the till as #{$existing->order_number}.", 'bolt_duplicate');
+        }
+
+        return null;
+    }
+
+    /** The Bolt code as the tablet shows it: capitals, no spaces. */
+    private function boltReference(?string $reference): string
+    {
+        return strtoupper(preg_replace('/\s+/', '', (string) $reference));
+    }
+
+    /**
+     * Each line at its Bolt price, with its Bolt promo. A line whose option
+     * has no Bolt price comes back with `not_on_bolt` set to its name.
+     */
+    private function resolveBoltPrices(array $items, \Illuminate\Support\Collection $menuItems): array
+    {
+        return array_map(function (array $item) use ($menuItems): array {
+            $menuItemId = (int) $item['menu_item_id'];
+            $menuItem = $menuItems->get($menuItemId);
+
+            $option = null;
+            if (! empty($item['menu_item_option_id'])) {
+                $found = MenuItemOption::find($item['menu_item_option_id']);
+                $option = $found && $found->menu_item_id === $menuItemId ? $found : null;
+            }
+            $option ??= $menuItem?->options->first();
+
+            if ($option === null || $option->bolt_price === null) {
+                $item['not_on_bolt'] = $option?->display_name ?: ($menuItem?->name ?? 'A dish');
+
+                return $item;
+            }
+
+            $item['menu_item_option_id'] = $option->id;
+            $item['unit_price'] = (float) $option->bolt_price;
+            $item['bolt_promo_percent'] = $option->bolt_promo_percent !== null ? (float) $option->bolt_promo_percent : null;
+
+            return $item;
+        }, $items);
     }
 
     private function resolveItemPrices(array $items, \Illuminate\Support\Collection $menuItems): array
