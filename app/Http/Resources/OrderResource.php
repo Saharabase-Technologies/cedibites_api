@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\Payments\ShiftMoney;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -141,6 +142,11 @@ class OrderResource extends JsonResource
                 'collected_by_name' => $payment->collector?->user?->name,
                 'source' => $payment->source,
                 'amount_tendered' => $payment->amount_tendered !== null ? (float) $payment->amount_tendered : null,
+                // A MoMo payment came by a prompt from the till or by the
+                // customer dialling the branch code. Null for anything else.
+                'via' => $payment->payment_method === 'mobile_money'
+                    ? (ShiftMoney::groupOf('mobile_money', $payment->source) === 'ussd' ? 'ussd' : 'prompt')
+                    : null,
             ]),
             'payment' => $this->payments->first() ? [
                 'id' => $this->payments->first()->id,

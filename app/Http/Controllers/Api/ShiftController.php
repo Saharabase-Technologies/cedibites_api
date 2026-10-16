@@ -185,9 +185,17 @@ class ShiftController extends Controller
             return response()->forbidden('User is not an employee');
         }
 
+        $money = app(ShiftMoney::class);
+        [$from, $to] = [now()->startOfDay(), now()->endOfDay()];
+
         return response()->success([
             'date' => now()->toDateString(),
-            'money' => app(ShiftMoney::class)->forCollector($employee->id, now()->startOfDay(), now()->endOfDay()),
+            'money' => $money->forCollector($employee->id, $from, $to),
+            // Food given free on their own orders. Not money, not in a total.
+            'no_charge' => $money->noChargeFor($employee->id, $from, $to),
+            // The part of the money above that they took on someone else's
+            // order, so My Sales and Clock out can say where it came from.
+            'on_others_orders' => $money->onOthersOrders($employee->id, $from, $to),
         ]);
     }
 
